@@ -1,38 +1,7 @@
-# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# .goreleaser.yml
+# ビルドは CI matrix (release.yml) で各 OS ネイティブビルドするため
+# goreleaser はリリースノート生成とチェックサム用途のみ。
 version: 2
-
-# --split モード: 各 OS の CI ジョブがそれぞれの GOOS/GOARCH 向けにビルドし、
-# 最後の merge ジョブが全成果物をまとめて GitHub Release を作成する。
-# (CGo のクロスコンパイルを避けるため、各 OS でネイティブビルドする)
-
-builds:
-  - id: meet-translator-server
-    dir: server
-    binary: meet-translator-server
-    env:
-      - CGO_ENABLED=1
-    # 各 OS ランナーが自分の GOOS/GOARCH のみビルドするため、
-    # goos/goarch は goreleaser が環境変数 GOOS/GOARCH から自動取得する。
-    # CI (release.yml) 側で GOOS/GOARCH を設定して --single-target を使う。
-    hooks:
-      pre:
-        - cmd: make -C server whisper
-          output: true
-
-archives:
-  - id: default
-    formats:
-      - tar.gz
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
-    name_template: "meet-translator-server_{{ .Os }}_{{ .Arch }}"
-    files:
-      - server/README.md
-
-checksum:
-  name_template: "checksums.txt"
 
 release:
   github:
@@ -45,11 +14,17 @@ release:
     ## セットアップ
 
     1. お使いの OS のアーカイブをダウンロードして展開
-    2. [Ollama](https://ollama.com) をインストールして `ollama pull qwen2.5:7b` を実行
-    3. whisper モデルをダウンロード（例: `ggml-base.bin`）
-    4. 実行:
+    2. whisper モデルをダウンロード:
        ```
-       WHISPER_MODEL=./ggml-base.bin ./meet-translator-server
+       curl -L -o ggml-base.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+       ```
+    3. llama モデルをダウンロード:
+       ```
+       # HuggingFace から Qwen2.5-7B-Instruct-Q4_K_M.gguf を取得
+       ```
+    4. 起動:
+       ```
+       WHISPER_MODEL=./ggml-base.bin LLAMA_MODEL=./Qwen2.5-7B-Instruct-Q4_K_M.gguf ./meet-translator-server
        ```
 
 changelog:

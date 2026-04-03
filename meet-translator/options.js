@@ -5,7 +5,6 @@ const DEFAULTS = {
   sourceLang: '',
   targetLang: 'ja',
   whisperModel: 'base',
-  ollamaModel: 'qwen2.5:7b',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -19,7 +18,6 @@ chrome.storage.local.get(Object.keys(DEFAULTS), (stored) => {
   $('source-lang').value   = cfg.sourceLang;
   $('target-lang').value   = cfg.targetLang;
   $('whisper-model').value = cfg.whisperModel;
-  $('ollama-model').value  = cfg.ollamaModel;
 });
 
 // ---------------------------------------------------------------------------
@@ -31,7 +29,6 @@ $('save-btn').addEventListener('click', () => {
     sourceLang:   $('source-lang').value,
     targetLang:   $('target-lang').value,
     whisperModel: $('whisper-model').value,
-    ollamaModel:  $('ollama-model').value.trim(),
   };
   chrome.storage.local.set(cfg, () => {
     showStatus('保存しました ✓', 'ok');

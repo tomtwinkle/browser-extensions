@@ -8,32 +8,48 @@ on:
 permissions:
   contents: write
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 各 OS でネイティブビルド。CGo + GPU アクセラレーション対応。
+#
+#  ターゲット      | ランナー          | GPU
+# ─────────────────┼───────────────────┼────────────────────────────
+#  linux-amd64     | ubuntu-latest     | CPU (CUDA は self-hosted 推奨)
+#  darwin-arm64    | macos-latest      | Metal (Apple Silicon)
+#  darwin-amd64    | macos-13          | Metal (Intel Mac)
+#  windows-amd64   | windows-latest    | CPU
+# ──────────────────────────────────────────────────────────────────────────────
+
 jobs:
-  # ----------------------------------------------------------------
-  # 各 OS でネイティブビルド (CGo のクロスコンパイル不要)
-  # ----------------------------------------------------------------
   build:
     name: Build (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - name: linux-amd64
             runner: ubuntu-latest
             goos: linux
             goarch: amd64
-          - name: darwin-amd64
-            runner: macos-13       # Intel Mac
-            goos: darwin
-            goarch: amd64
+            gpu: cpu
+
           - name: darwin-arm64
-            runner: macos-latest   # Apple Silicon
+            runner: macos-latest      # Apple Silicon
             goos: darwin
             goarch: arm64
+            gpu: metal
+
+          - name: darwin-amd64
+            runner: macos-13          # Intel Mac
+            goos: darwin
+            goarch: amd64
+            gpu: metal
+
           - name: windows-amd64
             runner: windows-latest
             goos: windows
             goarch: amd64
+            gpu: cpu
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -45,43 +61,66 @@ jobs:
           go-version-file: server/go.mod
           cache: false
 
+      # ── ビルドツール: Linux ──────────────────────────────────────────────────
       - name: Install build tools (Linux)
         if: matrix.goos == 'linux'
         run: sudo apt-get install -y cmake build-essential
 
+      # ── ビルドツール: macOS ──────────────────────────────────────────────────
       - name: Install build tools (macOS)
         if: matrix.goos == 'darwin'
         run: brew install cmake
 
+      # ── ビルドツール: Windows ────────────────────────────────────────────────
       - name: Install build tools (Windows)
         if: matrix.goos == 'windows'
-        run: choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+        shell: pwsh
+        run: |
+          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+          choco install mingw -y
 
-      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
-        with:
-          version: "~> v2"
-          args: release --split --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+      # ── whisper.cpp + llama.cpp をビルドして Go バイナリを生成 ────────────────
+      - name: Build (Unix)
+        if: matrix.goos != 'windows'
+        working-directory: server
+        run: make GPU=${{ matrix.gpu }}
+
+      - name: Build (Windows)
+        if: matrix.goos == 'windows'
+        working-directory: server
+        shell: bash
+        run: make GPU=${{ matrix.gpu }}
+
+      # ── アーカイブ作成 ────────────────────────────────────────────────────────
+      - name: Archive (Unix)
+        if: matrix.goos != 'windows'
+        working-directory: server
+        run: |
+          tar czf meet-translator-server_${{ matrix.goos }}_${{ matrix.goarch }}_${{ matrix.gpu }}.tar.gz \
+            meet-translator-server README.md
+
+      - name: Archive (Windows)
+        if: matrix.goos == 'windows'
+        working-directory: server
+        shell: pwsh
+        run: |
+          Compress-Archive -Path meet-translator-server.exe, README.md `
+            -DestinationPath meet-translator-server_windows_amd64_cpu.zip
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dist-${{ matrix.name }}
-          path: dist/
+          path: server/meet-translator-server_*.*
 
-  # ----------------------------------------------------------------
-  # 全プラットフォームの成果物をまとめて GitHub Release を作成
-  # ----------------------------------------------------------------
+  # ────────────────────────────────────────────────────────────────────────────
+  # GitHub Release を作成して全成果物をアップロード
+  # ────────────────────────────────────────────────────────────────────────────
   release:
     name: Publish Release
     needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          fetch-depth: 0
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -89,9 +128,17 @@ jobs:
           path: dist/
           merge-multiple: true
 
-      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
-        with:
-          version: "~> v2"
-          args: continue --merge
+      - name: Create checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+
+      - name: Create GitHub Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          gh release create "$TAG" dist/* \
+            --title "$TAG" \
+            --generate-notes \
+            --repo "$GITHUB_REPOSITORY"

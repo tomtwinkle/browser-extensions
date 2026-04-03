@@ -28,27 +28,20 @@ const state = {
 async function getSettings() {
   const defaults = {
     serverUrl: 'http://localhost:7070',
-    sourceLang: '',        // empty = auto-detect
+    sourceLang: '',
     targetLang: 'ja',
     whisperModel: 'base',
-    ollamaModel: 'qwen2.5:7b',
   };
   const stored = await chrome.storage.local.get(Object.keys(defaults));
   return { ...defaults, ...stored };
 }
 
-/**
- * Send WAV audio (ArrayBuffer) to the local server for transcription and
- * translation. Returns the translated text, or null if nothing was spoken.
- */
 async function transcribeAndTranslate(wavBuffer) {
   const cfg = await getSettings();
 
   const form = new FormData();
   form.append('audio', new Blob([wavBuffer], { type: 'audio/wav' }), 'audio.wav');
   form.append('target_lang', cfg.targetLang);
-  form.append('whisper_model', cfg.whisperModel);
-  form.append('ollama_model', cfg.ollamaModel);
   if (cfg.sourceLang) form.append('source_lang', cfg.sourceLang);
 
   const res = await fetch(`${cfg.serverUrl}/transcribe-and-translate`, {

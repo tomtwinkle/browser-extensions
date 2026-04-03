@@ -1,17 +1,21 @@
 // main.go – meet-translator ローカルサーバー
 //
-// 役割:
-//   受信した WAV 音声を whisper.cpp (CGo) で文字起こしし、
-//   Ollama で翻訳して JSON を返す。
+// 外部依存なし。whisper.cpp + llama.cpp を CGo で直接組み込んだシングルバイナリ。
 //
-// 外部依存: Ollama のみ（whisper.cpp は Go バイナリに組み込み済み）
-//
-// 設定は環境変数で行う:
-//   PORT          リスンポート               (デフォルト: 7070)
-//   WHISPER_MODEL whisper モデルファイルのパス  (必須)
-//   OLLAMA_URL    Ollama サーバー URL         (デフォルト: http://localhost:11434)
+// 設定 (環境変数):
+//   PORT           リスンポート                    (デフォルト: 7070)
+//   WHISPER_MODEL  whisper GGML モデルファイルパス  (必須)
+//   LLAMA_MODEL    llama   GGUF モデルファイルパス  (必須)
+//   LLAMA_GPU_LAYERS GPU にオフロードするレイヤ数   (デフォルト: -1 = 全レイヤ)
+//   WHISPER_GPU_LAYERS 同上 whisper 用              (デフォルト: -1)
 
 package main
+
+/*
+#include "llama_bridge.h"
+#include "whisper_bridge.h"
+*/
+import "C"
 
 import (
 "context"
@@ -21,11 +25,10 @@ import (
 "net/http"
 "os"
 "os/signal"
+"strconv"
 "strings"
 "syscall"
 "time"
-
-"github.com/ggerganov/whisper.cpp/bindings/go/pkg/whisper"
 )
 
 // ---------------------------------------------------------------------------
@@ -33,9 +36,11 @@ import (
 // ---------------------------------------------------------------------------
 
 type config struct {
-port         string
-whisperModel string
-ollamaURL    string
+port              string
+whisperModel      string
+llamaModel        string
+llamaGPULayers    int
+whisperGPULayers  int
 }
 
 func loadConfig() config {
@@ -45,10 +50,20 @@ return v
 }
 return def
 }
+envInt := func(key string, def int) int {
+if v := os.Getenv(key); v != "" {
+if n, err := strconv.Atoi(v); err == nil {
+return n
+}
+}
+return def
+}
 return config{
-port:         env("PORT", "7070"),
-whisperModel: os.Getenv("WHISPER_MODEL"),
-ollamaURL:    env("OLLAMA_URL", "http://localhost:11434"),
+port:             env("PORT", "7070"),
+whisperModel:     os.Getenv("WHISPER_MODEL"),
+llamaModel:       os.Getenv("LLAMA_MODEL"),
+llamaGPULayers:   envInt("LLAMA_GPU_LAYERS", -1),
+whisperGPULayers: envInt("WHISPER_GPU_LAYERS", -1),
 }
 }
 
@@ -57,19 +72,24 @@ ollamaURL:    env("OLLAMA_URL", "http://localhost:11434"),
 // ---------------------------------------------------------------------------
 
 type server struct {
-cfg          config
-mux          *http.ServeMux
-whisperModel whisper.Model
+cfg        config
+mux        *http.ServeMux
+whisperCtx *C.whisper_context
+llamaModel C.llama_bridge_model
 }
 
-func newServer(cfg config, model whisper.Model) *server {
-s := &server{cfg: cfg, mux: http.NewServeMux(), whisperModel: model}
+func newServer(cfg config, whisperCtx *C.whisper_context, llamaModel C.llama_bridge_model) *server {
+s := &server{
+cfg:        cfg,
+mux:        http.NewServeMux(),
+whisperCtx: whisperCtx,
+llamaModel: llamaModel,
+}
 s.mux.HandleFunc("GET /health", s.handleHealth)
 s.mux.HandleFunc("POST /transcribe-and-translate", s.handleTranscribeAndTranslate)
 return s
 }
 
-// ServeHTTP は CORS ヘッダーを付与してから内部ルーターに委譲する。
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 w.Header().Set("Access-Control-Allow-Origin", "*")
 w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -92,10 +112,7 @@ _ = json.NewEncoder(w).Encode(v)
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-writeJSON(w, http.StatusOK, map[string]string{
-"status":     "ok",
-"ollama_url": s.cfg.ollamaURL,
-})
+writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Request) {
@@ -103,7 +120,6 @@ if err := r.ParseMultipartForm(32 << 20); err != nil {
 http.Error(w, "failed to parse form: "+err.Error(), http.StatusBadRequest)
 return
 }
-
 f, _, err := r.FormFile("audio")
 if err != nil {
 http.Error(w, "missing audio field", http.StatusBadRequest)
@@ -117,14 +133,10 @@ http.Error(w, "failed to read audio", http.StatusInternalServerError)
 return
 }
 
-sourceLang  := r.FormValue("source_lang")
-targetLang  := r.FormValue("target_lang")
-ollamaModel := r.FormValue("ollama_model")
+sourceLang := r.FormValue("source_lang")
+targetLang := r.FormValue("target_lang")
 if targetLang == "" {
 targetLang = "ja"
-}
-if ollamaModel == "" {
-ollamaModel = "qwen2.5:7b"
 }
 
 transcription, err := s.transcribe(audioData, sourceLang)
@@ -134,16 +146,16 @@ http.Error(w, "transcription failed: "+err.Error(), http.StatusInternalServerErr
 return
 }
 transcription = strings.TrimSpace(transcription)
-
 if transcription == "" {
 writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
 return
 }
 
-translation, err := s.translate(transcription, sourceLang, targetLang, ollamaModel)
+// translate の第3引数 ollamaModel は llama.go 側で無視される
+translation, err := s.translate(transcription, sourceLang, targetLang, "")
 if err != nil {
 log.Printf("[translate] %v", err)
-http.Error(w, "translation failed: "+err.Error(), http.StatusBadGateway)
+http.Error(w, "translation failed: "+err.Error(), http.StatusInternalServerError)
 return
 }
 
@@ -163,21 +175,33 @@ cfg := loadConfig()
 // 依存チェック
 runPreflight(cfg)
 
-// whisper モデルをロード（CGo 経由、起動時に一度だけ）
+// llama バックエンド初期化
+initLlamaBackend()
+defer freeLlamaBackend()
+
+// whisper モデルをロード
 log.Printf("whisper モデルをロード中: %s", cfg.whisperModel)
-model, err := whisper.New(cfg.whisperModel)
+whisperCtx, err := loadWhisperModel(cfg.whisperModel)
 if err != nil {
-log.Fatalf("whisper モデルのロードに失敗: %v", err)
+log.Fatalf("%v", err)
 }
-defer model.Close()
+defer C.whisper_bridge_free(whisperCtx)
 log.Printf("whisper モデルのロード完了")
+
+// llama モデルをロード
+log.Printf("llama モデルをロード中: %s (GPU layers=%d)", cfg.llamaModel, cfg.llamaGPULayers)
+llamaModel, err := loadLlamaModel(cfg.llamaModel, cfg.llamaGPULayers)
+if err != nil {
+log.Fatalf("%v", err)
+}
+defer C.llama_bridge_free_model(llamaModel)
+log.Printf("llama モデルのロード完了")
 
 httpSrv := &http.Server{
 Addr:    ":" + cfg.port,
-Handler: newServer(cfg, model),
+Handler: newServer(cfg, whisperCtx, llamaModel),
 }
 
-// Graceful shutdown
 quit := make(chan os.Signal, 1)
 signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 go func() {
@@ -189,8 +213,6 @@ _ = httpSrv.Shutdown(ctx)
 }()
 
 log.Printf("meet-translator server listening on :%s", cfg.port)
-log.Printf("  Ollama : %s", cfg.ollamaURL)
-
 if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 log.Fatal(err)
 }
