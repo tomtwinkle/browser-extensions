@@ -1,5 +1,10 @@
 .DS_Store
 
+# Go server binary
+server/meet-translator-server
+server/meet-translator-server.exe
+dist/
+
 # Images
 images/avatars/
 images/captchas/
@@ -17,3 +22,6 @@ sized/
 thumbs/
 _thumbs/
 */expressionengine/cache/*
+
+# Pem
+*.pem

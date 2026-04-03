@@ -46,8 +46,14 @@ function setLoading(loading) {
 // Initialise: read current state from the background worker
 // ---------------------------------------------------------------------------
 chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
-  if (chrome.runtime.lastError) return; // extension context invalidated
+  if (chrome.runtime.lastError) return;
   if (response) setUI(response.isActive);
+});
+
+// Settings link
+document.getElementById('settings-link').addEventListener('click', (e) => {
+  e.preventDefault();
+  chrome.runtime.openOptionsPage();
 });
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,65 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+# ビルド対象: server/ ディレクトリの Go サーバーのみ
+builds:
+  - id: meet-translator-server
+    dir: server
+    binary: meet-translator-server
+    env:
+      - CGO_ENABLED=0   # 静的バイナリ（依存なし）
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64  # Windows ARM64 は対象外
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "meet-translator-server_{{ .Os }}_{{ .Arch }}"
+    files:
+      - server/README.md   # README を同梱
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: tomtwinkle
+    name: browser-extensions
+  draft: false
+  prerelease: auto   # v1.0.0-beta などは pre-release 扱い
+  name_template: "v{{ .Version }}"
+  footer: |
+    ## セットアップ
+
+    1. お使いの OS に合ったアーカイブをダウンロードして展開
+    2. `meet-translator-server` を実行（Windows は `.exe`）
+    3. [whisper.cpp サーバー](https://github.com/ggerganov/whisper.cpp) と [Ollama](https://ollama.com) を別途起動
+
+    環境変数で設定を変更できます：
+
+    | 変数 | デフォルト | 説明 |
+    |---|---|---|
+    | `PORT` | `7070` | リスンポート |
+    | `WHISPER_URL` | `http://localhost:8080` | whisper.cpp サーバー URL |
+    | `OLLAMA_URL` | `http://localhost:11434` | Ollama URL |
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"

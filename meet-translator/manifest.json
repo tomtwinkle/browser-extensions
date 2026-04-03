@@ -8,10 +8,12 @@
     "activeTab",
     "scripting",
     "storage",
-    "offscreen"
+    "offscreen",
+    "tabs"
   ],
   "host_permissions": [
-    "https://meet.google.com/*"
+    "https://meet.google.com/*",
+    "http://localhost:7070/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -26,6 +28,7 @@
       "128": "icons/icon128.png"
     }
   },
+  "options_page": "options.html",
   "content_scripts": [
     {
       "matches": ["https://meet.google.com/*"],
