@@ -176,6 +176,9 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 func main() {
 	cfg := loadConfig()
 
+	// 依存チェック: 未インストールの場合は案内を表示して終了
+	runPreflight(cfg)
+
 	// --- [A] whisper.cpp を子プロセスとして自動起動 ---
 	if cfg.whisperBin != "" && cfg.whisperModel != "" {
 		cmd, err := startWhisperProcess(cfg.whisperBin, cfg.whisperModel, cfg.whisperPort)
