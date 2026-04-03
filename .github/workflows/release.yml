@@ -9,21 +9,89 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  # ----------------------------------------------------------------
+  # 各 OS でネイティブビルド (CGo のクロスコンパイル不要)
+  # ----------------------------------------------------------------
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - name: linux-amd64
+            runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - name: darwin-amd64
+            runner: macos-13       # Intel Mac
+            goos: darwin
+            goarch: amd64
+          - name: darwin-arm64
+            runner: macos-latest   # Apple Silicon
+            goos: darwin
+            goarch: arm64
+          - name: windows-amd64
+            runner: windows-latest
+            goos: windows
+            goarch: amd64
+
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          fetch-depth: 0  # changelog 生成に全履歴が必要
+          fetch-depth: 0
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: server/go.mod
           cache: false
 
+      - name: Install build tools (Linux)
+        if: matrix.goos == 'linux'
+        run: sudo apt-get install -y cmake build-essential
+
+      - name: Install build tools (macOS)
+        if: matrix.goos == 'darwin'
+        run: brew install cmake
+
+      - name: Install build tools (Windows)
+        if: matrix.goos == 'windows'
+        run: choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
+
       - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           version: "~> v2"
-          args: release --clean
+          args: release --split --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist-${{ matrix.name }}
+          path: dist/
+
+  # ----------------------------------------------------------------
+  # 全プラットフォームの成果物をまとめて GitHub Release を作成
+  # ----------------------------------------------------------------
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: dist-*
+          path: dist/
+          merge-multiple: true
+
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          version: "~> v2"
+          args: continue --merge
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

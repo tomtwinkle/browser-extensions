@@ -1,23 +1,23 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 version: 2
 
-# ビルド対象: server/ ディレクトリの Go サーバーのみ
+# --split モード: 各 OS の CI ジョブがそれぞれの GOOS/GOARCH 向けにビルドし、
+# 最後の merge ジョブが全成果物をまとめて GitHub Release を作成する。
+# (CGo のクロスコンパイルを避けるため、各 OS でネイティブビルドする)
+
 builds:
   - id: meet-translator-server
     dir: server
     binary: meet-translator-server
     env:
-      - CGO_ENABLED=0   # 静的バイナリ（依存なし）
-    goos:
-      - linux
-      - darwin
-      - windows
-    goarch:
-      - amd64
-      - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64  # Windows ARM64 は対象外
+      - CGO_ENABLED=1
+    # 各 OS ランナーが自分の GOOS/GOARCH のみビルドするため、
+    # goos/goarch は goreleaser が環境変数 GOOS/GOARCH から自動取得する。
+    # CI (release.yml) 側で GOOS/GOARCH を設定して --single-target を使う。
+    hooks:
+      pre:
+        - cmd: make -C server whisper
+          output: true
 
 archives:
   - id: default
@@ -29,7 +29,7 @@ archives:
           - zip
     name_template: "meet-translator-server_{{ .Os }}_{{ .Arch }}"
     files:
-      - server/README.md   # README を同梱
+      - server/README.md
 
 checksum:
   name_template: "checksums.txt"
@@ -39,22 +39,18 @@ release:
     owner: tomtwinkle
     name: browser-extensions
   draft: false
-  prerelease: auto   # v1.0.0-beta などは pre-release 扱い
+  prerelease: auto
   name_template: "v{{ .Version }}"
   footer: |
     ## セットアップ
 
-    1. お使いの OS に合ったアーカイブをダウンロードして展開
-    2. `meet-translator-server` を実行（Windows は `.exe`）
-    3. [whisper.cpp サーバー](https://github.com/ggerganov/whisper.cpp) と [Ollama](https://ollama.com) を別途起動
-
-    環境変数で設定を変更できます：
-
-    | 変数 | デフォルト | 説明 |
-    |---|---|---|
-    | `PORT` | `7070` | リスンポート |
-    | `WHISPER_URL` | `http://localhost:8080` | whisper.cpp サーバー URL |
-    | `OLLAMA_URL` | `http://localhost:11434` | Ollama URL |
+    1. お使いの OS のアーカイブをダウンロードして展開
+    2. [Ollama](https://ollama.com) をインストールして `ollama pull qwen2.5:7b` を実行
+    3. whisper モデルをダウンロード（例: `ggml-base.bin`）
+    4. 実行:
+       ```
+       WHISPER_MODEL=./ggml-base.bin ./meet-translator-server
+       ```
 
 changelog:
   sort: asc

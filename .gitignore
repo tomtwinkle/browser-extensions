@@ -1,8 +1,9 @@
 .DS_Store
 
-# Go server binary
+# Go server binary and build artifacts
 server/meet-translator-server
 server/meet-translator-server.exe
+server/vendor/
 dist/
 
 # Images
