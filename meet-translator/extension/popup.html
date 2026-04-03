@@ -94,6 +94,12 @@
       color: #9aa0a6;
       text-align: center;
     }
+
+    footer a {
+      color: #1a73e8;
+      text-decoration: none;
+    }
+    footer a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -108,7 +114,10 @@
 
   <p id="error-msg"></p>
 
-  <footer>Google Meet 専用</footer>
+  <footer>
+    <a id="settings-link" href="#">⚙ 設定</a>
+    &nbsp;|&nbsp;Google Meet 専用
+  </footer>
 
   <script src="popup.js"></script>
 </body>

@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meet 自動翻訳チャット – 設定</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      max-width: 480px;
+      margin: 32px auto;
+      padding: 0 16px 32px;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      font-size: 14px;
+      color: #202124;
+    }
+
+    h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #1a73e8;
+      margin-bottom: 24px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #e8f0fe;
+    }
+
+    h2 {
+      font-size: 13px;
+      font-weight: 600;
+      color: #5f6368;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin: 20px 0 10px;
+    }
+
+    .field {
+      margin-bottom: 14px;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      color: #3c4043;
+      margin-bottom: 4px;
+    }
+
+    input[type="text"], select {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #dadce0;
+      border-radius: 6px;
+      font-size: 14px;
+      color: #202124;
+      background: #fff;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input[type="text"]:focus, select:focus {
+      border-color: #1a73e8;
+    }
+
+    .hint {
+      font-size: 11px;
+      color: #9aa0a6;
+      margin-top: 3px;
+    }
+
+    .row-btn {
+      display: flex;
+      gap: 8px;
+      margin-top: 20px;
+      align-items: center;
+    }
+
+    button {
+      padding: 9px 18px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    #save-btn {
+      background: #1a73e8;
+      color: #fff;
+    }
+    #save-btn:hover { background: #1558b0; }
+
+    #health-btn {
+      background: #f1f3f4;
+      color: #3c4043;
+    }
+    #health-btn:hover { background: #e8eaed; }
+
+    #status-msg {
+      font-size: 13px;
+      margin-left: 4px;
+    }
+    .ok  { color: #34a853; }
+    .err { color: #ea4335; }
+  </style>
+</head>
+<body>
+  <h1>⚙ Meet 自動翻訳チャット – 設定</h1>
+
+  <h2>ローカルサーバー</h2>
+  <div class="field">
+    <label for="server-url">サーバー URL</label>
+    <input type="text" id="server-url" placeholder="http://localhost:7070">
+    <p class="hint">server/ ディレクトリの FastAPI サーバーを起動してください。</p>
+  </div>
+
+  <h2>言語設定</h2>
+  <div class="field">
+    <label for="source-lang">翻訳元言語</label>
+    <select id="source-lang">
+      <option value="">自動検出</option>
+      <option value="en">英語 (en)</option>
+      <option value="ja">日本語 (ja)</option>
+      <option value="zh">中国語 (zh)</option>
+      <option value="ko">韓国語 (ko)</option>
+      <option value="fr">フランス語 (fr)</option>
+      <option value="de">ドイツ語 (de)</option>
+      <option value="es">スペイン語 (es)</option>
+      <option value="pt">ポルトガル語 (pt)</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="target-lang">翻訳先言語</label>
+    <select id="target-lang">
+      <option value="ja">日本語 (ja)</option>
+      <option value="en">英語 (en)</option>
+      <option value="zh">中国語 (zh)</option>
+      <option value="ko">韓国語 (ko)</option>
+      <option value="fr">フランス語 (fr)</option>
+      <option value="de">ドイツ語 (de)</option>
+      <option value="es">スペイン語 (es)</option>
+      <option value="pt">ポルトガル語 (pt)</option>
+    </select>
+  </div>
+
+  <h2>モデル設定</h2>
+  <div class="field">
+    <label for="whisper-model">Whisper モデル</label>
+    <select id="whisper-model">
+      <option value="tiny">tiny（最速・低精度）</option>
+      <option value="base" selected>base（推奨バランス）</option>
+      <option value="small">small</option>
+      <option value="medium">medium（高精度）</option>
+      <option value="large-v3">large-v3（最高精度・要GPU）</option>
+    </select>
+  </div>
+
+  <div class="row-btn">
+    <button id="save-btn">保存</button>
+    <button id="health-btn">サーバー疎通確認</button>
+    <span id="status-msg"></span>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

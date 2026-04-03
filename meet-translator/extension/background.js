@@ -21,13 +21,41 @@ const state = {
 };
 
 // ---------------------------------------------------------------------------
-// Mock transcription + translation
-// Replace this function with a real API call (e.g. Whisper + DeepL / Google
-// Cloud Translation) when you are ready to wire up the backend.
+// Transcription + Translation via local server
 // ---------------------------------------------------------------------------
-async function transcribeAndTranslate(audioData) {
-  // TODO: send audioData to a transcription API and translate the result
-  return 'テスト翻訳です';
+
+/** Load settings from chrome.storage.local with defaults. */
+async function getSettings() {
+  const defaults = {
+    serverUrl: 'http://localhost:7070',
+    sourceLang: '',
+    targetLang: 'ja',
+    whisperModel: 'base',
+  };
+  const stored = await chrome.storage.local.get(Object.keys(defaults));
+  return { ...defaults, ...stored };
+}
+
+async function transcribeAndTranslate(wavBuffer) {
+  const cfg = await getSettings();
+
+  const form = new FormData();
+  form.append('audio', new Blob([wavBuffer], { type: 'audio/wav' }), 'audio.wav');
+  form.append('target_lang', cfg.targetLang);
+  if (cfg.sourceLang) form.append('source_lang', cfg.sourceLang);
+
+  const res = await fetch(`${cfg.serverUrl}/transcribe-and-translate`, {
+    method: 'POST',
+    body: form,
+  });
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`server error ${res.status}: ${detail}`);
+  }
+
+  const { translation } = await res.json();
+  return translation || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +174,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (!state.isActive) return false;
       (async () => {
         try {
-          const translatedText = await transcribeAndTranslate(message.audioData);
+          const translatedText = await transcribeAndTranslate(message.wavBuffer);
           if (state.tabId && translatedText) {
             await chrome.tabs.sendMessage(state.tabId, {
               type: 'POST_TRANSLATION',

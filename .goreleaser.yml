@@ -1,0 +1,36 @@
+# .goreleaser.yml
+# ビルドは CI matrix (release.yml) で各 OS ネイティブビルドするため
+# goreleaser はリリースノート生成とチェックサム用途のみ。
+version: 2
+
+release:
+  github:
+    owner: tomtwinkle
+    name: browser-extensions
+  draft: false
+  prerelease: auto
+  name_template: "v{{ .Version }}"
+  footer: |
+    ## セットアップ
+
+    1. お使いの OS のアーカイブをダウンロードして展開
+    2. whisper モデルをダウンロード:
+       ```
+       curl -L -o ggml-base.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+       ```
+    3. llama モデルをダウンロード:
+       ```
+       # HuggingFace から Qwen2.5-7B-Instruct-Q4_K_M.gguf を取得
+       ```
+    4. 起動:
+       ```
+       WHISPER_MODEL=./ggml-base.bin LLAMA_MODEL=./Qwen2.5-7B-Instruct-Q4_K_M.gguf ./meet-translator-server
+       ```
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
