@@ -58,7 +58,7 @@ jobs:
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: server/go.mod
+          go-version-file: meet-translator/server/go.mod
           cache: false
 
       # ── ビルドツール: Linux ──────────────────────────────────────────────────
@@ -82,26 +82,26 @@ jobs:
       # ── whisper.cpp + llama.cpp をビルドして Go バイナリを生成 ────────────────
       - name: Build (Unix)
         if: matrix.goos != 'windows'
-        working-directory: server
+        working-directory: meet-translator/server
         run: make GPU=${{ matrix.gpu }}
 
       - name: Build (Windows)
         if: matrix.goos == 'windows'
-        working-directory: server
+        working-directory: meet-translator/server
         shell: bash
         run: make GPU=${{ matrix.gpu }}
 
       # ── アーカイブ作成 ────────────────────────────────────────────────────────
       - name: Archive (Unix)
         if: matrix.goos != 'windows'
-        working-directory: server
+        working-directory: meet-translator/server
         run: |
           tar czf meet-translator-server_${{ matrix.goos }}_${{ matrix.goarch }}_${{ matrix.gpu }}.tar.gz \
             meet-translator-server README.md
 
       - name: Archive (Windows)
         if: matrix.goos == 'windows'
-        working-directory: server
+        working-directory: meet-translator/server
         shell: pwsh
         run: |
           Compress-Archive -Path meet-translator-server.exe, README.md `
@@ -110,7 +110,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dist-${{ matrix.name }}
-          path: server/meet-translator-server_*.*
+          path: meet-translator/server/meet-translator-server_*.*
 
   # ────────────────────────────────────────────────────────────────────────────
   # GitHub Release を作成して全成果物をアップロード

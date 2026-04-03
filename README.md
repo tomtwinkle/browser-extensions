@@ -36,29 +36,30 @@ Meet のチャット欄に自動投稿する Chrome / Edge 拡張機能（Manife
 
 ```
 browser-extensions/
-├── meet-translator/          Chrome / Edge 拡張機能
-│   ├── manifest.json         Manifest V3 設定
-│   ├── background.js         Service Worker: 音声キャプチャ・翻訳制御
-│   ├── offscreen.html/js     Offscreen Document: Web Audio API + WAV エンコーダー
-│   ├── content.js            Content Script: Meet チャット DOM 操作
-│   ├── popup.html/js         ポップアップ UI (開始/停止 + 設定リンク)
-│   ├── options.html/js       設定ページ (サーバー URL・言語・モデル)
-│   └── icons/                アイコン (16 / 32 / 48 / 128 px)
-│
-└── server/                   ローカル推論サーバー
-    ├── main.go               HTTP サーバー + Graceful shutdown
-    ├── whisper.go            CGo ブリッジ → whisper.cpp (文字起こし)
-    ├── llama.go              CGo ブリッジ → llama.cpp (翻訳)
-    ├── whisper_bridge.h/cpp  whisper.cpp C++ ブリッジ実装
-    ├── llama_bridge.h/cpp    llama.cpp C++ ブリッジ実装
-    ├── audio.go              WAV パーサー + 16kHz リサンプラー (標準ライブラリのみ)
-    ├── preflight.go          起動前チェック (モデルファイル確認・OS 別案内)
-    ├── gpu_cpu.go            CGo LDFLAGS: CPU ビルド
-    ├── gpu_cuda.go           CGo LDFLAGS: NVIDIA CUDA ビルド
-    ├── gpu_metal.go          CGo LDFLAGS: Apple Metal ビルド
-    ├── CMakeLists.txt        whisper.cpp + llama.cpp を共通 ggml でまとめてビルド
-    ├── Makefile              GPU 自動検出・cmake + Go ビルド
-    └── README.md             サーバー詳細ドキュメント
+└── meet-translator/
+    ├── extension/                Chrome / Edge 拡張機能
+    │   ├── manifest.json         Manifest V3 設定
+    │   ├── background.js         Service Worker: 音声キャプチャ・翻訳制御
+    │   ├── offscreen.html/js     Offscreen Document: Web Audio API + WAV エンコーダー
+    │   ├── content.js            Content Script: Meet チャット DOM 操作
+    │   ├── popup.html/js         ポップアップ UI (開始/停止 + 設定リンク)
+    │   ├── options.html/js       設定ページ (サーバー URL・言語・モデル)
+    │   └── icons/                アイコン (16 / 32 / 48 / 128 px)
+    │
+    └── server/                   ローカル推論サーバー
+        ├── main.go               HTTP サーバー + Graceful shutdown
+        ├── whisper.go            CGo ブリッジ → whisper.cpp (文字起こし)
+        ├── llama.go              CGo ブリッジ → llama.cpp (翻訳)
+        ├── whisper_bridge.h/cpp  whisper.cpp C++ ブリッジ実装
+        ├── llama_bridge.h/cpp    llama.cpp C++ ブリッジ実装
+        ├── audio.go              WAV パーサー + 16kHz リサンプラー (標準ライブラリのみ)
+        ├── preflight.go          起動前チェック (モデルファイル確認・OS 別案内)
+        ├── gpu_cpu.go            CGo LDFLAGS: CPU ビルド
+        ├── gpu_cuda.go           CGo LDFLAGS: NVIDIA CUDA ビルド
+        ├── gpu_metal.go          CGo LDFLAGS: Apple Metal ビルド
+        ├── CMakeLists.txt        whisper.cpp + llama.cpp を共通 ggml でまとめてビルド
+        ├── Makefile              GPU 自動検出・cmake + Go ビルド
+        └── README.md             サーバー詳細ドキュメント
 ```
 
 ---
@@ -70,7 +71,7 @@ browser-extensions/
 **前提**: Go 1.23+、cmake、C++ コンパイラ
 
 ```bash
-cd server/
+cd meet-translator/server/
 
 make              # GPU を自動検出 (macOS → Metal / NVIDIA 検出時 → CUDA / その他 → CPU)
 make GPU=metal    # Apple Metal を強制
@@ -126,7 +127,7 @@ LLAMA_MODEL=./Qwen2.5-7B-Instruct-Q4_K_M.gguf \
 
 1. Chrome / Edge で `chrome://extensions` を開く
 2. **デベロッパーモード** を有効にする
-3. **「パッケージ化されていない拡張機能を読み込む」** → `meet-translator/` フォルダを選択
+3. **「パッケージ化されていない拡張機能を読み込む」** → `meet-translator/extension/` フォルダを選択
 
 ### 5. 拡張機能を設定する
 
