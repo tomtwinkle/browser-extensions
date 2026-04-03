@@ -53,34 +53,58 @@ go build -o meet-translator-server .
 
 ---
 
-## 起動手順（3 プロセスを順に起動）
+## 起動手順
+
+### 方法 A: 自動起動（推奨）— コマンド 1 つ
+
+`WHISPER_BIN` と `WHISPER_MODEL` を指定するだけで、Go サーバーが whisper.cpp を**子プロセスとして自動起動・終了管理**します。
+
+```bash
+WHISPER_BIN=./whisper.cpp/build/bin/whisper-server \
+WHISPER_MODEL=./whisper.cpp/models/ggml-base.bin \
+./meet-translator-server
+```
+
+Ctrl+C で Go サーバーを停止すると whisper.cpp も一緒に終了します。
+
+---
+
+### 方法 B: 手動起動（既存インスタンスを利用する場合）
+
+whisper.cpp を別途起動してから Go サーバーを起動します。
 
 ```bash
 # 1. whisper.cpp HTTP サーバー
 cd whisper.cpp
 ./build/bin/whisper-server -m models/ggml-base.bin --port 8080
 
-# 2. Ollama（別ターミナル）
-ollama serve   # 既に起動中なら不要
-
-# 3. Go サーバー（別ターミナル）
+# 2. Go サーバー（別ターミナル）
 cd browser-extensions/server/
 ./meet-translator-server
 ```
 
-起動後、http://localhost:7070/health で疎通確認できます。
+---
 
-### 環境変数による設定変更
+### Ollama について
+
+どちらの方法でも Ollama は別途起動が必要です（インストール後は自動起動される場合が多いです）。
+
+```bash
+ollama serve   # 既に起動中なら不要
+```
+
+---
+
+### 環境変数一覧
 
 | 変数 | デフォルト | 説明 |
 |---|---|---|
 | `PORT` | `7070` | Go サーバーのリスンポート |
-| `WHISPER_URL` | `http://localhost:8080` | whisper.cpp サーバーの URL |
+| `WHISPER_BIN` | _(未設定)_ | whisper-server バイナリのパス（設定時は自動起動） |
+| `WHISPER_MODEL` | _(未設定)_ | whisper.cpp の .bin モデルファイルのパス |
+| `WHISPER_PORT` | `8080` | whisper.cpp のポート（自動起動時のみ有効） |
+| `WHISPER_URL` | `http://localhost:8080` | 方法 B: 既存 whisper.cpp サーバーの URL |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama の URL |
-
-```bash
-PORT=7070 WHISPER_URL=http://localhost:8080 ./meet-translator-server
-```
 
 ---
 

@@ -7,19 +7,33 @@
 // 依存: 標準ライブラリのみ（外部パッケージなし）
 //
 // 設定は環境変数で行う:
-//   PORT        リスンポート          (デフォルト: 7070)
-//   WHISPER_URL whisper.cpp サーバー  (デフォルト: http://localhost:8080)
-//   OLLAMA_URL  Ollama サーバー       (デフォルト: http://localhost:11434)
+//   PORT           リスンポート              (デフォルト: 7070)
+//   OLLAMA_URL     Ollama サーバー           (デフォルト: http://localhost:11434)
+//
+//   --- whisper.cpp の起動方式を2つから選択 ---
+//   [A] 自動起動（推奨）: WHISPER_BIN と WHISPER_MODEL を指定すると
+//       Go サーバーが whisper.cpp を子プロセスとして管理する。
+//       WHISPER_BIN    whisper-server バイナリのパス
+//       WHISPER_MODEL  .bin モデルファイルのパス
+//       WHISPER_PORT   whisper.cpp のポート (デフォルト: 8080)
+//
+//   [B] 手動起動: WHISPER_URL を指定すると既存の whisper.cpp に接続する。
+//       WHISPER_URL    whisper.cpp サーバー URL (デフォルト: http://localhost:8080)
 
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -27,9 +41,13 @@ import (
 // ---------------------------------------------------------------------------
 
 type config struct {
-	port       string
-	whisperURL string
-	ollamaURL  string
+	port        string
+	whisperURL  string
+	ollamaURL   string
+	// 自動起動オプション
+	whisperBin   string
+	whisperModel string
+	whisperPort  string
 }
 
 func loadConfig() config {
@@ -39,10 +57,14 @@ func loadConfig() config {
 		}
 		return def
 	}
+	whisperPort := env("WHISPER_PORT", "8080")
 	return config{
-		port:       env("PORT", "7070"),
-		whisperURL: env("WHISPER_URL", "http://localhost:8080"),
-		ollamaURL:  env("OLLAMA_URL", "http://localhost:11434"),
+		port:         env("PORT", "7070"),
+		whisperURL:   env("WHISPER_URL", fmt.Sprintf("http://localhost:%s", whisperPort)),
+		ollamaURL:    env("OLLAMA_URL", "http://localhost:11434"),
+		whisperBin:   os.Getenv("WHISPER_BIN"),
+		whisperModel: os.Getenv("WHISPER_MODEL"),
+		whisperPort:  whisperPort,
 	}
 }
 
@@ -57,7 +79,6 @@ type server struct {
 
 func newServer(cfg config) *server {
 	s := &server{cfg: cfg, mux: http.NewServeMux()}
-	// Go 1.22: method + path パターンを使用
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("POST /transcribe-and-translate", s.handleTranscribeAndTranslate)
 	return s
@@ -94,7 +115,6 @@ func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Request) {
-	// 32 MB 上限でフォームを解析
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		http.Error(w, "failed to parse form: "+err.Error(), http.StatusBadRequest)
 		return
@@ -123,7 +143,6 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 		ollamaModel = "qwen2.5:7b"
 	}
 
-	// 文字起こし
 	transcription, err := s.transcribe(audioData, sourceLang)
 	if err != nil {
 		log.Printf("[transcribe] %v", err)
@@ -137,7 +156,6 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// 翻訳
 	translation, err := s.translate(transcription, sourceLang, targetLang, ollamaModel)
 	if err != nil {
 		log.Printf("[translate] %v", err)
@@ -157,13 +175,44 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 
 func main() {
 	cfg := loadConfig()
-	srv := newServer(cfg)
+
+	// --- [A] whisper.cpp を子プロセスとして自動起動 ---
+	if cfg.whisperBin != "" && cfg.whisperModel != "" {
+		cmd, err := startWhisperProcess(cfg.whisperBin, cfg.whisperModel, cfg.whisperPort)
+		if err != nil {
+			log.Fatalf("[whisper] %v", err)
+		}
+		defer func() {
+			log.Println("[whisper] 停止中...")
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}()
+	} else {
+		log.Printf("[whisper] 外部サーバーに接続: %s", cfg.whisperURL)
+		log.Println("  (自動起動: WHISPER_BIN と WHISPER_MODEL を設定すると whisper.cpp を自動管理します)")
+	}
+
+	srv := &http.Server{
+		Addr:    ":" + cfg.port,
+		Handler: newServer(cfg),
+	}
+
+	// Graceful shutdown: SIGINT / SIGTERM を受けたら後片付けして終了
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-quit
+		log.Println("シャットダウン中...")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}()
 
 	log.Printf("meet-translator server listening on :%s", cfg.port)
 	log.Printf("  Whisper : %s", cfg.whisperURL)
 	log.Printf("  Ollama  : %s", cfg.ollamaURL)
 
-	if err := http.ListenAndServe(":"+cfg.port, srv); err != nil {
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }
