@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meet 自動翻訳チャット</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      width: 240px;
+      padding: 16px;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      font-size: 14px;
+      color: #202124;
+      background: #fff;
+    }
+
+    h2 {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      color: #1a73e8;
+    }
+
+    #status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    #status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #bbb;
+      flex-shrink: 0;
+    }
+
+    #status-dot.active {
+      background: #34a853;
+      box-shadow: 0 0 4px #34a853;
+    }
+
+    #status-text {
+      color: #5f6368;
+    }
+
+    #toggle-btn {
+      width: 100%;
+      padding: 10px 0;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      background: #1a73e8;
+      color: #fff;
+      transition: background 0.2s;
+    }
+
+    #toggle-btn:hover {
+      background: #1558b0;
+    }
+
+    #toggle-btn.stop {
+      background: #ea4335;
+    }
+
+    #toggle-btn.stop:hover {
+      background: #c5221f;
+    }
+
+    #toggle-btn:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    #error-msg {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #ea4335;
+      display: none;
+    }
+
+    footer {
+      margin-top: 14px;
+      font-size: 11px;
+      color: #9aa0a6;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <h2>Meet 自動翻訳チャット</h2>
+
+  <div id="status-row">
+    <div id="status-dot"></div>
+    <span id="status-text">停止中</span>
+  </div>
+
+  <button id="toggle-btn">自動翻訳チャット開始</button>
+
+  <p id="error-msg"></p>
+
+  <footer>Google Meet 専用</footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Meet Translator – Offscreen</title>
+</head>
+<body>
+  <!--
+    This document exists solely to host the Web Audio API context.
+    Manifest V3 service workers cannot use AudioContext, so audio
+    processing must happen in a document context.
+    The page is never displayed to the user.
+  -->
+  <script src="offscreen.js"></script>
+</body>
+</html>
