@@ -103,19 +103,29 @@ jobs:
       - name: Archive (Unix)
         if: matrix.os != 'windows-latest'
         working-directory: meet-translator/server
-        run: tar czf meet-translator-server-${{ matrix.name }}.tar.gz meet-translator-server
+        run: |
+          dir=meet-translator
+          mkdir -p "$dir"
+          cp server "$dir/"
+          tar czf "meet-translator-server-${{ matrix.name }}.tar.gz" "$dir"
 
       - name: Archive (Windows)
         if: matrix.os == 'windows-latest'
         working-directory: meet-translator/server
         run: |
+          dir=meet-translator
+          mkdir -p "$dir"
+          cp server.exe "$dir/"
           # Bundle MinGW runtime DLLs in case static linking is incomplete
           for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll; do
             dll_path=$(find /c/mingw64/bin /c/msys64/mingw64/bin -name "$dll" 2>/dev/null | head -1)
-            [ -n "$dll_path" ] && cp "$dll_path" . && echo "bundled: $dll" || echo "not found (ok if statically linked): $dll"
+            if [ -n "$dll_path" ]; then
+              cp "$dll_path" "$dir/" && echo "bundled: $dll"
+            else
+              echo "not found (ok if statically linked): $dll"
+            fi
           done
-          7z a meet-translator-server-${{ matrix.name }}.zip meet-translator-server.exe *.dll 2>/dev/null || \
-          7z a meet-translator-server-${{ matrix.name }}.zip meet-translator-server.exe
+          7z a "meet-translator-server-${{ matrix.name }}.zip" "$dir"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
