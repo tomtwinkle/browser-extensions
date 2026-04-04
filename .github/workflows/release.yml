@@ -104,16 +104,16 @@ jobs:
         if: matrix.os != 'windows-latest'
         working-directory: meet-translator/server
         run: |
-          dir=meet-translator-server-${{ matrix.name }}
+          dir=meet-translator
           mkdir -p "$dir"
           cp meet-translator-server "$dir/"
-          tar czf "${dir}.tar.gz" "$dir"
+          tar czf "meet-translator-server-${{ matrix.name }}.tar.gz" "$dir"
 
       - name: Archive (Windows)
         if: matrix.os == 'windows-latest'
         working-directory: meet-translator/server
         run: |
-          dir=meet-translator-server-${{ matrix.name }}
+          dir=meet-translator
           mkdir -p "$dir"
           cp meet-translator-server.exe "$dir/"
           # Bundle MinGW runtime DLLs in case static linking is incomplete
@@ -125,7 +125,7 @@ jobs:
               echo "not found (ok if statically linked): $dll"
             fi
           done
-          7z a "${dir}.zip" "$dir"
+          7z a "meet-translator-server-${{ matrix.name }}.zip" "$dir"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
