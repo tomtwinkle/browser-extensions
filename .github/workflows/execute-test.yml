@@ -5,14 +5,14 @@ on:
     branches: ["**"]
 
 # ──────────────────────────────────────────────────────────────────────────────
-# クリーンな環境でサーバーバイナリをビルド・起動し、
-# 実際のモデルをロードして HTTP エンドポイントの動作を検証する統合テスト。
+# ビルド環境と実行環境を完全に分離した統合テスト。
 #
-# テスト対象モデル (最小サイズを選択して CI を高速化):
-#   WHISPER_MODEL: tiny             ~39 MB
-#   LLAMA_MODEL:   qwen3:0.6b-q4_k_m ~400 MB
+#  build   ジョブ: ソースからバイナリをビルドしアーティファクトにアップロード
+#  execute ジョブ: checkout/Go/cmake 一切なしのクリーンなランナーで
+#                  バイナリをダウンロードして起動・HTTP エンドポイントを検証
 #
-# サーバーが正常に起動 = whisper/llama 両モデルのロード成功を意味する。
+# execute ジョブが通ること = ビルド成果物が外部ランタイム依存なしで動作すること。
+# モデルファイルはキャッシュして再ダウンロードを回避する。
 # ──────────────────────────────────────────────────────────────────────────────
 
 defaults:
@@ -20,8 +20,77 @@ defaults:
     shell: bash
 
 jobs:
-  execute-test:
+  # ── build: ソースからバイナリをビルドしてアーティファクトとして保存 ─────────
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: ubuntu-amd64
+            bin: meet-translator-server
+          - os: ubuntu-24.04-arm
+            name: ubuntu-arm64
+            bin: meet-translator-server
+          - os: macos-latest
+            name: macos-arm64
+            bin: meet-translator-server
+          - os: windows-latest
+            name: windows-amd64
+            bin: meet-translator-server.exe
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: meet-translator/server/go.mod
+          cache: false
+
+      - name: Install build tools (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: sudo apt-get install -y cmake build-essential
+
+      - name: Install build tools (Windows)
+        if: matrix.os == 'windows-latest'
+        run: echo "C:/msys64/usr/bin" >> $GITHUB_PATH
+
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            meet-translator/server/vendor
+          key: ${{ runner.os }}-${{ runner.arch }}-execute-${{ hashFiles('meet-translator/server/Makefile') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-execute-
+            ${{ runner.os }}-${{ runner.arch }}-deps-
+
+      - name: Build native dependencies
+        working-directory: meet-translator/server
+        run: make deps GPU=cpu
+
+      - name: Build binary
+        working-directory: meet-translator/server
+        run: make build GPU=cpu
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: server-${{ matrix.name }}
+          path: meet-translator/server/${{ matrix.bin }}
+          retention-days: 1
+
+  # ── execute: クリーンな別ランナーでバイナリを実行して動作を検証 ─────────────
+  # checkout / Go / cmake / ビルドツール を一切インストールしない。
+  # build ジョブのアーティファクト (バイナリのみ) をダウンロードして実行する。
+  execute:
     name: Execute Test (${{ matrix.name }})
+    needs: build
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -45,65 +114,37 @@ jobs:
       LLAMA_MODEL: qwen3:0.6b-q4_k_m
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      # ── ビルド成果物 (バイナリのみ) をダウンロード ──────────────────────────
+      - name: Download binary
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          fetch-depth: 0
+          name: server-${{ matrix.name }}
+          path: server
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: meet-translator/server/go.mod
-          cache: false
-
-      - name: Install build tools (Linux)
-        if: startsWith(matrix.os, 'ubuntu')
-        run: sudo apt-get install -y cmake build-essential
-
-      - name: Install build tools (Windows)
-        if: matrix.os == 'windows-latest'
-        run: echo "C:/msys64/usr/bin" >> $GITHUB_PATH
-
-      # ── ビルドキャッシュ (native deps + Go modules) ───────────────────────
-      # restore-keys で test ジョブのキャッシュも再利用できるようにする
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-            meet-translator/server/vendor
-          key: ${{ runner.os }}-${{ runner.arch }}-execute-${{ hashFiles('meet-translator/server/Makefile') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-execute-
-            ${{ runner.os }}-${{ runner.arch }}-deps-
+      - name: Make binary executable (Unix)
+        if: matrix.os != 'windows-latest'
+        run: chmod +x server/${{ matrix.bin }}
 
       # ── モデルキャッシュ ──────────────────────────────────────────────────
       # キーにモデル名を固定する。モデル URL が変わった場合は v番号を上げる。
       - name: Set model cache path
-        run: echo "MODEL_CACHE_DIR=$GITHUB_WORKSPACE/.model-cache" >> $GITHUB_ENV
+        run: echo "MODEL_CACHE_DIR=$GITHUB_WORKSPACE/model-cache" >> $GITHUB_ENV
 
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: ${{ github.workspace }}/.model-cache
+          path: ${{ github.workspace }}/model-cache
           key: models-v1-${{ runner.os }}-${{ runner.arch }}-whisper-tiny-qwen3-0.6b-q4_k_m
 
-      # ── ビルド ────────────────────────────────────────────────────────────
-      - name: Build native dependencies
-        working-directory: meet-translator/server
-        run: make deps GPU=cpu
-
-      - name: Build binary
-        working-directory: meet-translator/server
-        run: make build GPU=cpu
-
       # ── テスト用音声ファイルの生成 ─────────────────────────────────────────
-      # Python で 1 秒の無音 WAV を生成する (全プラットフォームで利用可能)。
-      # 無音入力では whisper が空文字を返すため、llama 翻訳は呼ばれない。
-      # → 目的はサーバーの起動 (両モデルのロード) と HTTP 応答の検証。
+      # Python で 1 秒の無音 WAV を生成する (全ランナーで利用可能)。
+      # 無音入力では whisper が空文字を返すため llama 翻訳はスキップされる。
+      # → 目的はサーバーの起動 (両モデルのロード) と HTTP 応答形式の検証。
       - name: Generate test audio (1s silence, 16kHz mono WAV)
         run: |
           python3 - <<'PYEOF'
           import wave, struct, os
           sample_rate = 16000
-          num_samples = sample_rate  # 1 秒
+          num_samples = sample_rate
           with wave.open('test_silence.wav', 'wb') as f:
               f.setnchannels(1)
               f.setsampwidth(2)
@@ -116,7 +157,7 @@ jobs:
       # 初回実行時はモデルをダウンロード; 2 回目以降はキャッシュを使用。
       - name: Start server
         run: |
-          ./meet-translator/server/${{ matrix.bin }} \
+          ./server/${{ matrix.bin }} \
             --llama-gpu-layers 0 \
             --whisper-gpu-layers 0 \
             > server.log 2>&1 &
