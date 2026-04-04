@@ -11,7 +11,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 # pinned versions
-LLAMA_VERSION   := b5192
+LLAMA_VERSION   := b8664
 WHISPER_VERSION := v1.7.4
 
 OS_NAME   := $(shell uname -s 2>/dev/null || echo Windows_NT)
