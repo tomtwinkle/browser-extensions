@@ -1,10 +1,20 @@
 'use strict';
 
 const DEFAULTS = {
-  serverUrl: 'http://localhost:7070',
-  sourceLang: '',
-  targetLang: 'ja',
-  whisperModel: 'base',
+  serverUrl:     'http://localhost:7070',
+  sourceLang:    '',
+  targetLang:    'ja',
+  whisperModel:  'base',
+  llamaModel:    '',
+  llamaThinking: true,
+};
+
+// モデル別オプション定義: どのモデルがどのオプションパネルを持つか
+const MODEL_OPTIONS_MAP = {
+  'qwen3:0.6b-q4_k_m': 'qwen3',
+  'qwen3:1.7b-q4_k_m': 'qwen3',
+  'qwen3:4b-q4_k_m':   'qwen3',
+  'qwen3:8b-q4_k_m':   'qwen3',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -18,17 +28,42 @@ chrome.storage.local.get(Object.keys(DEFAULTS), (stored) => {
   $('source-lang').value   = cfg.sourceLang;
   $('target-lang').value   = cfg.targetLang;
   $('whisper-model').value = cfg.whisperModel;
+  $('llama-model').value   = cfg.llamaModel;
+  $('qwen3-thinking').checked = cfg.llamaThinking;
+  updateModelOptions(cfg.llamaModel);
 });
+
+// ---------------------------------------------------------------------------
+// モデル選択変更時: モデル別オプションパネルの表示切り替え
+// ---------------------------------------------------------------------------
+$('llama-model').addEventListener('change', () => {
+  updateModelOptions($('llama-model').value);
+});
+
+function updateModelOptions(modelName) {
+  const group = MODEL_OPTIONS_MAP[modelName] || null;
+  // すべてのオプションパネルを非表示
+  document.querySelectorAll('.model-options').forEach(el => {
+    el.style.display = 'none';
+  });
+  // 対応するパネルのみ表示
+  if (group) {
+    const panel = $(`model-options-${group}`);
+    if (panel) panel.style.display = 'block';
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Save button
 // ---------------------------------------------------------------------------
 $('save-btn').addEventListener('click', () => {
   const cfg = {
-    serverUrl:    $('server-url').value.trim().replace(/\/$/, ''),
-    sourceLang:   $('source-lang').value,
-    targetLang:   $('target-lang').value,
-    whisperModel: $('whisper-model').value,
+    serverUrl:     $('server-url').value.trim().replace(/\/$/, ''),
+    sourceLang:    $('source-lang').value,
+    targetLang:    $('target-lang').value,
+    whisperModel:  $('whisper-model').value,
+    llamaModel:    $('llama-model').value,
+    llamaThinking: $('qwen3-thinking').checked,
   };
   chrome.storage.local.set(cfg, () => {
     showStatus('保存しました ✓', 'ok');

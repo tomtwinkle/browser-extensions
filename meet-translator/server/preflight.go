@@ -1,13 +1,14 @@
-// preflight.go – 起動前チェック (モデルファイルの存在確認)
+// preflight.go – 起動前モデル解決
 //
-// Ollama は不要になったため、チェック対象はモデルファイルのみ。
+// モデル名 (例: "base", "qwen3:8b-q4_k_m") を実際のファイルパスに解決する。
+// ファイルが存在しない場合は自動ダウンロードを試みる。
+// Ollama のダウンロード済みキャッシュが存在する場合はそちらを優先利用する。
 
 package main
 
 import (
 "fmt"
 "os"
-"os/exec"
 "runtime"
 )
 
@@ -18,58 +19,54 @@ colorCyan   = "\033[36m"
 colorReset  = "\033[0m"
 )
 
-func hasCmd(name string) bool {
-_, err := exec.LookPath(name)
-return err == nil
-}
-
-func runPreflight(cfg config) {
-ok := true
-ok = checkModelFile("WHISPER_MODEL", cfg.whisperModel, whisperModelHint) && ok
-ok = checkModelFile("LLAMA_MODEL", cfg.llamaModel, llamaModelHint) && ok
-if !ok {
+// runPreflight はモデルスペックを実パスに解決し cfg を更新する。
+// 解決に失敗した場合はヘルプを表示してプロセスを終了する。
+func runPreflight(cfg *config) {
+whisperPath, err := resolveWhisperModel(cfg.whisperModel)
+if err != nil {
+fmt.Fprintf(os.Stderr, "\n%s[ERROR] WHISPER_MODEL の解決に失敗: %v%s\n", colorRed, err, colorReset)
+printWhisperHelp()
 fmt.Fprintln(os.Stderr)
 fmt.Fprintf(os.Stderr, "%s上記の問題を解決してから再度起動してください。%s\n", colorRed, colorReset)
 os.Exit(1)
 }
+cfg.whisperModel = whisperPath
+
+llamaPath, err := resolveLlamaModel(cfg.llamaModel)
+if err != nil {
+fmt.Fprintf(os.Stderr, "\n%s[ERROR] LLAMA_MODEL の解決に失敗: %v%s\n", colorRed, err, colorReset)
+printLlamaHelp()
+fmt.Fprintln(os.Stderr)
+fmt.Fprintf(os.Stderr, "%s上記の問題を解決してから再度起動してください。%s\n", colorRed, colorReset)
+os.Exit(1)
+}
+cfg.llamaModel = llamaPath
 }
 
-func checkModelFile(envKey, path string, hint func()) bool {
-if path == "" {
-fmt.Fprintf(os.Stderr, "\n%s[ERROR] %s が設定されていません%s\n", colorRed, envKey, colorReset)
-hint()
-return false
-}
-if _, err := os.Stat(path); err == nil {
-return true
-}
-fmt.Fprintf(os.Stderr, "\n%s[ERROR] モデルファイルが見つかりません: %s=%s%s\n",
-colorRed, envKey, path, colorReset)
-hint()
-return false
-}
-
-func whisperModelHint() {
-fmt.Fprintf(os.Stderr, "%sダウンロード手順:%s\n", colorYellow, colorReset)
-if runtime.GOOS == "windows" || !hasCmd("bash") {
-fmt.Fprintln(os.Stderr, "  https://huggingface.co/ggerganov/whisper.cpp/tree/main から ggml-base.bin を取得")
-fmt.Fprintln(os.Stderr, "\n  set WHISPER_MODEL=C:\\path\\to\\ggml-base.bin")
-} else {
-fmt.Fprintln(os.Stderr, "  curl -L -o ggml-base.bin \\")
-fmt.Fprintln(os.Stderr, "    https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin")
-fmt.Fprintln(os.Stderr, "\n  export WHISPER_MODEL=./ggml-base.bin")
-}
-fmt.Fprintf(os.Stderr, "  %sモデル: tiny / base / small / medium / large-v3 (大=高精度・低速)%s\n", colorCyan, colorReset)
-}
-
-func llamaModelHint() {
-fmt.Fprintf(os.Stderr, "%sダウンロード手順:%s\n", colorYellow, colorReset)
-fmt.Fprintln(os.Stderr, "  例: Qwen2.5-7B-Instruct-Q4_K_M.gguf (推奨)")
-fmt.Fprintln(os.Stderr, "  https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF から取得")
+func printWhisperHelp() {
+fmt.Fprintf(os.Stderr, "%s使い方:%s\n", colorYellow, colorReset)
+fmt.Fprintf(os.Stderr, "  モデル名を指定すると自動ダウンロードします:\n")
+fmt.Fprintf(os.Stderr, "    %sWHISPER_MODEL=base%s  (推奨)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "  利用可能なモデル名: tiny / base / small / medium / large-v3 など\n")
+fmt.Fprintf(os.Stderr, "  既存ファイルを指定する場合:\n")
 if runtime.GOOS == "windows" {
-fmt.Fprintln(os.Stderr, "\n  set LLAMA_MODEL=C:\\path\\to\\model.gguf")
+fmt.Fprintf(os.Stderr, "    set WHISPER_MODEL=C:\\path\\to\\ggml-base.bin\n")
 } else {
-fmt.Fprintln(os.Stderr, "\n  export LLAMA_MODEL=./Qwen2.5-7B-Instruct-Q4_K_M.gguf")
+fmt.Fprintf(os.Stderr, "    export WHISPER_MODEL=./ggml-base.bin\n")
 }
-fmt.Fprintf(os.Stderr, "  %sGPU がある場合は LLAMA_GPU_LAYERS=-1 で全レイヤをオフロード%s\n", colorCyan, colorReset)
+}
+
+func printLlamaHelp() {
+fmt.Fprintf(os.Stderr, "%s使い方:%s\n", colorYellow, colorReset)
+fmt.Fprintf(os.Stderr, "  モデル名を指定すると自動ダウンロードします:\n")
+fmt.Fprintf(os.Stderr, "    %sLLAMA_MODEL=qwen2.5:7b-instruct-q4_k_m%s  (Qwen2.5 推奨)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "    %sLLAMA_MODEL=qwen3:8b-q4_k_m%s             (Qwen3、thinking対応)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "    %sLLAMA_MODEL=gemma4:e4b-q4_k_m%s           (Gemma4)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "  Ollama でダウンロード済みのモデルは自動的に共有されます。\n")
+fmt.Fprintf(os.Stderr, "  既存ファイルを指定する場合:\n")
+if runtime.GOOS == "windows" {
+fmt.Fprintf(os.Stderr, "    set LLAMA_MODEL=C:\\path\\to\\model.gguf\n")
+} else {
+fmt.Fprintf(os.Stderr, "    export LLAMA_MODEL=./model.gguf\n")
+}
 }

@@ -128,6 +128,12 @@ jobs:
           path: dist/
           merge-multiple: true
 
+      # ── 拡張機能を zip パッケージ化 ───────────────────────────────────────────
+      - name: Package extension
+        run: |
+          cd meet-translator/extension
+          zip -r ../../dist/meet-translator-extension.zip .
+
       - name: Create checksums
         run: |
           cd dist

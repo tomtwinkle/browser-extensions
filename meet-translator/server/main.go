@@ -3,11 +3,14 @@
 // 外部依存なし。whisper.cpp + llama.cpp を CGo で直接組み込んだシングルバイナリ。
 //
 // 設定 (環境変数):
-//   PORT           リスンポート                    (デフォルト: 7070)
-//   WHISPER_MODEL  whisper GGML モデルファイルパス  (必須)
-//   LLAMA_MODEL    llama   GGUF モデルファイルパス  (必須)
-//   LLAMA_GPU_LAYERS GPU にオフロードするレイヤ数   (デフォルト: -1 = 全レイヤ)
-//   WHISPER_GPU_LAYERS 同上 whisper 用              (デフォルト: -1)
+//   PORT              リスンポート                    (デフォルト: 7070)
+//   WHISPER_MODEL     whisper モデル名またはパス       (例: base, /path/to/ggml-base.bin)
+//   LLAMA_MODEL       llama モデル名またはパス         (例: qwen3:8b-q4_k_m, /path/to/model.gguf)
+//   LLAMA_GPU_LAYERS  GPU にオフロードするレイヤ数     (デフォルト: -1 = 全レイヤ)
+//   WHISPER_GPU_LAYERS 同上 whisper 用               (デフォルト: -1)
+//   MODEL_CACHE_DIR   モデルキャッシュディレクトリ     (デフォルト: OS 標準)
+//
+// モデル名を指定した場合は自動ダウンロードし、Ollama のキャッシュも共有する。
 
 package main
 
@@ -27,6 +30,7 @@ import (
 "os/signal"
 "strconv"
 "strings"
+"sync"
 "syscall"
 "time"
 )
@@ -75,16 +79,30 @@ type server struct {
 cfg        config
 mux        *http.ServeMux
 whisperCtx *C.whisper_context
-llamaModel C.llama_bridge_model
+
+// llama モデル管理 (modelMu で保護)
+modelMu         sync.Mutex
+llamaModel      C.llama_bridge_model
+loadedModelSpec string // 現在ロード中のモデル名またはパス
+
+// テスト時にモック実装を注入できる関数フィールド
+transcribeFn func(audioData []byte, lang string) (string, error)
+translateFn  func(text, srcLang, tgtLang string, opts ModelOptions) (string, error)
+swapModelFn  func(spec string) error
 }
 
-func newServer(cfg config, whisperCtx *C.whisper_context, llamaModel C.llama_bridge_model) *server {
+func newServer(cfg config, whisperCtx *C.whisper_context, llamaModel C.llama_bridge_model, modelSpec string) *server {
 s := &server{
-cfg:        cfg,
-mux:        http.NewServeMux(),
-whisperCtx: whisperCtx,
-llamaModel: llamaModel,
+cfg:             cfg,
+mux:             http.NewServeMux(),
+whisperCtx:      whisperCtx,
+llamaModel:      llamaModel,
+loadedModelSpec: modelSpec,
 }
+// デフォルトは CGo 実装を使用
+s.transcribeFn = s.transcribeInternal
+s.translateFn = s.translateInternal
+s.swapModelFn = s.swapModel
 s.mux.HandleFunc("GET /health", s.handleHealth)
 s.mux.HandleFunc("POST /transcribe-and-translate", s.handleTranscribeAndTranslate)
 return s
@@ -139,7 +157,25 @@ if targetLang == "" {
 targetLang = "ja"
 }
 
-transcription, err := s.transcribe(audioData, sourceLang)
+// リクエスト毎のモデル指定とオプションを取得
+requestedModel := strings.TrimSpace(r.FormValue("llama_model"))
+rawOpts := r.FormValue("llama_options")
+
+// モデルのホットスワップと翻訳は排他制御
+s.modelMu.Lock()
+defer s.modelMu.Unlock()
+
+if requestedModel != "" && requestedModel != s.loadedModelSpec {
+if err := s.swapModelFn(requestedModel); err != nil {
+log.Printf("[model] ホットスワップ失敗: %v", err)
+http.Error(w, "model swap failed: "+err.Error(), http.StatusInternalServerError)
+return
+}
+}
+
+opts := parseModelOptions(rawOpts, s.loadedModelSpec)
+
+transcription, err := s.transcribeFn(audioData, sourceLang)
 if err != nil {
 log.Printf("[transcribe] %v", err)
 http.Error(w, "transcription failed: "+err.Error(), http.StatusInternalServerError)
@@ -151,8 +187,7 @@ writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation"
 return
 }
 
-// translate の第3引数 ollamaModel は llama.go 側で無視される
-translation, err := s.translate(transcription, sourceLang, targetLang, "")
+translation, err := s.translateFn(transcription, sourceLang, targetLang, opts)
 if err != nil {
 log.Printf("[translate] %v", err)
 http.Error(w, "translation failed: "+err.Error(), http.StatusInternalServerError)
@@ -165,6 +200,30 @@ writeJSON(w, http.StatusOK, map[string]string{
 })
 }
 
+// swapModel は現在ロード中のモデルを解放して新しいモデルをロードする。
+// 呼び出し元は modelMu を保持している必要がある。
+func (s *server) swapModel(spec string) error {
+log.Printf("llama モデルをスワップ中: %s → %s", s.loadedModelSpec, spec)
+
+path, err := resolveLlamaModel(spec)
+if err != nil {
+return err
+}
+
+newModel, err := loadLlamaModel(path, s.cfg.llamaGPULayers)
+if err != nil {
+return err
+}
+
+if s.llamaModel != nil {
+C.llama_bridge_free_model(s.llamaModel)
+}
+s.llamaModel = newModel
+s.loadedModelSpec = spec
+log.Printf("llama モデルのスワップ完了: %s", spec)
+return nil
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -172,8 +231,9 @@ writeJSON(w, http.StatusOK, map[string]string{
 func main() {
 cfg := loadConfig()
 
-// 依存チェック
-runPreflight(cfg)
+// モデル名解決 (自動ダウンロード・Ollama キャッシュ共有)
+originalModelSpec := cfg.llamaModel
+runPreflight(&cfg)
 
 // llama バックエンド初期化
 initLlamaBackend()
@@ -199,7 +259,7 @@ log.Printf("llama モデルのロード完了")
 
 httpSrv := &http.Server{
 Addr:    ":" + cfg.port,
-Handler: newServer(cfg, whisperCtx, llamaModel),
+Handler: newServer(cfg, whisperCtx, llamaModel, originalModelSpec),
 }
 
 quit := make(chan os.Signal, 1)

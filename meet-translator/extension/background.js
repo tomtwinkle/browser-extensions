@@ -27,10 +27,12 @@ const state = {
 /** Load settings from chrome.storage.local with defaults. */
 async function getSettings() {
   const defaults = {
-    serverUrl: 'http://localhost:7070',
-    sourceLang: '',
-    targetLang: 'ja',
-    whisperModel: 'base',
+    serverUrl:     'http://localhost:7070',
+    sourceLang:    '',
+    targetLang:    'ja',
+    whisperModel:  'base',
+    llamaModel:    '',
+    llamaThinking: true,
   };
   const stored = await chrome.storage.local.get(Object.keys(defaults));
   return { ...defaults, ...stored };
@@ -44,6 +46,14 @@ async function transcribeAndTranslate(wavBuffer) {
   form.append('target_lang', cfg.targetLang);
   if (cfg.sourceLang) form.append('source_lang', cfg.sourceLang);
 
+  // モデル指定 (空の場合はサーバーデフォルトを使用)
+  if (cfg.llamaModel) {
+    form.append('llama_model', cfg.llamaModel);
+    // モデル別オプションを JSON で送信
+    const opts = buildModelOptions(cfg);
+    form.append('llama_options', JSON.stringify(opts));
+  }
+
   const res = await fetch(`${cfg.serverUrl}/transcribe-and-translate`, {
     method: 'POST',
     body: form,
@@ -56,6 +66,14 @@ async function transcribeAndTranslate(wavBuffer) {
 
   const { translation } = await res.json();
   return translation || null;
+}
+
+/** モデル名に応じたオプションオブジェクトを組み立てる。 */
+function buildModelOptions(cfg) {
+  if (cfg.llamaModel.startsWith('qwen3:')) {
+    return { thinking: cfg.llamaThinking };
+  }
+  return {};
 }
 
 // ---------------------------------------------------------------------------
