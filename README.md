@@ -1,16 +1,16 @@
 # browser-extensions
 
-## meet-translator – Google Meet 自動翻訳チャット
+## meet-translator – Google Meet 自動翻訳chat
 
-Google Meet の音声をリアルタイムでキャプチャし、文字起こし・翻訳したテキストを  
-Meet のチャット欄に自動投稿する Chrome / Edge 拡張機能（Manifest V3）です。
+Google Meet の音声をreal-timeでcaptureし、文字起こし・翻訳したtextを  
+Meet のchat欄に自動投稿する Chrome / Edge 拡張機能（Manifest V3）です。
 
-**外部サービスへの依存はゼロ。** whisper.cpp と llama.cpp をローカルサーバーに組み込み、  
-すべての推論がマシン上で完結します。
+**外部serviceへの依存はzero。** whisper.cpp と llama.cpp をlocal serverに組み込み、  
+すべての推論がmachine上で完結します。
 
 ---
 
-## アーキテクチャ
+## architecture
 
 ```
 [ Google Meet タブ ]
@@ -32,7 +32,7 @@ Meet のチャット欄に自動投稿する Chrome / Edge 拡張機能（Manife
 
 ---
 
-## ディレクトリ構成
+## directory構成
 
 ```
 browser-extensions/
@@ -69,14 +69,14 @@ browser-extensions/
 
 ---
 
-## セットアップ
+## setup
 
-### リリース版を使う場合 (推奨)
+### release版を使う場合 (推奨)
 
 [GitHub Releases](https://github.com/tomtwinkle/browser-extensions/releases) から  
-お使いの OS のアーカイブをダウンロードして展開するだけで動作します。
+お使いの OS のarchiveをdownloadして展開するだけで動作します。
 
-| ファイル | 対象 |
+| file | 対象 |
 |---|---|
 | `meet-translator-server-linux-amd64.tar.gz` | Linux (x86_64) |
 | `meet-translator-server-linux-arm64.tar.gz` | Linux (ARM64) |
@@ -84,9 +84,9 @@ browser-extensions/
 | `meet-translator-server-windows-amd64.zip` | Windows (x64) |
 | `meet-translator-extension.zip` | Chrome / Edge 拡張機能 |
 
-### ソースからビルドする場合
+### sourceからbuildする場合
 
-**前提**: Go 1.23+、cmake 3.21+、C++ コンパイラ
+**前提**: Go 1.23+、cmake 3.21+、C++ compiler
 
 ```bash
 cd meet-translator/server/
@@ -97,13 +97,13 @@ make GPU=cuda     # NVIDIA CUDA を強制
 make GPU=cpu      # CPU のみ
 ```
 
-`make` は初回に whisper.cpp と llama.cpp を自動クローン・cmake ビルドします。
+`make` は初回に whisper.cpp と llama.cpp を自動clone・cmake buildします。
 
 ---
 
-## サーバーの起動
+## serverの起動
 
-### 初回起動（モデルを指定して記憶させる）
+### 初回起動（modelを指定して記憶させる）
 
 ```bash
 ./meet-translator-server \
@@ -111,41 +111,41 @@ make GPU=cpu      # CPU のみ
   --llama-model qwen3:8b-q4_k_m
 ```
 
-モデルがローカルに存在しない場合は **HuggingFace から自動ダウンロード** します。  
-指定したモデルは設定ファイルに保存され、**次回以降は引数なしで起動できます**。
+modelがlocalに存在しない場合は **HuggingFace から自動download** します。  
+指定したmodelは設定fileに保存され、**次回以降は引数なしで起動できます**。
 
 ```bash
 ./meet-translator-server   # 2 回目以降はそのまま起動
 ```
 
-### Ollama キャッシュの共有
+### Ollama cacheの共有
 
-Ollama で取得済みの GGUF モデルがある場合は自動的に検索して使用します。  
-追加ダウンロードは不要です。
+Ollama で取得済みの GGUF modelがある場合は自動的に検索して使用します。  
+追加downloadは不要です。
 
-### 主な起動オプション
+### 主な起動option
 
-| フラグ | 環境変数 | デフォルト | 説明 |
+| flag | 環境変数 | default | 説明 |
 |---|---|---|---|
-| `--port` | `PORT` | `7070` | リスンポート |
-| `--whisper-model` | `WHISPER_MODEL` | *(必須)* | whisper モデル名またはファイルパス |
-| `--llama-model` | `LLAMA_MODEL` | *(必須)* | llama モデル名またはファイルパス |
-| `--llama-gpu-layers` | `LLAMA_GPU_LAYERS` | `-1` | GPU オフロードレイヤ数 (`0`=CPU, `-1`=全レイヤ) |
+| `--port` | `PORT` | `7070` | listen port |
+| `--whisper-model` | `WHISPER_MODEL` | *(必須)* | whisper model名またはfile path |
+| `--llama-model` | `LLAMA_MODEL` | *(必須)* | llama model名またはfile path |
+| `--llama-gpu-layers` | `LLAMA_GPU_LAYERS` | `-1` | GPU offload layers数 (`0`=CPU, `-1`=全layer) |
 | `--whisper-gpu-layers` | `WHISPER_GPU_LAYERS` | `-1` | 同上 (whisper 用) |
-| `--model-cache-dir` | `MODEL_CACHE_DIR` | OS 標準 | モデルキャッシュディレクトリ |
-| `--config` | `MEET_TRANSLATOR_CONFIG` | OS 標準 | 設定ファイルパスの上書き |
+| `--model-cache-dir` | `MODEL_CACHE_DIR` | OS 標準 | model cache directory |
+| `--config` | `MEET_TRANSLATOR_CONFIG` | OS 標準 | 設定file pathの上書き |
 
-> **優先順位**: CLI フラグ > 設定ファイル > 環境変数 > デフォルト値
+> **優先順位**: CLI flag > 設定file > 環境変数 > default値
 
-設定ファイルの場所:
+設定fileの場所:
 
-| OS | パス |
+| OS | path |
 |---|---|
 | Linux | `~/.config/meet-translator/config.json` |
 | macOS | `~/Library/Application Support/meet-translator/config.json` |
 | Windows | `%APPDATA%\meet-translator\config.json` |
 
-### ヘルスチェック
+### health check
 
 ```bash
 curl http://localhost:7070/health
@@ -153,13 +153,13 @@ curl http://localhost:7070/health
 
 ---
 
-## 対応モデル
+## 対応model
 
-### whisper モデル (音声認識)
+### whisper model (音声認識)
 
-モデル名を `--whisper-model` に指定すると自動ダウンロードします。
+model名を `--whisper-model` に指定すると自動downloadします。
 
-| モデル名 | サイズ | 精度 |
+| model名 | size | 精度 |
 |---|---|---|
 | `tiny` | 75 MB  | △ |
 | `base` | 142 MB | ○ **推奨** |
@@ -168,11 +168,11 @@ curl http://localhost:7070/health
 | `large-v3` | 3.1 GB | ◎◎ |
 | `large-v3-turbo` | 809 MB | ◎ (高速) |
 
-### llama モデル (翻訳 LLM)
+### llama model (翻訳 LLM)
 
-モデル名を `--llama-model` に指定すると自動ダウンロードします。
+model名を `--llama-model` に指定すると自動downloadします。
 
-| モデル名 | サイズ | 備考 |
+| model名 | size | 備考 |
 |---|---|---|
 | `qwen3:0.6b-q4_k_m` | ≈ 0.4 GB | 最軽量、Thinking 対応 |
 | `qwen3:1.7b-q4_k_m` | ≈ 1.1 GB | Thinking 対応 |
@@ -183,18 +183,18 @@ curl http://localhost:7070/health
 | `gemma4:e4b-q4_k_m` | ≈ 2.6 GB | Google Gemma 4 |
 | `gemma4:26b-q4_k_m` | ≈ 16 GB | Google Gemma 4 高精度 |
 
-ファイルパスを直接指定することも可能です:
+file pathを直接指定することも可能です:
 
 ```bash
 ./meet-translator-server --llama-model /path/to/model.gguf
 ```
 
-### Thinking モード (Qwen3)
+### Thinking mode (Qwen3)
 
-Qwen3 系モデルは **Thinking モード** に対応しています。  
-`<think>...</think>` で推論を展開してから翻訳するため精度が向上しますが、レイテンシが増加します。
+Qwen3 系modelは **Thinking mode** に対応しています。  
+`<think>...</think>` で推論を展開してから翻訳するため精度が向上しますが、latencyが増加します。
 
-リクエスト時に `llama_options` フィールドで制御できます:
+request時に `llama_options` fieldで制御できます:
 
 ```json
 {"thinking": true}   // Thinking 有効 (Qwen3 のデフォルト)
@@ -203,65 +203,65 @@ Qwen3 系モデルは **Thinking モード** に対応しています。
 
 ---
 
-## 拡張機能のセットアップ
+## 拡張機能のsetup
 
-### 開発版 (ソースから読み込む)
+### 開発版 (sourceから読み込む)
 
 1. Chrome / Edge で `chrome://extensions` を開く
-2. **デベロッパーモード** を有効にする
-3. **「パッケージ化されていない拡張機能を読み込む」** → `meet-translator/extension/` フォルダを選択
+2. **developer mode** を有効にする
+3. **「package化されていない拡張機能を読み込む」** → `meet-translator/extension/` folderを選択
 
-### リリース版 (zip から読み込む)
+### release版 (zip から読み込む)
 
-1. `meet-translator-extension.zip` をダウンロードして任意のフォルダに展開
+1. `meet-translator-extension.zip` をdownloadして任意のfolderに展開
 2. Chrome / Edge で `chrome://extensions` を開く
-3. **デベロッパーモード** を有効にする
-4. **「パッケージ化されていない拡張機能を読み込む」** → 展開したフォルダを選択
+3. **developer mode** を有効にする
+4. **「package化されていない拡張機能を読み込む」** → 展開したfolderを選択
 
 ### 設定
 
-拡張機能アイコン → **⚙ 設定** を開き、以下を確認・設定します：
+拡張機能icon → **⚙ 設定** を開き、以下を確認・設定します：
 
 | 設定項目 | 説明 |
 |---|---|
-| サーバー URL | `http://localhost:7070`（デフォルト） |
+| server URL | `http://localhost:7070`（default） |
 | 翻訳元言語 | 自動検出 または 言語を指定 |
-| 翻訳先言語 | 翻訳後の言語 (デフォルト: 日本語) |
-| **「サーバー疎通確認」** ボタン | サーバーに接続できるか確認 |
+| 翻訳先言語 | 翻訳後の言語 (default: 日本語) |
+| **「server疎通確認」** button | serverに接続できるか確認 |
 
 ---
 
 ## 使い方
 
-1. `https://meet.google.com/` でミーティングに参加します
-2. 拡張機能アイコンをクリックし **「自動翻訳チャット開始」** を押します
-3. 音声キャプチャが開始され、約 5 秒ごとに翻訳テキストがチャットへ投稿されます
-   - 無音区間は VAD でスキップされ、無駄な推論が行われません
-   - チャットパネルが閉じている場合は自動的に開きます
-4. **「自動翻訳チャット停止」** で停止します
+1. `https://meet.google.com/` でmeetingに参加します
+2. 拡張機能iconをclickし **「自動翻訳chat開始」** を押します
+3. 音声captureが開始され、約 5 秒ごとに翻訳textがchatへ投稿されます
+   - 無音区間は VAD でskipされ、無駄な推論が行われません
+   - chat panelが閉じている場合は自動的に開きます
+4. **「自動翻訳chat停止」** で停止します
 
 ---
 
-## リリース (GitHub Actions)
+## release (GitHub Actions)
 
-`main` ブランチへのマージ時に **release-please** が conventional commits を解析し、  
-自動でバージョンを決定して Release PR を作成します。
+`main` branchへのmerge時に **release-please** が conventional commits を解析し、  
+自動でversionを決定して Release PR を作成します。
 
-| コミットプレフィックス | バンプ | 例 |
+| commit prefix | bump | 例 |
 |---|---|---|
 | `feat:` | minor | `0.1.0 → 0.2.0` |
 | `fix:` | patch | `0.1.0 → 0.1.1` |
 
-Release PR をマージすると各プラットフォームのバイナリと拡張機能 zip が  
-自動ビルドされ GitHub Release にアップロードされます。
+Release PR をmergeすると各platformのbinaryと拡張機能 zip が  
+自動buildされ GitHub Release にuploadされます。
 
 ---
 
 ## CI
 
-プルリクエスト時に以下の 4 プラットフォームでビルド・テストが実行されます：
+pull request時に以下の 4 platformでbuild・testが実行されます：
 
-| プラットフォーム | ランナー |
+| platform | runner |
 |---|---|
 | linux-amd64 | ubuntu-latest |
 | linux-arm64 | ubuntu-24.04-arm |
@@ -274,10 +274,10 @@ Release PR をマージすると各プラットフォームのバイナリと拡
 
 | 権限 | 理由 |
 |---|---|
-| `tabCapture` | Meet タブの音声ストリームを取得するため |
-| `activeTab` | ポップアップ操作時にアクティブタブの ID を取得するため |
+| `tabCapture` | Meet tabの音声streamを取得するため |
+| `activeTab` | popup操作時にactive tabの ID を取得するため |
 | `scripting` | Content Script の動的実行 |
 | `storage` | 設定の永続化 |
 | `offscreen` | MV3 Service Worker では使用できない AudioContext を Offscreen Document で実行するため |
-| `tabs` | 設定ページを開くため |
-| `http://localhost:7070/*` | ローカルサーバーへのリクエストを許可するため |
+| `tabs` | 設定pageを開くため |
+| `http://localhost:7070/*` | local serverへのrequestを許可するため |
