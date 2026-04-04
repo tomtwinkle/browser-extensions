@@ -6,6 +6,8 @@
 package main
 
 /*
+#cgo CFLAGS:   -I./vendor/llama.cpp/include -I./vendor/whisper.cpp/include -I./vendor/llama.cpp/ggml/include
+#cgo CXXFLAGS: -I./vendor/llama.cpp/include -I./vendor/whisper.cpp/include -I./vendor/llama.cpp/ggml/include
 #include "whisper_bridge.h"
 #include <stdlib.h>
 */
@@ -30,8 +32,8 @@ return nil, fmt.Errorf("whisper モデルのロードに失敗: %s", modelPath)
 return ctx, nil
 }
 
-// transcribe は WAV バイト列を文字起こしして返す。
-func (s *server) transcribe(audioData []byte, lang string) (string, error) {
+// transcribeInternal は WAV バイト列を文字起こしして返す。
+func (s *server) transcribeInternal(audioData []byte, lang string) (string, error) {
 if s.whisperCtx == nil {
 return "", fmt.Errorf("whisper コンテキストが初期化されていません")
 }

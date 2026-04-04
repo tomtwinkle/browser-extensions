@@ -1,0 +1,80 @@
+name: Test
+
+on:
+  pull_request:
+    branches: ["**"]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# meet-translator サーバーのテスト (マルチプラットフォーム)
+#
+# CGo が必要なため whisper.cpp + llama.cpp を先にビルドしてから go test を実行する。
+# 全プラットフォームで CPU ビルドを使用（CI コスト最小化）。
+# ──────────────────────────────────────────────────────────────────────────────
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: Test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: ubuntu-amd64
+          - os: ubuntu-24.04-arm
+            name: ubuntu-arm64
+          - os: macos-latest
+            name: macos-arm64
+          - os: windows-latest
+            name: windows-amd64
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: meet-translator/server/go.mod
+          cache: false
+
+      - name: Install build tools (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: sudo apt-get install -y cmake build-essential
+
+      # macOS: cmake は Xcode CLT で利用可能。追加インストール不要。
+
+      - name: Install build tools (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          # MSYS2 bash provides make natively; only add usr/bin for POSIX tools
+          # Do NOT add msys64/mingw64/bin - Go CGo uses C:\mingw64 and cmake must match
+          echo "C:/msys64/usr/bin" >> $GITHUB_PATH
+
+      # キャッシュを有効化してビルドの再実行を高速化
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            meet-translator/server/vendor
+          key: ${{ runner.os }}-${{ runner.arch }}-deps-${{ hashFiles('meet-translator/server/Makefile') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-deps-
+
+      # whisper.cpp + llama.cpp のビルド (CGo ヘッダーが必要)
+      - name: Build native dependencies
+        working-directory: meet-translator/server
+        run: make deps GPU=cpu
+
+      - name: Run tests
+        working-directory: meet-translator/server
+        run: make test GPU=cpu
+
+      - name: Check binary builds
+        working-directory: meet-translator/server
+        run: make build GPU=cpu

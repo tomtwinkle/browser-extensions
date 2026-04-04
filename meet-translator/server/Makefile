@@ -17,6 +17,11 @@ WHISPER_VERSION := v1.7.4
 OS_NAME   := $(shell uname -s 2>/dev/null || echo Windows_NT)
 ARCH_NAME := $(shell uname -m 2>/dev/null || echo x86_64)
 
+# MSYS2/MinGW/Cygwin の uname は MINGW... / MSYS... / CYGWIN... を返すので Windows_NT に正規化
+ifneq ($(filter MINGW% MSYS% CYGWIN%,$(OS_NAME)),)
+  OS_NAME := Windows_NT
+endif
+
 VENDOR_DIR  := vendor
 BUILD_DIR   := $(VENDOR_DIR)/build
 LLAMA_DIR   := $(VENDOR_DIR)/llama.cpp
@@ -46,42 +51,44 @@ ifeq ($(GPU_TARGET),metal)
   CMAKE_GPU_FLAGS    := -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_BLAS=ON
   GO_TAGS            := metal
   CGO_EXTRA_LDFLAGS  := -framework Foundation -framework Metal -framework MetalKit \
-                         -framework Accelerate -framework CoreGraphics
+	-framework Accelerate -framework CoreGraphics
 
 else ifeq ($(GPU_TARGET),cuda)
   CMAKE_GPU_FLAGS    := -DGGML_CUDA=ON -DGGML_CUDA_F16=ON
   GO_TAGS            := cuda
 
 else
-  CMAKE_GPU_FLAGS    := -DGGML_METAL=OFF -DGGML_BLAS=OFF
+  # -DGGML_NATIVE=OFF でランナー CPU ネイティブ最適化を無効化 (macOS arm64 i8mm 問題回避)
+  CMAKE_GPU_FLAGS    := -DGGML_METAL=OFF -DGGML_BLAS=OFF -DGGML_NATIVE=OFF
 endif
 
-# ── インクルード / ライブラリパス ──────────────────────────────────────────────
-INCLUDE_PATH := $(abspath $(LLAMA_DIR)/include):$(abspath $(WHISPER_DIR)/include):$(abspath $(LLAMA_DIR)/ggml/include)
+# ── インクルード / ライブラリパス (CGo 用) ────────────────────────────────────
+# cmake は add_subdirectory 構造を反映して build/vendor/... にライブラリを生成する
+CGO_CFLAGS_VAL  := -I$(abspath $(LLAMA_DIR)/include) -I$(abspath $(WHISPER_DIR)/include) -I$(abspath $(LLAMA_DIR)/ggml/include)
 
-LIBRARY_PATH := $(abspath $(BUILD_DIR)/src):$(abspath $(BUILD_DIR)/ggml/src)
-
-ifeq ($(GPU_TARGET),metal)
-  LIBRARY_PATH := $(LIBRARY_PATH):$(abspath $(BUILD_DIR)/ggml/src/ggml-metal):$(abspath $(BUILD_DIR)/ggml/src/ggml-blas)
-endif
-
-ifeq ($(GPU_TARGET),cuda)
-  LIBRARY_PATH := $(LIBRARY_PATH):$(abspath $(BUILD_DIR)/ggml/src/ggml-cuda)
-endif
+CGO_LDFLAGS_VAL := -L$(abspath $(BUILD_DIR)/vendor/llama.cpp/src) \
+                   -L$(abspath $(BUILD_DIR)/vendor/whisper.cpp/src) \
+                   -L$(abspath $(BUILD_DIR)/vendor/llama.cpp/ggml/src)
 
 # ── OS 固有設定 ────────────────────────────────────────────────────────────────
 ifeq ($(OS_NAME),Windows_NT)
-  CMAKE_BUILD_FLAGS := --config Release
+  # Ninja: Go CGo と同じ C:\mingw64\bin\gcc を使う (MSYS2 混在回避)
+  # GGML_OPENMP=OFF: OpenMP 依存を除去 (-lgomp 不要にする)
+  CMAKE_GENERATOR   := -G Ninja
+  CMAKE_EXTRA_FLAGS := -DCMAKE_STATIC_LIBRARY_PREFIX=lib -DGGML_OPENMP=OFF
+  CMAKE_BUILD_FLAGS :=
   BIN_EXT           := .exe
 else
   CMAKE_BUILD_FLAGS := -j
+  CMAKE_GENERATOR   :=
+  CMAKE_EXTRA_FLAGS :=
   BIN_EXT           :=
 endif
 
 BIN := meet-translator-server$(BIN_EXT)
 
 # ── ターゲット ────────────────────────────────────────────────────────────────
-.PHONY: all build deps clean distclean
+.PHONY: all build deps test clean distclean
 
 all: build
 
@@ -89,38 +96,56 @@ all: build
 deps: $(BUILD_DIR)/.built
 
 $(LLAMA_DIR):
-@echo "[deps] llama.cpp をクローン中 ($(LLAMA_VERSION))..."
-git clone --depth=1 --branch $(LLAMA_VERSION) \
-  https://github.com/ggerganov/llama.cpp.git $(LLAMA_DIR)
+	@echo "[deps] llama.cpp をクローン中 ($(LLAMA_VERSION))..."
+	git clone --depth=1 --branch $(LLAMA_VERSION) \
+	https://github.com/ggerganov/llama.cpp.git $(LLAMA_DIR)
 
 $(WHISPER_DIR):
-@echo "[deps] whisper.cpp をクローン中 ($(WHISPER_VERSION))..."
-git clone --depth=1 --branch $(WHISPER_VERSION) \
-  https://github.com/ggerganov/whisper.cpp.git $(WHISPER_DIR)
+	@echo "[deps] whisper.cpp をクローン中 ($(WHISPER_VERSION))..."
+	git clone --depth=1 --branch $(WHISPER_VERSION) \
+	https://github.com/ggerganov/whisper.cpp.git $(WHISPER_DIR)
 
 $(BUILD_DIR)/.built: $(LLAMA_DIR) $(WHISPER_DIR)
-@echo "[cmake] GPU=$(GPU_TARGET) でビルド中..."
-cmake -S . -B $(BUILD_DIR) \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_SHARED_LIBS=OFF \
-  $(CMAKE_GPU_FLAGS)
-cmake --build $(BUILD_DIR) $(CMAKE_BUILD_FLAGS) --target llama whisper
-@touch $(BUILD_DIR)/.built
+	@echo "[cmake] GPU=$(GPU_TARGET) でビルド中..."
+	cmake -S . -B $(BUILD_DIR) \
+	$(CMAKE_GENERATOR) \
+	$(CMAKE_EXTRA_FLAGS) \
+	-DCMAKE_BUILD_TYPE=Release \
+	-DBUILD_SHARED_LIBS=OFF \
+	$(CMAKE_GPU_FLAGS)
+	cmake --build $(BUILD_DIR) $(CMAKE_BUILD_FLAGS) --target llama whisper
+	@if [ "$(OS_NAME)" = "Windows_NT" ]; then \
+		GGML_SRC="$(BUILD_DIR)/vendor/llama.cpp/ggml/src"; \
+		for lib in ggml ggml-base ggml-cpu; do \
+			if [ -f "$$GGML_SRC/$$lib.a" ] && [ ! -f "$$GGML_SRC/lib$$lib.a" ]; then \
+				echo "[fix] $$lib.a -> lib$$lib.a"; \
+				cp "$$GGML_SRC/$$lib.a" "$$GGML_SRC/lib$$lib.a"; \
+			fi; \
+		done; \
+	fi
+	@touch $(BUILD_DIR)/.built
 
 ## build: deps の後に Go バイナリをビルド
 build: deps
-@echo "[go build] tags=$(GO_TAGS) GPU=$(GPU_TARGET)"
-C_INCLUDE_PATH="$(INCLUDE_PATH)" \
-LIBRARY_PATH="$(LIBRARY_PATH)" \
-CGO_ENABLED=1 \
-CGO_LDFLAGS="$(CGO_EXTRA_LDFLAGS)" \
-go build $(if $(GO_TAGS),-tags $(GO_TAGS)) -o $(BIN) .
+	@echo "[go build] tags=$(GO_TAGS) GPU=$(GPU_TARGET)"
+	CGO_ENABLED=1 \
+	CGO_CFLAGS="$(CGO_CFLAGS_VAL)" \
+	CGO_LDFLAGS="$(CGO_LDFLAGS_VAL) $(CGO_EXTRA_LDFLAGS)" \
+	go build $(if $(GO_TAGS),-tags $(GO_TAGS)) -o $(BIN) .
+
+## test: CGo ヘッダーとライブラリパスを設定して go test を実行
+test: deps
+	@echo "[go test] tags=$(GO_TAGS) GPU=$(GPU_TARGET)"
+	CGO_ENABLED=1 \
+	CGO_CFLAGS="$(CGO_CFLAGS_VAL)" \
+	CGO_LDFLAGS="$(CGO_LDFLAGS_VAL) $(CGO_EXTRA_LDFLAGS)" \
+	go test $(if $(GO_TAGS),-tags $(GO_TAGS)) -v -count=1 -timeout=120s ./...
 
 ## clean: バイナリと cmake ビルド成果物を削除
 clean:
-rm -f $(BIN)
-rm -rf $(BUILD_DIR)
+	rm -f $(BIN)
+	rm -rf $(BUILD_DIR)
 
 ## distclean: vendor を含め全削除
 distclean: clean
-rm -rf $(VENDOR_DIR)
+	rm -rf $(VENDOR_DIR)

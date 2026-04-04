@@ -2,16 +2,26 @@
 //
 // 外部依存なし。whisper.cpp + llama.cpp を CGo で直接組み込んだシングルバイナリ。
 //
-// 設定 (環境変数):
-//   PORT           リスンポート                    (デフォルト: 7070)
-//   WHISPER_MODEL  whisper GGML モデルファイルパス  (必須)
-//   LLAMA_MODEL    llama   GGUF モデルファイルパス  (必須)
-//   LLAMA_GPU_LAYERS GPU にオフロードするレイヤ数   (デフォルト: -1 = 全レイヤ)
-//   WHISPER_GPU_LAYERS 同上 whisper 用              (デフォルト: -1)
+// 設定の優先度 (高→低):
+//   CLI フラグ > config ファイル > 環境変数 > デフォルト値
+//
+// CLI フラグ:
+//   --port              リスンポート                    (デフォルト: 7070)
+//   --whisper-model     whisper モデル名またはパス       (例: base)
+//   --llama-model       llama モデル名またはパス         (例: qwen3:8b-q4_k_m)
+//   --llama-gpu-layers  GPU にオフロードするレイヤ数     (デフォルト: -1 = 全レイヤ)
+//   --whisper-gpu-layers 同上 whisper 用
+//   --model-cache-dir   モデルキャッシュディレクトリ
+//   --config            config ファイルパスの上書き
+//
+// フラグを明示指定すると config ファイルに保存され、次回以降は省略可能。
+// config ファイルの場所: server_config.go の configFilePath() を参照。
 
 package main
 
 /*
+#cgo CFLAGS:   -I./vendor/llama.cpp/include -I./vendor/whisper.cpp/include -I./vendor/llama.cpp/ggml/include
+#cgo CXXFLAGS: -I./vendor/llama.cpp/include -I./vendor/whisper.cpp/include -I./vendor/llama.cpp/ggml/include
 #include "llama_bridge.h"
 #include "whisper_bridge.h"
 */
@@ -20,6 +30,8 @@ import "C"
 import (
 "context"
 "encoding/json"
+"flag"
+"fmt"
 "io"
 "log"
 "net/http"
@@ -27,6 +39,7 @@ import (
 "os/signal"
 "strconv"
 "strings"
+"sync"
 "syscall"
 "time"
 )
@@ -58,13 +71,91 @@ return n
 }
 return def
 }
-return config{
-port:             env("PORT", "7070"),
-whisperModel:     os.Getenv("WHISPER_MODEL"),
-llamaModel:       os.Getenv("LLAMA_MODEL"),
-llamaGPULayers:   envInt("LLAMA_GPU_LAYERS", -1),
-whisperGPULayers: envInt("WHISPER_GPU_LAYERS", -1),
+
+// ── Step 1: デフォルト値 ────────────────────────────────────────────────────
+cfg := config{
+port:             "7070",
+llamaGPULayers:   -1,
+whisperGPULayers: -1,
 }
+
+// ── Step 2: 環境変数で上書き (後方互換) ────────────────────────────────────
+cfg.port             = env("PORT", cfg.port)
+cfg.whisperModel     = os.Getenv("WHISPER_MODEL")
+cfg.llamaModel       = os.Getenv("LLAMA_MODEL")
+cfg.llamaGPULayers   = envInt("LLAMA_GPU_LAYERS", cfg.llamaGPULayers)
+cfg.whisperGPULayers = envInt("WHISPER_GPU_LAYERS", cfg.whisperGPULayers)
+
+// ── Step 3: config ファイルで上書き ────────────────────────────────────────
+fileCfg, err := loadConfigFile()
+if err != nil {
+log.Printf("[config] ファイル読み込みエラー (無視): %v", err)
+} else {
+if fileCfg.Port != ""         { cfg.port = fileCfg.Port }
+if fileCfg.WhisperModel != "" { cfg.whisperModel = fileCfg.WhisperModel }
+if fileCfg.LlamaModel != ""   { cfg.llamaModel = fileCfg.LlamaModel }
+if fileCfg.LlamaGPULayers != nil   { cfg.llamaGPULayers = *fileCfg.LlamaGPULayers }
+if fileCfg.WhisperGPULayers != nil { cfg.whisperGPULayers = *fileCfg.WhisperGPULayers }
+if fileCfg.ModelCacheDir != "" {
+os.Setenv("MODEL_CACHE_DIR", fileCfg.ModelCacheDir)
+}
+}
+
+// ── Step 4: CLI フラグで上書き (最高優先度) ───────────────────────────────
+fPort            := flag.String("port",               "", "リスンポート (デフォルト: 7070)")
+fWhisperModel    := flag.String("whisper-model",      "", "whisper モデル名またはパス (例: base, small)")
+fLlamaModel      := flag.String("llama-model",        "", "llama モデル名またはパス (例: qwen3:8b-q4_k_m)")
+fLlamaGPU        := flag.Int("llama-gpu-layers",    -999, "llama GPU レイヤ数 (-1=全レイヤ, 0=CPU)")
+fWhisperGPU      := flag.Int("whisper-gpu-layers",  -999, "whisper GPU レイヤ数")
+fModelCacheDir   := flag.String("model-cache-dir",    "", "モデルキャッシュディレクトリ")
+_                 = flag.String("config",             "", "config ファイルパス (MEET_TRANSLATOR_CONFIG と同等)")
+
+flag.Usage = func() {
+fmt.Fprintf(os.Stderr, "使い方: meet-translator-server [オプション]\n\n")
+fmt.Fprintf(os.Stderr, "設定は config ファイルに保存され、次回以降は省略可能です。\n")
+fmt.Fprintf(os.Stderr, "config ファイル: %s\n\n", configFilePath())
+fmt.Fprintf(os.Stderr, "オプション:\n")
+flag.PrintDefaults()
+}
+flag.Parse()
+
+// 明示指定されたフラグを収集
+explicitFlags := map[string]bool{}
+flag.Visit(func(f *flag.Flag) { explicitFlags[f.Name] = true })
+
+if explicitFlags["port"]             { cfg.port = *fPort }
+if explicitFlags["whisper-model"]    { cfg.whisperModel = *fWhisperModel }
+if explicitFlags["llama-model"]      { cfg.llamaModel = *fLlamaModel }
+if explicitFlags["llama-gpu-layers"] { cfg.llamaGPULayers = *fLlamaGPU }
+if explicitFlags["whisper-gpu-layers"] { cfg.whisperGPULayers = *fWhisperGPU }
+if explicitFlags["model-cache-dir"]  {
+os.Setenv("MODEL_CACHE_DIR", *fModelCacheDir)
+}
+if explicitFlags["config"] {
+os.Setenv("MEET_TRANSLATOR_CONFIG", flag.Lookup("config").Value.String())
+}
+
+// ── Step 5: フラグが明示指定されていれば config ファイルに保存 ──────────────
+if len(explicitFlags) > 0 {
+save := persistedConfig{
+Port:          cfg.port,
+WhisperModel:  cfg.whisperModel,
+LlamaModel:    cfg.llamaModel,
+ModelCacheDir: os.Getenv("MODEL_CACHE_DIR"),
+}
+n := cfg.llamaGPULayers
+save.LlamaGPULayers = &n
+w := cfg.whisperGPULayers
+save.WhisperGPULayers = &w
+
+if err := saveConfigFile(save); err != nil {
+log.Printf("[config] 保存エラー (無視): %v", err)
+} else {
+log.Printf("[config] 設定を保存しました: %s", configFilePath())
+}
+}
+
+return cfg
 }
 
 // ---------------------------------------------------------------------------
@@ -75,16 +166,30 @@ type server struct {
 cfg        config
 mux        *http.ServeMux
 whisperCtx *C.whisper_context
-llamaModel C.llama_bridge_model
+
+// llama モデル管理 (modelMu で保護)
+modelMu         sync.Mutex
+llamaModel      C.llama_bridge_model
+loadedModelSpec string // 現在ロード中のモデル名またはパス
+
+// テスト時にモック実装を注入できる関数フィールド
+transcribeFn func(audioData []byte, lang string) (string, error)
+translateFn  func(text, srcLang, tgtLang string, opts ModelOptions) (string, error)
+swapModelFn  func(spec string) error
 }
 
-func newServer(cfg config, whisperCtx *C.whisper_context, llamaModel C.llama_bridge_model) *server {
+func newServer(cfg config, whisperCtx *C.whisper_context, llamaModel C.llama_bridge_model, modelSpec string) *server {
 s := &server{
-cfg:        cfg,
-mux:        http.NewServeMux(),
-whisperCtx: whisperCtx,
-llamaModel: llamaModel,
+cfg:             cfg,
+mux:             http.NewServeMux(),
+whisperCtx:      whisperCtx,
+llamaModel:      llamaModel,
+loadedModelSpec: modelSpec,
 }
+// デフォルトは CGo 実装を使用
+s.transcribeFn = s.transcribeInternal
+s.translateFn = s.translateInternal
+s.swapModelFn = s.swapModel
 s.mux.HandleFunc("GET /health", s.handleHealth)
 s.mux.HandleFunc("POST /transcribe-and-translate", s.handleTranscribeAndTranslate)
 return s
@@ -139,7 +244,25 @@ if targetLang == "" {
 targetLang = "ja"
 }
 
-transcription, err := s.transcribe(audioData, sourceLang)
+// リクエスト毎のモデル指定とオプションを取得
+requestedModel := strings.TrimSpace(r.FormValue("llama_model"))
+rawOpts := r.FormValue("llama_options")
+
+// モデルのホットスワップと翻訳は排他制御
+s.modelMu.Lock()
+defer s.modelMu.Unlock()
+
+if requestedModel != "" && requestedModel != s.loadedModelSpec {
+if err := s.swapModelFn(requestedModel); err != nil {
+log.Printf("[model] ホットスワップ失敗: %v", err)
+http.Error(w, "model swap failed: "+err.Error(), http.StatusInternalServerError)
+return
+}
+}
+
+opts := parseModelOptions(rawOpts, s.loadedModelSpec)
+
+transcription, err := s.transcribeFn(audioData, sourceLang)
 if err != nil {
 log.Printf("[transcribe] %v", err)
 http.Error(w, "transcription failed: "+err.Error(), http.StatusInternalServerError)
@@ -151,8 +274,7 @@ writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation"
 return
 }
 
-// translate の第3引数 ollamaModel は llama.go 側で無視される
-translation, err := s.translate(transcription, sourceLang, targetLang, "")
+translation, err := s.translateFn(transcription, sourceLang, targetLang, opts)
 if err != nil {
 log.Printf("[translate] %v", err)
 http.Error(w, "translation failed: "+err.Error(), http.StatusInternalServerError)
@@ -165,6 +287,30 @@ writeJSON(w, http.StatusOK, map[string]string{
 })
 }
 
+// swapModel は現在ロード中のモデルを解放して新しいモデルをロードする。
+// 呼び出し元は modelMu を保持している必要がある。
+func (s *server) swapModel(spec string) error {
+log.Printf("llama モデルをスワップ中: %s → %s", s.loadedModelSpec, spec)
+
+path, err := resolveLlamaModel(spec)
+if err != nil {
+return err
+}
+
+newModel, err := loadLlamaModel(path, s.cfg.llamaGPULayers)
+if err != nil {
+return err
+}
+
+if s.llamaModel != nil {
+C.llama_bridge_free_model(s.llamaModel)
+}
+s.llamaModel = newModel
+s.loadedModelSpec = spec
+log.Printf("llama モデルのスワップ完了: %s", spec)
+return nil
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -172,8 +318,9 @@ writeJSON(w, http.StatusOK, map[string]string{
 func main() {
 cfg := loadConfig()
 
-// 依存チェック
-runPreflight(cfg)
+// モデル名解決 (自動ダウンロード・Ollama キャッシュ共有)
+originalModelSpec := cfg.llamaModel
+runPreflight(&cfg)
 
 // llama バックエンド初期化
 initLlamaBackend()
@@ -199,7 +346,7 @@ log.Printf("llama モデルのロード完了")
 
 httpSrv := &http.Server{
 Addr:    ":" + cfg.port,
-Handler: newServer(cfg, whisperCtx, llamaModel),
+Handler: newServer(cfg, whisperCtx, llamaModel, originalModelSpec),
 }
 
 quit := make(chan os.Signal, 1)

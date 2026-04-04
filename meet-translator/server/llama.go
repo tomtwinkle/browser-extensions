@@ -2,10 +2,13 @@
 //
 // Ollama の代わりに llama.cpp を Go バイナリに直接組み込む。
 // モデルは起動時に一度だけロードし、server 構造体で保持する。
+// リクエスト毎に llama_model フィールドでモデルをホットスワップ可能。
 
 package main
 
 /*
+#cgo CFLAGS:   -I./vendor/llama.cpp/include -I./vendor/whisper.cpp/include -I./vendor/llama.cpp/ggml/include
+#cgo CXXFLAGS: -I./vendor/llama.cpp/include -I./vendor/whisper.cpp/include -I./vendor/llama.cpp/ggml/include
 #include "llama_bridge.h"
 #include <stdlib.h>
 */
@@ -16,23 +19,6 @@ import (
 "strings"
 "unsafe"
 )
-
-var langNames = map[string]string{
-"ja": "Japanese", "en": "English",    "zh": "Chinese",
-"ko": "Korean",   "fr": "French",     "de": "German",
-"es": "Spanish",  "pt": "Portuguese", "ru": "Russian",
-"ar": "Arabic",   "it": "Italian",    "nl": "Dutch",
-}
-
-func langLabel(code string) string {
-if n, ok := langNames[code]; ok {
-return n
-}
-if code == "" {
-return "the detected language"
-}
-return code
-}
 
 // initLlamaBackend はプロセス起動時に一度だけ呼ぶ。
 func initLlamaBackend() {
@@ -57,13 +43,15 @@ return nil, fmt.Errorf("llama モデルのロードに失敗: %s", modelPath)
 return h, nil
 }
 
-// translate は llama.cpp でテキストを翻訳して返す。
-func (s *server) translate(text, sourceLang, targetLang, _ string) (string, error) {
+// translateInternal は llama.cpp でテキストを翻訳して返す。
+// opts にモデル固有のオプション (thinking 等) を指定する。
+func (s *server) translateInternal(text, sourceLang, targetLang string, opts ModelOptions) (string, error) {
 if s.llamaModel == nil {
 return "", fmt.Errorf("llama モデルが初期化されていません")
 }
 
-prompt := buildTranslationPrompt(text, sourceLang, targetLang)
+template := templateFor(s.loadedModelSpec)
+prompt := buildTranslationPrompt(text, sourceLang, targetLang, template, opts)
 
 cPrompt := C.CString(prompt)
 defer C.free(unsafe.Pointer(cPrompt))
@@ -88,17 +76,9 @@ if ret != 0 {
 return "", fmt.Errorf("llama_bridge_generate 失敗 (code=%d): %s", int(ret), C.GoString(errBuf))
 }
 
-return strings.TrimSpace(C.GoString(outBuf)), nil
+result := strings.TrimSpace(C.GoString(outBuf))
+if opts.Thinking {
+result = stripThinkingTokens(result)
 }
-
-func buildTranslationPrompt(text, sourceLang, targetLang string) string {
-src := langLabel(sourceLang)
-tgt := langLabel(targetLang)
-// Qwen2.5 / Llama-3 チャットテンプレートに合わせたプロンプト
-return fmt.Sprintf(
-"<|im_start|>system\nYou are a translator. Translate the given text accurately. Output only the translated text.<|im_end|>\n"+
-"<|im_start|>user\nTranslate from %s to %s:\n%s<|im_end|>\n"+
-"<|im_start|>assistant\n",
-src, tgt, text,
-)
+return result, nil
 }
