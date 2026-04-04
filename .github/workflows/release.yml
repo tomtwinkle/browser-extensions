@@ -2,149 +2,147 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
 
 permissions:
   contents: write
+  pull-requests: write
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 各 OS でネイティブビルド。CGo + GPU アクセラレーション対応。
-#
-#  ターゲット      | ランナー          | GPU
-# ─────────────────┼───────────────────┼────────────────────────────
-#  linux-amd64     | ubuntu-latest     | CPU (CUDA は self-hosted 推奨)
-#  darwin-arm64    | macos-latest      | Metal (Apple Silicon)
-#  darwin-amd64    | macos-13          | Metal (Intel Mac)
-#  windows-amd64   | windows-latest    | CPU
-# ──────────────────────────────────────────────────────────────────────────────
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  build:
-    name: Build (${{ matrix.name }})
-    runs-on: ${{ matrix.runner }}
+  # ────────────────────────────────────────────────────────────────────────────
+  # release-please: parse conventional commits → create/merge Release PR → tag
+  # ────────────────────────────────────────────────────────────────────────────
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name:        ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # build-server: build server binaries for each platform (only on release)
+  # ────────────────────────────────────────────────────────────────────────────
+  build-server:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    name: Build server (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: linux-amd64
-            runner: ubuntu-latest
-            goos: linux
-            goarch: amd64
+          - os: ubuntu-latest
+            name: linux-amd64
             gpu: cpu
-
-          - name: darwin-arm64
-            runner: macos-latest      # Apple Silicon
-            goos: darwin
-            goarch: arm64
-            gpu: metal
-
-          - name: darwin-amd64
-            runner: macos-13          # Intel Mac
-            goos: darwin
-            goarch: amd64
-            gpu: metal
-
-          - name: windows-amd64
-            runner: windows-latest
-            goos: windows
-            goarch: amd64
+          - os: ubuntu-24.04-arm
+            name: linux-arm64
             gpu: cpu
-
+          - os: macos-latest
+            name: darwin-arm64
+            gpu: metal
+          - os: windows-latest
+            name: windows-amd64
+            gpu: cpu
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@v5
         with:
           go-version-file: meet-translator/server/go.mod
           cache: false
 
-      # ── ビルドツール: Linux ──────────────────────────────────────────────────
       - name: Install build tools (Linux)
-        if: matrix.goos == 'linux'
-        run: sudo apt-get install -y cmake build-essential
+        if: startsWith(matrix.os, 'ubuntu')
+        run: sudo apt-get install -y cmake build-essential ninja-build
 
-      # ── ビルドツール: macOS ──────────────────────────────────────────────────
-      - name: Install build tools (macOS)
-        if: matrix.goos == 'darwin'
-        run: brew install cmake
-
-      # ── ビルドツール: Windows ────────────────────────────────────────────────
       - name: Install build tools (Windows)
-        if: matrix.goos == 'windows'
-        shell: pwsh
-        run: |
-          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
-          choco install mingw -y
+        if: matrix.os == 'windows-latest'
+        run: echo "C:/msys64/usr/bin" >> $GITHUB_PATH
 
-      # ── whisper.cpp + llama.cpp をビルドして Go バイナリを生成 ────────────────
-      - name: Build (Unix)
-        if: matrix.goos != 'windows'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+            meet-translator/server/vendor
+          key: ${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('meet-translator/server/Makefile') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-release-
+
+      - name: Build
         working-directory: meet-translator/server
-        run: make GPU=${{ matrix.gpu }}
+        run: make build GPU=${{ matrix.gpu }}
 
-      - name: Build (Windows)
-        if: matrix.goos == 'windows'
-        working-directory: meet-translator/server
-        shell: bash
-        run: make GPU=${{ matrix.gpu }}
-
-      # ── アーカイブ作成 ────────────────────────────────────────────────────────
       - name: Archive (Unix)
-        if: matrix.goos != 'windows'
+        if: matrix.os != 'windows-latest'
         working-directory: meet-translator/server
         run: |
-          tar czf meet-translator-server_${{ matrix.goos }}_${{ matrix.goarch }}_${{ matrix.gpu }}.tar.gz \
-            meet-translator-server README.md
+          tar czf meet-translator-server-${{ matrix.name }}.tar.gz meet-translator-server
 
       - name: Archive (Windows)
-        if: matrix.goos == 'windows'
+        if: matrix.os == 'windows-latest'
         working-directory: meet-translator/server
-        shell: pwsh
-        run: |
-          Compress-Archive -Path meet-translator-server.exe, README.md `
-            -DestinationPath meet-translator-server_windows_amd64_cpu.zip
+        run: 7z a meet-translator-server-${{ matrix.name }}.zip meet-translator-server.exe
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.name }}
-          path: meet-translator/server/meet-translator-server_*.*
+          name: server-${{ matrix.name }}
+          path: |
+            meet-translator/server/meet-translator-server-*.tar.gz
+            meet-translator/server/meet-translator-server-*.zip
 
   # ────────────────────────────────────────────────────────────────────────────
-  # GitHub Release を作成して全成果物をアップロード
+  # package-extension: zip the browser extension
   # ────────────────────────────────────────────────────────────────────────────
-  release:
-    name: Publish Release
-    needs: build
+  package-extension:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          pattern: dist-*
-          path: dist/
-          merge-multiple: true
-
-      # ── 拡張機能を zip パッケージ化 ───────────────────────────────────────────
       - name: Package extension
         run: |
           cd meet-translator/extension
-          zip -r ../../dist/meet-translator-extension.zip .
+          zip -r ../../meet-translator-extension.zip . -x "*.DS_Store"
 
-      - name: Create checksums
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension
+          path: meet-translator-extension.zip
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # upload-assets: upload all artifacts to the GitHub Release
+  # ────────────────────────────────────────────────────────────────────────────
+  upload-assets:
+    needs: [release-please, build-server, package-extension]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
         run: |
-          cd dist
+          cd artifacts
           sha256sum * > checksums.txt
 
-      - name: Create GitHub Release
+      - name: Upload release assets
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          REPO: ${{ github.repository }}
         run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          gh release create "$TAG" dist/* \
-            --title "$TAG" \
-            --generate-notes \
-            --repo "$GITHUB_REPOSITORY"
+          for f in artifacts/*; do
+            [ -f "$f" ] && gh release upload "$TAG" "$f" --repo "$REPO" --clobber
+          done
+
