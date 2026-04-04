@@ -53,10 +53,8 @@ type LlamaEntry struct {
 
 var llamaRegistry = map[string]LlamaEntry{
 	// ── Qwen2.5 ──────────────────────────────────────────────────────────────
-	"qwen2.5:3b-instruct-q4_k_m": {
-		URL:      "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
-		Template: "qwen",
-	},
+	// NOTE: qwen2.5:3b は Qwen Research License（非商用専用）のため除外。
+	//       Qwen2.5-7B 以上および Qwen3 全サイズは Apache 2.0。
 	"qwen2.5:7b-instruct-q4_k_m": {
 		URL:      "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf",
 		Template: "qwen",
