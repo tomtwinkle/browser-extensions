@@ -88,7 +88,7 @@ else
   BIN_EXT           :=
 endif
 
-BIN := meet-translator-server$(BIN_EXT)
+BIN := server$(BIN_EXT)
 
 # ── targets ───────────────────────────────────────────────────────────────────
 .PHONY: all build deps test clean distclean

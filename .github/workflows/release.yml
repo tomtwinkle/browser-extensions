@@ -106,7 +106,7 @@ jobs:
         run: |
           dir=meet-translator
           mkdir -p "$dir"
-          cp meet-translator-server "$dir/"
+          cp server "$dir/"
           tar czf "meet-translator-server-${{ matrix.name }}.tar.gz" "$dir"
 
       - name: Archive (Windows)
@@ -115,7 +115,7 @@ jobs:
         run: |
           dir=meet-translator
           mkdir -p "$dir"
-          cp meet-translator-server.exe "$dir/"
+          cp server.exe "$dir/"
           # Bundle MinGW runtime DLLs in case static linking is incomplete
           for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll; do
             dll_path=$(find /c/mingw64/bin /c/msys64/mingw64/bin -name "$dll" 2>/dev/null | head -1)
