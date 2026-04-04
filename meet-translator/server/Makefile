@@ -1,23 +1,23 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # meet-translator-server Makefile
 #
-# 使い方:
-#   make                   GPU を自動検出してビルド
-#   make GPU=cuda          NVIDIA CUDA を強制有効
-#   make GPU=metal         Apple Metal を強制有効
-#   make GPU=cpu           CPU のみ
-#   make clean             バイナリ + cmake ビルドを削除
-#   make distclean         vendor も含め全削除
+# Usage:
+#   make                   auto-detect GPU and build
+#   make GPU=cuda          force NVIDIA CUDA
+#   make GPU=metal         force Apple Metal
+#   make GPU=cpu           CPU only
+#   make clean             remove binary + cmake build
+#   make distclean         remove vendor as well
 # ──────────────────────────────────────────────────────────────────────────────
 
-# バージョン固定
+# pinned versions
 LLAMA_VERSION   := b5192
 WHISPER_VERSION := v1.7.4
 
 OS_NAME   := $(shell uname -s 2>/dev/null || echo Windows_NT)
 ARCH_NAME := $(shell uname -m 2>/dev/null || echo x86_64)
 
-# MSYS2/MinGW/Cygwin の uname は MINGW... / MSYS... / CYGWIN... を返すので Windows_NT に正規化
+# normalize MSYS2/MinGW/Cygwin uname (returns MINGW.../MSYS.../CYGWIN...) to Windows_NT
 ifneq ($(filter MINGW% MSYS% CYGWIN%,$(OS_NAME)),)
   OS_NAME := Windows_NT
 endif
@@ -27,7 +27,7 @@ BUILD_DIR   := $(VENDOR_DIR)/build
 LLAMA_DIR   := $(VENDOR_DIR)/llama.cpp
 WHISPER_DIR := $(VENDOR_DIR)/whisper.cpp
 
-# ── GPU ターゲット検出 ────────────────────────────────────────────────────────
+# ── GPU target detection ──────────────────────────────────────────────────────
 GPU ?= auto
 
 ifeq ($(GPU),auto)
@@ -42,7 +42,7 @@ else
   GPU_TARGET := $(GPU)
 endif
 
-# ── cmake GPU フラグ & Go build tags ──────────────────────────────────────────
+# ── cmake GPU flags & Go build tags ──────────────────────────────────────────
 CMAKE_GPU_FLAGS :=
 GO_TAGS         :=
 CGO_EXTRA_LDFLAGS :=
@@ -58,22 +58,22 @@ else ifeq ($(GPU_TARGET),cuda)
   GO_TAGS            := cuda
 
 else
-  # -DGGML_NATIVE=OFF でランナー CPU ネイティブ最適化を無効化 (macOS arm64 i8mm 問題回避)
+  # disable native CPU optimizations (avoids i8mm issue on macOS arm64 runners)
   CMAKE_GPU_FLAGS    := -DGGML_METAL=OFF -DGGML_BLAS=OFF -DGGML_NATIVE=OFF
 endif
 
-# ── インクルード / ライブラリパス (CGo 用) ────────────────────────────────────
-# cmake は add_subdirectory 構造を反映して build/vendor/... にライブラリを生成する
+# ── include/library paths for CGo ─────────────────────────────────────────────
+# cmake mirrors add_subdirectory structure: libs end up under build/vendor/...
 CGO_CFLAGS_VAL  := -I$(abspath $(LLAMA_DIR)/include) -I$(abspath $(WHISPER_DIR)/include) -I$(abspath $(LLAMA_DIR)/ggml/include)
 
 CGO_LDFLAGS_VAL := -L$(abspath $(BUILD_DIR)/vendor/llama.cpp/src) \
                    -L$(abspath $(BUILD_DIR)/vendor/whisper.cpp/src) \
                    -L$(abspath $(BUILD_DIR)/vendor/llama.cpp/ggml/src)
 
-# ── OS 固有設定 ────────────────────────────────────────────────────────────────
+# ── OS-specific settings ──────────────────────────────────────────────────────
 ifeq ($(OS_NAME),Windows_NT)
-  # Ninja: Go CGo と同じ C:\mingw64\bin\gcc を使う (MSYS2 混在回避)
-  # GGML_OPENMP=OFF: OpenMP 依存を除去 (-lgomp 不要にする)
+  # Ninja: use C:\mingw64\bin\gcc (same as Go CGo) to avoid MSYS2 toolchain mix
+  # GGML_OPENMP=OFF: avoid GOMP_* undefined references on Windows
   CMAKE_GENERATOR   := -G Ninja
   CMAKE_EXTRA_FLAGS := -DCMAKE_STATIC_LIBRARY_PREFIX=lib -DGGML_OPENMP=OFF
   CMAKE_BUILD_FLAGS :=
@@ -87,26 +87,26 @@ endif
 
 BIN := meet-translator-server$(BIN_EXT)
 
-# ── ターゲット ────────────────────────────────────────────────────────────────
+# ── targets ───────────────────────────────────────────────────────────────────
 .PHONY: all build deps test clean distclean
 
 all: build
 
-## deps: whisper.cpp + llama.cpp をクローンして cmake でビルド
+## deps: clone whisper.cpp + llama.cpp and build with cmake
 deps: $(BUILD_DIR)/.built
 
 $(LLAMA_DIR):
-	@echo "[deps] llama.cpp をクローン中 ($(LLAMA_VERSION))..."
+	@echo "[deps] Cloning llama.cpp ($(LLAMA_VERSION))..."
 	git clone --depth=1 --branch $(LLAMA_VERSION) \
 	https://github.com/ggerganov/llama.cpp.git $(LLAMA_DIR)
 
 $(WHISPER_DIR):
-	@echo "[deps] whisper.cpp をクローン中 ($(WHISPER_VERSION))..."
+	@echo "[deps] Cloning whisper.cpp ($(WHISPER_VERSION))..."
 	git clone --depth=1 --branch $(WHISPER_VERSION) \
 	https://github.com/ggerganov/whisper.cpp.git $(WHISPER_DIR)
 
 $(BUILD_DIR)/.built: $(LLAMA_DIR) $(WHISPER_DIR)
-	@echo "[cmake] GPU=$(GPU_TARGET) でビルド中..."
+	@echo "[cmake] Building with GPU=$(GPU_TARGET)..."
 	cmake -S . -B $(BUILD_DIR) \
 	$(CMAKE_GENERATOR) \
 	$(CMAKE_EXTRA_FLAGS) \
@@ -125,7 +125,7 @@ $(BUILD_DIR)/.built: $(LLAMA_DIR) $(WHISPER_DIR)
 	fi
 	@touch $(BUILD_DIR)/.built
 
-## build: deps の後に Go バイナリをビルド
+## build: build Go binary after deps
 build: deps
 	@echo "[go build] tags=$(GO_TAGS) GPU=$(GPU_TARGET)"
 	CGO_ENABLED=1 \
@@ -133,7 +133,7 @@ build: deps
 	CGO_LDFLAGS="$(CGO_LDFLAGS_VAL) $(CGO_EXTRA_LDFLAGS)" \
 	go build $(if $(GO_TAGS),-tags $(GO_TAGS)) -o $(BIN) .
 
-## test: CGo ヘッダーとライブラリパスを設定して go test を実行
+## test: run go test with CGo include/library paths
 test: deps
 	@echo "[go test] tags=$(GO_TAGS) GPU=$(GPU_TARGET)"
 	CGO_ENABLED=1 \
@@ -141,11 +141,11 @@ test: deps
 	CGO_LDFLAGS="$(CGO_LDFLAGS_VAL) $(CGO_EXTRA_LDFLAGS)" \
 	go test $(if $(GO_TAGS),-tags $(GO_TAGS)) -v -count=1 -timeout=120s ./...
 
-## clean: バイナリと cmake ビルド成果物を削除
+## clean: remove binary and cmake build artifacts
 clean:
 	rm -f $(BIN)
 	rm -rf $(BUILD_DIR)
 
-## distclean: vendor を含め全削除
+## distclean: remove everything including vendor
 distclean: clean
 	rm -rf $(VENDOR_DIR)
