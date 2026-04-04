@@ -281,3 +281,12 @@ pull request時に以下の 4 platformでbuild・testが実行されます：
 | `offscreen` | MV3 Service Worker では使用できない AudioContext を Offscreen Document で実行するため |
 | `tabs` | 設定pageを開くため |
 | `http://localhost:7070/*` | local serverへのrequestを許可するため |
+
+---
+
+## Third-Party Licenses
+
+This software embeds [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and
+[llama.cpp](https://github.com/ggerganov/llama.cpp), both released under the MIT License.
+
+See [THIRDPARTY.md](./THIRDPARTY.md) for the full copyright and permission notices.
