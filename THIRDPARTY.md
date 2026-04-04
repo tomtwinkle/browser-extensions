@@ -89,7 +89,7 @@ SOFTWARE.
 > **Note**: Qwen2.5-3B は Qwen Research License（非商用専用）のため、
 > このプロジェクトのモデルレジストリには含まれていません。
 
-### Qwen3 0.6B〜8B (Alibaba Cloud / Qwen Team, Unsloth GGUF)
+### Qwen3 0.6B〜8B / Qwen3.5 0.8B〜9B (Alibaba Cloud / Qwen Team, Unsloth GGUF)
 
 - **配布元**: https://huggingface.co/unsloth/ (Unsloth による GGUF 量子化版)
 - **ライセンス**: Apache License 2.0

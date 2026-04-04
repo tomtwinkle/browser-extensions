@@ -86,6 +86,28 @@ var llamaRegistry = map[string]LlamaEntry{
 		HasThinking: true,
 	},
 
+	// ── Qwen3.5 (thinking 対応, Unsloth GGUF) ────────────────────────────────
+	"qwen3.5:0.8b-q4_k_m": {
+		URL:         "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf",
+		Template:    "qwen3",
+		HasThinking: true,
+	},
+	"qwen3.5:2b-q4_k_m": {
+		URL:         "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf",
+		Template:    "qwen3",
+		HasThinking: true,
+	},
+	"qwen3.5:4b-q4_k_m": {
+		URL:         "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
+		Template:    "qwen3",
+		HasThinking: true,
+	},
+	"qwen3.5:9b-q4_k_m": {
+		URL:         "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
+		Template:    "qwen3",
+		HasThinking: true,
+	},
+
 	// ── Gemma 4 ──────────────────────────────────────────────────────────────
 	"gemma4:e2b-q4_k_m": {
 		URL:      "https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/main/google_gemma-4-E2B-it-Q4_K_M.gguf",

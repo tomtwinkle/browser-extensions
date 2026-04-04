@@ -178,6 +178,10 @@ model名を `--llama-model` に指定すると自動downloadします。
 | `qwen3:1.7b-q4_k_m` | ≈ 1.1 GB | Apache 2.0 | Thinking 対応 |
 | `qwen3:4b-q4_k_m`   | ≈ 2.6 GB | Apache 2.0 | **推奨**、Thinking 対応 |
 | `qwen3:8b-q4_k_m`   | ≈ 5.2 GB | Apache 2.0 | 高精度、Thinking 対応 |
+| `qwen3.5:0.8b-q4_k_m` | ≈ 0.6 GB | Apache 2.0 | 最軽量、Thinking 対応 |
+| `qwen3.5:2b-q4_k_m`   | ≈ 1.4 GB | Apache 2.0 | Thinking 対応 |
+| `qwen3.5:4b-q4_k_m`   | ≈ 3.2 GB | Apache 2.0 | **推奨**、Thinking 対応 |
+| `qwen3.5:9b-q4_k_m`   | ≈ 5.3 GB | Apache 2.0 | 高精度、Thinking 対応 |
 | `qwen2.5:7b-instruct-q4_k_m` | ≈ 4.7 GB | Apache 2.0 | 安定版 |
 | `qwen2.5:14b-instruct-q4_k_m` | ≈ 8.7 GB | Apache 2.0 | 高精度版 |
 | `gemma4:e2b-q4_k_m` | ≈ 1.3 GB | Apache 2.0 | Google Gemma 4 |
@@ -190,9 +194,9 @@ file pathを直接指定することも可能です:
 ./meet-translator-server --llama-model /path/to/model.gguf
 ```
 
-### Thinking mode (Qwen3)
+### Thinking mode (Qwen3 / Qwen3.5)
 
-Qwen3 系modelは **Thinking mode** に対応しています。  
+Qwen3 系および Qwen3.5 系modelは **Thinking mode** に対応しています。  
 `<think>...</think>` で推論を展開してから翻訳するため精度が向上しますが、latencyが増加します。
 
 request時に `llama_options` fieldで制御できます:
