@@ -58,21 +58,17 @@ else ifeq ($(GPU_TARGET),cuda)
   GO_TAGS            := cuda
 
 else
-  CMAKE_GPU_FLAGS    := -DGGML_METAL=OFF -DGGML_BLAS=OFF
+  # -DGGML_NATIVE=OFF でランナー CPU ネイティブ最適化を無効化 (macOS arm64 i8mm 問題回避)
+  CMAKE_GPU_FLAGS    := -DGGML_METAL=OFF -DGGML_BLAS=OFF -DGGML_NATIVE=OFF
 endif
 
 # ── インクルード / ライブラリパス (CGo 用) ────────────────────────────────────
+# cmake は add_subdirectory 構造を反映して build/vendor/... にライブラリを生成する
 CGO_CFLAGS_VAL  := -I$(abspath $(LLAMA_DIR)/include) -I$(abspath $(WHISPER_DIR)/include) -I$(abspath $(LLAMA_DIR)/ggml/include)
 
-CGO_LDFLAGS_VAL := -L$(abspath $(BUILD_DIR)/src) -L$(abspath $(BUILD_DIR)/ggml/src)
-
-ifeq ($(GPU_TARGET),metal)
-  CGO_LDFLAGS_VAL := $(CGO_LDFLAGS_VAL) -L$(abspath $(BUILD_DIR)/ggml/src/ggml-metal) -L$(abspath $(BUILD_DIR)/ggml/src/ggml-blas)
-endif
-
-ifeq ($(GPU_TARGET),cuda)
-  CGO_LDFLAGS_VAL := $(CGO_LDFLAGS_VAL) -L$(abspath $(BUILD_DIR)/ggml/src/ggml-cuda)
-endif
+CGO_LDFLAGS_VAL := -L$(abspath $(BUILD_DIR)/vendor/llama.cpp/src) \
+                   -L$(abspath $(BUILD_DIR)/vendor/whisper.cpp/src) \
+                   -L$(abspath $(BUILD_DIR)/vendor/llama.cpp/ggml/src)
 
 # ── OS 固有設定 ────────────────────────────────────────────────────────────────
 ifeq ($(OS_NAME),Windows_NT)
