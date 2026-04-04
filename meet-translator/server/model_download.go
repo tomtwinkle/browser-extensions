@@ -17,7 +17,7 @@ import (
 // downloadModel は url からファイルをダウンロードして dest に保存する。
 func downloadModel(url, dest string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return fmt.Errorf("ディレクトリ作成失敗: %w", err)
+		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
 	tmp := dest + ".download"
@@ -30,7 +30,7 @@ func downloadModel(url, dest string) error {
 
 	resp, err := http.Get(url) //nolint:noctx
 	if err != nil {
-		return fmt.Errorf("HTTP リクエスト失敗: %w", err)
+		return fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -40,7 +40,7 @@ func downloadModel(url, dest string) error {
 
 	f, err := os.Create(tmp)
 	if err != nil {
-		return fmt.Errorf("ファイル作成失敗: %w", err)
+		return fmt.Errorf("failed to create file: %w", err)
 	}
 	defer f.Close()
 
@@ -51,7 +51,7 @@ func downloadModel(url, dest string) error {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
 			if _, werr := f.Write(buf[:n]); werr != nil {
-				return fmt.Errorf("書き込み失敗: %w", werr)
+				return fmt.Errorf("write failed: %w", werr)
 			}
 			done += int64(n)
 			if total > 0 {
@@ -60,17 +60,17 @@ func downloadModel(url, dest string) error {
 					float64(done)/float64(total)*100,
 					strings.Repeat(" ", 5))
 			} else {
-				fmt.Printf("\r  %.1f MB ダウンロード済み", float64(done)/1e6)
+				fmt.Printf("\r  %.1f MB downloaded", float64(done)/1e6)
 			}
 		}
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("ダウンロード失敗: %w", err)
+			return fmt.Errorf("download failed: %w", err)
 		}
 	}
-	fmt.Printf("\r  %.1f MB 完了%s\n", float64(done)/1e6, strings.Repeat(" ", 30))
+	fmt.Printf("\r  %.1f MB done%s\n", float64(done)/1e6, strings.Repeat(" ", 30))
 
 	if err := f.Close(); err != nil {
 		return err

@@ -108,6 +108,12 @@ var llamaRegistry = map[string]LlamaEntry{
 		HasThinking: true,
 	},
 
+	// ── CALM3 (日英特化, CyberAgent, Apache 2.0) ──────────────────────────────
+	"calm3:22b-q4_k_m": {
+		URL:      "https://huggingface.co/grapevine-AI/CALM3-22B-Chat-GGUF/resolve/main/calm3-22b-chat-Q4_K_M.gguf",
+		Template: "qwen",
+	},
+
 	// ── Gemma 4 ──────────────────────────────────────────────────────────────
 	"gemma4:e2b-q4_k_m": {
 		URL:      "https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/main/google_gemma-4-E2B-it-Q4_K_M.gguf",
@@ -171,29 +177,29 @@ func modelCacheDir() string {
 // resolveWhisperModel はモデル名またはファイルパスを実際のパスに解決する。
 func resolveWhisperModel(spec string) (string, error) {
 	if spec == "" {
-		return "", fmt.Errorf("WHISPER_MODEL が設定されていません\n  利用可能なモデル名: %s", sortedKeys(whisperRegistry))
+		return "", fmt.Errorf("whisper model not specified\n  available models: %s", sortedKeys(whisperRegistry))
 	}
 	if _, err := os.Stat(spec); err == nil {
 		return spec, nil
 	}
 	if strings.ContainsAny(spec, "/\\") {
-		return "", fmt.Errorf("ファイルが見つかりません: %s", spec)
+		return "", fmt.Errorf("file not found: %s", spec)
 	}
 
 	url, ok := whisperRegistry[spec]
 	if !ok {
-		return "", fmt.Errorf("不明な whisper モデル名: %q\n  利用可能: %s", spec, sortedKeys(whisperRegistry))
+		return "", fmt.Errorf("unknown whisper model: %q\n  available: %s", spec, sortedKeys(whisperRegistry))
 	}
 
 	dest := filepath.Join(modelCacheDir(), "whisper", "ggml-"+spec+".bin")
 	if _, err := os.Stat(dest); err == nil {
-		fmt.Printf("[model] whisper/%s: キャッシュ使用 %s\n", spec, dest)
+		fmt.Printf("[model] whisper/%s: using cache %s\n", spec, dest)
 		return dest, nil
 	}
 
-	fmt.Printf("[model] whisper/%s をダウンロード中...\n  %s\n", spec, url)
+	fmt.Printf("[model] downloading whisper/%s...\n  %s\n", spec, url)
 	if err := downloadModel(url, dest); err != nil {
-		return "", fmt.Errorf("ダウンロード失敗 (%s): %w", spec, err)
+		return "", fmt.Errorf("download failed (%s): %w", spec, err)
 	}
 	return dest, nil
 }
@@ -202,37 +208,37 @@ func resolveWhisperModel(spec string) (string, error) {
 // 優先順位: 既存ファイル → Ollama キャッシュ → ローカルキャッシュ → ダウンロード
 func resolveLlamaModel(spec string) (string, error) {
 	if spec == "" {
-		return "", fmt.Errorf("LLAMA_MODEL が設定されていません\n  利用可能なモデル名: %s", sortedLlamaKeys())
+		return "", fmt.Errorf("llama model not specified\n  available models: %s", sortedLlamaKeys())
 	}
 	if _, err := os.Stat(spec); err == nil {
 		return spec, nil
 	}
 	if strings.ContainsAny(spec, "/\\") {
-		return "", fmt.Errorf("ファイルが見つかりません: %s", spec)
+		return "", fmt.Errorf("file not found: %s", spec)
 	}
 
 	// Ollama キャッシュを優先確認
 	if path, ok := findInOllamaCache(spec); ok {
-		fmt.Printf("[model] llama/%s: Ollama キャッシュ使用 %s\n", spec, path)
+		fmt.Printf("[model] llama/%s: using Ollama cache %s\n", spec, path)
 		return path, nil
 	}
 
 	entry, ok := llamaRegistry[spec]
 	if !ok {
-		return "", fmt.Errorf("不明な llama モデル名: %q\n  利用可能: %s", spec, sortedLlamaKeys())
+		return "", fmt.Errorf("unknown llama model: %q\n  available: %s", spec, sortedLlamaKeys())
 	}
 
 	parts := strings.Split(entry.URL, "/")
 	filename := parts[len(parts)-1]
 	dest := filepath.Join(modelCacheDir(), "llama", filename)
 	if _, err := os.Stat(dest); err == nil {
-		fmt.Printf("[model] llama/%s: キャッシュ使用 %s\n", spec, dest)
+		fmt.Printf("[model] llama/%s: using cache %s\n", spec, dest)
 		return dest, nil
 	}
 
-	fmt.Printf("[model] llama/%s をダウンロード中 (大容量ファイルです)...\n  %s\n", spec, entry.URL)
+	fmt.Printf("[model] downloading llama/%s (large file)...\n  %s\n", spec, entry.URL)
 	if err := downloadModel(entry.URL, dest); err != nil {
-		return "", fmt.Errorf("ダウンロード失敗 (%s): %w", spec, err)
+		return "", fmt.Errorf("download failed (%s): %w", spec, err)
 	}
 	return dest, nil
 }

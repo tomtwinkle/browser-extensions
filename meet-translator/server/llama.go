@@ -38,7 +38,7 @@ defer C.free(unsafe.Pointer(cpath))
 
 h := C.llama_bridge_load_model(cpath, C.int(nGPULayers))
 if h == nil {
-return nil, fmt.Errorf("llama モデルのロードに失敗: %s", modelPath)
+return nil, fmt.Errorf("failed to load llama model: %s", modelPath)
 }
 return h, nil
 }
@@ -47,7 +47,7 @@ return h, nil
 // opts にモデル固有のオプション (thinking 等) を指定する。
 func (s *server) translateInternal(text, sourceLang, targetLang string, opts ModelOptions) (string, error) {
 if s.llamaModel == nil {
-return "", fmt.Errorf("llama モデルが初期化されていません")
+return "", fmt.Errorf("llama model not initialized")
 }
 
 template := templateFor(s.loadedModelSpec)
@@ -73,7 +73,7 @@ outBuf, C.int(outSize),
 errBuf, C.int(errSize),
 )
 if ret != 0 {
-return "", fmt.Errorf("llama_bridge_generate 失敗 (code=%d): %s", int(ret), C.GoString(errBuf))
+return "", fmt.Errorf("llama_bridge_generate failed (code=%d): %s", int(ret), C.GoString(errBuf))
 }
 
 result := strings.TrimSpace(C.GoString(outBuf))

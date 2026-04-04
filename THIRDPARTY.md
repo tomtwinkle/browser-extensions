@@ -101,3 +101,11 @@ SOFTWARE.
 - **ライセンス**: Apache License 2.0
 - **著作権**: Copyright (c) Google LLC
 - **備考**: Gemma 4 (2026年4月〜) は Apache 2.0 が適用されます。旧来の Gemma カスタムライセンスから変更されています。
+
+### CALM3-22B-Chat (CyberAgent, Inc.)
+
+- **配布元**: https://huggingface.co/cyberagent/calm3-22b-chat  
+  GGUF: https://huggingface.co/grapevine-AI/CALM3-22B-Chat-GGUF
+- **ライセンス**: Apache License 2.0
+- **著作権**: Copyright (c) CyberAgent, Inc.
+- **備考**: 日英バイリンガルに最適化された 22B モデル。
