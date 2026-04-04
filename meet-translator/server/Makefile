@@ -56,17 +56,17 @@ else
   CMAKE_GPU_FLAGS    := -DGGML_METAL=OFF -DGGML_BLAS=OFF
 endif
 
-# ── インクルード / ライブラリパス ──────────────────────────────────────────────
-INCLUDE_PATH := $(abspath $(LLAMA_DIR)/include):$(abspath $(WHISPER_DIR)/include):$(abspath $(LLAMA_DIR)/ggml/include)
+# ── インクルード / ライブラリパス (CGo 用) ────────────────────────────────────
+CGO_CFLAGS_VAL  := -I$(abspath $(LLAMA_DIR)/include) -I$(abspath $(WHISPER_DIR)/include) -I$(abspath $(LLAMA_DIR)/ggml/include)
 
-LIBRARY_PATH := $(abspath $(BUILD_DIR)/src):$(abspath $(BUILD_DIR)/ggml/src)
+CGO_LDFLAGS_VAL := -L$(abspath $(BUILD_DIR)/src) -L$(abspath $(BUILD_DIR)/ggml/src)
 
 ifeq ($(GPU_TARGET),metal)
-  LIBRARY_PATH := $(LIBRARY_PATH):$(abspath $(BUILD_DIR)/ggml/src/ggml-metal):$(abspath $(BUILD_DIR)/ggml/src/ggml-blas)
+  CGO_LDFLAGS_VAL := $(CGO_LDFLAGS_VAL) -L$(abspath $(BUILD_DIR)/ggml/src/ggml-metal) -L$(abspath $(BUILD_DIR)/ggml/src/ggml-blas)
 endif
 
 ifeq ($(GPU_TARGET),cuda)
-  LIBRARY_PATH := $(LIBRARY_PATH):$(abspath $(BUILD_DIR)/ggml/src/ggml-cuda)
+  CGO_LDFLAGS_VAL := $(CGO_LDFLAGS_VAL) -L$(abspath $(BUILD_DIR)/ggml/src/ggml-cuda)
 endif
 
 # ── OS 固有設定 ────────────────────────────────────────────────────────────────
@@ -110,19 +110,17 @@ $(BUILD_DIR)/.built: $(LLAMA_DIR) $(WHISPER_DIR)
 ## build: deps の後に Go バイナリをビルド
 build: deps
 	@echo "[go build] tags=$(GO_TAGS) GPU=$(GPU_TARGET)"
-	C_INCLUDE_PATH="$(INCLUDE_PATH)" \
-	LIBRARY_PATH="$(LIBRARY_PATH)" \
 	CGO_ENABLED=1 \
-	CGO_LDFLAGS="$(CGO_EXTRA_LDFLAGS)" \
+	CGO_CFLAGS="$(CGO_CFLAGS_VAL)" \
+	CGO_LDFLAGS="$(CGO_LDFLAGS_VAL) $(CGO_EXTRA_LDFLAGS)" \
 	go build $(if $(GO_TAGS),-tags $(GO_TAGS)) -o $(BIN) .
 
 ## test: CGo ヘッダーとライブラリパスを設定して go test を実行
 test: deps
 	@echo "[go test] tags=$(GO_TAGS) GPU=$(GPU_TARGET)"
-	C_INCLUDE_PATH="$(INCLUDE_PATH)" \
-	LIBRARY_PATH="$(LIBRARY_PATH)" \
 	CGO_ENABLED=1 \
-	CGO_LDFLAGS="$(CGO_EXTRA_LDFLAGS)" \
+	CGO_CFLAGS="$(CGO_CFLAGS_VAL)" \
+	CGO_LDFLAGS="$(CGO_LDFLAGS_VAL) $(CGO_EXTRA_LDFLAGS)" \
 	go test $(if $(GO_TAGS),-tags $(GO_TAGS)) -v -count=1 -timeout=120s ./...
 
 ## clean: バイナリと cmake ビルド成果物を削除
