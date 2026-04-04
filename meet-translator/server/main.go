@@ -111,10 +111,11 @@ fModelCacheDir   := flag.String("model-cache-dir",    "", "model cache directory
 _                 = flag.String("config",             "", "config file path (overrides MEET_TRANSLATOR_CONFIG)")
 
 flag.Usage = func() {
-fmt.Fprintf(os.Stderr, "Usage: meet-translator-server [options]\n\n")
-fmt.Fprintf(os.Stderr, "Settings are saved to config file and can be omitted on next run.\n")
-fmt.Fprintf(os.Stderr, "Config file: %s\n\n", configFilePath())
-fmt.Fprintf(os.Stderr, "Options:\n")
+w := flag.CommandLine.Output()
+fmt.Fprintf(w, "Usage: meet-translator-server [options]\n\n")
+fmt.Fprintf(w, "Settings are saved to config file and can be omitted on next run.\n")
+fmt.Fprintf(w, "Config file: %s\n\n", configFilePath())
+fmt.Fprintf(w, "Options:\n")
 flag.PrintDefaults()
 }
 flag.Parse()
@@ -321,9 +322,6 @@ cfg := loadConfig()
 // パラメーター未指定時はヘルプを表示して終了
 if cfg.whisperModel == "" && cfg.llamaModel == "" {
 printFullHelp()
-fmt.Fprintln(os.Stderr)
-fmt.Fprintf(os.Stderr, "%sExample:%s\n", colorYellow, colorReset)
-fmt.Fprintf(os.Stderr, "  meet-translator-server --whisper-model base --llama-model qwen3.5:4b-q4_k_m\n")
 os.Exit(0)
 }
 
