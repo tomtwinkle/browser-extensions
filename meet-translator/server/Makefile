@@ -46,7 +46,7 @@ ifeq ($(GPU_TARGET),metal)
   CMAKE_GPU_FLAGS    := -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_BLAS=ON
   GO_TAGS            := metal
   CGO_EXTRA_LDFLAGS  := -framework Foundation -framework Metal -framework MetalKit \
-                         -framework Accelerate -framework CoreGraphics
+	-framework Accelerate -framework CoreGraphics
 
 else ifeq ($(GPU_TARGET),cuda)
   CMAKE_GPU_FLAGS    := -DGGML_CUDA=ON -DGGML_CUDA_F16=ON
@@ -89,38 +89,38 @@ all: build
 deps: $(BUILD_DIR)/.built
 
 $(LLAMA_DIR):
-@echo "[deps] llama.cpp をクローン中 ($(LLAMA_VERSION))..."
-git clone --depth=1 --branch $(LLAMA_VERSION) \
-  https://github.com/ggerganov/llama.cpp.git $(LLAMA_DIR)
+	@echo "[deps] llama.cpp をクローン中 ($(LLAMA_VERSION))..."
+	git clone --depth=1 --branch $(LLAMA_VERSION) \
+	https://github.com/ggerganov/llama.cpp.git $(LLAMA_DIR)
 
 $(WHISPER_DIR):
-@echo "[deps] whisper.cpp をクローン中 ($(WHISPER_VERSION))..."
-git clone --depth=1 --branch $(WHISPER_VERSION) \
-  https://github.com/ggerganov/whisper.cpp.git $(WHISPER_DIR)
+	@echo "[deps] whisper.cpp をクローン中 ($(WHISPER_VERSION))..."
+	git clone --depth=1 --branch $(WHISPER_VERSION) \
+	https://github.com/ggerganov/whisper.cpp.git $(WHISPER_DIR)
 
 $(BUILD_DIR)/.built: $(LLAMA_DIR) $(WHISPER_DIR)
-@echo "[cmake] GPU=$(GPU_TARGET) でビルド中..."
-cmake -S . -B $(BUILD_DIR) \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_SHARED_LIBS=OFF \
-  $(CMAKE_GPU_FLAGS)
-cmake --build $(BUILD_DIR) $(CMAKE_BUILD_FLAGS) --target llama whisper
-@touch $(BUILD_DIR)/.built
+	@echo "[cmake] GPU=$(GPU_TARGET) でビルド中..."
+	cmake -S . -B $(BUILD_DIR) \
+	-DCMAKE_BUILD_TYPE=Release \
+	-DBUILD_SHARED_LIBS=OFF \
+	$(CMAKE_GPU_FLAGS)
+	cmake --build $(BUILD_DIR) $(CMAKE_BUILD_FLAGS) --target llama whisper
+	@touch $(BUILD_DIR)/.built
 
 ## build: deps の後に Go バイナリをビルド
 build: deps
-@echo "[go build] tags=$(GO_TAGS) GPU=$(GPU_TARGET)"
-C_INCLUDE_PATH="$(INCLUDE_PATH)" \
-LIBRARY_PATH="$(LIBRARY_PATH)" \
-CGO_ENABLED=1 \
-CGO_LDFLAGS="$(CGO_EXTRA_LDFLAGS)" \
-go build $(if $(GO_TAGS),-tags $(GO_TAGS)) -o $(BIN) .
+	@echo "[go build] tags=$(GO_TAGS) GPU=$(GPU_TARGET)"
+	C_INCLUDE_PATH="$(INCLUDE_PATH)" \
+	LIBRARY_PATH="$(LIBRARY_PATH)" \
+	CGO_ENABLED=1 \
+	CGO_LDFLAGS="$(CGO_EXTRA_LDFLAGS)" \
+	go build $(if $(GO_TAGS),-tags $(GO_TAGS)) -o $(BIN) .
 
 ## clean: バイナリと cmake ビルド成果物を削除
 clean:
-rm -f $(BIN)
-rm -rf $(BUILD_DIR)
+	rm -f $(BIN)
+	rm -rf $(BUILD_DIR)
 
 ## distclean: vendor を含め全削除
 distclean: clean
-rm -rf $(VENDOR_DIR)
+	rm -rf $(VENDOR_DIR)
