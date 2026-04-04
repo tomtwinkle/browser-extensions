@@ -25,22 +25,22 @@ colorReset  = "\033[0m"
 func runPreflight(cfg *config) {
 whisperPath, err := resolveWhisperModel(cfg.whisperModel)
 if err != nil {
-fmt.Fprintf(os.Stderr, "\n%s[ERROR] whisper モデルの解決に失敗: %v%s\n", colorRed, err, colorReset)
+fmt.Fprintf(os.Stderr, "\n%s[ERROR] failed to resolve whisper model: %v%s\n", colorRed, err, colorReset)
 fmt.Fprintln(os.Stderr)
 printWhisperHelp()
 fmt.Fprintln(os.Stderr)
-fmt.Fprintf(os.Stderr, "%s上記の問題を解決してから再度起動してください。%s\n", colorRed, colorReset)
+fmt.Fprintf(os.Stderr, "%sPlease fix the above issue and restart.%s\n", colorRed, colorReset)
 os.Exit(1)
 }
 cfg.whisperModel = whisperPath
 
 llamaPath, err := resolveLlamaModel(cfg.llamaModel)
 if err != nil {
-fmt.Fprintf(os.Stderr, "\n%s[ERROR] llama モデルの解決に失敗: %v%s\n", colorRed, err, colorReset)
+fmt.Fprintf(os.Stderr, "\n%s[ERROR] failed to resolve llama model: %v%s\n", colorRed, err, colorReset)
 fmt.Fprintln(os.Stderr)
 printLlamaHelp()
 fmt.Fprintln(os.Stderr)
-fmt.Fprintf(os.Stderr, "%s上記の問題を解決してから再度起動してください。%s\n", colorRed, colorReset)
+fmt.Fprintf(os.Stderr, "%sPlease fix the above issue and restart.%s\n", colorRed, colorReset)
 os.Exit(1)
 }
 cfg.llamaModel = llamaPath
@@ -50,20 +50,20 @@ cfg.llamaModel = llamaPath
 func printFullHelp() {
 flag.Usage()
 fmt.Fprintln(os.Stderr)
-fmt.Fprintf(os.Stderr, "%s━━ whisper model (音声認識) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n", colorYellow, colorReset)
+fmt.Fprintf(os.Stderr, "%s━━ whisper model (speech recognition) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n", colorYellow, colorReset)
 printWhisperHelp()
 fmt.Fprintln(os.Stderr)
-fmt.Fprintf(os.Stderr, "%s━━ llama model (翻訳 LLM) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n", colorYellow, colorReset)
+fmt.Fprintf(os.Stderr, "%s━━ llama model (translation LLM) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n", colorYellow, colorReset)
 printLlamaHelp()
 }
 
 func printWhisperHelp() {
-fmt.Fprintf(os.Stderr, "  モデル名を指定すると自動ダウンロードします:\n")
-fmt.Fprintf(os.Stderr, "    %s--whisper-model base%s           (推奨 142MB)\n", colorCyan, colorReset)
-fmt.Fprintf(os.Stderr, "    %s--whisper-model large-v3-turbo%s (高精度 809MB)\n", colorCyan, colorReset)
-fmt.Fprintf(os.Stderr, "    %s--whisper-model large-v3%s       (最高精度 3.1GB)\n", colorCyan, colorReset)
-fmt.Fprintf(os.Stderr, "  利用可能なモデル名: tiny / base / small / medium / large-v3 / large-v3-turbo\n")
-fmt.Fprintf(os.Stderr, "  既存ファイルを直接指定する場合:\n")
+fmt.Fprintf(os.Stderr, "  Specify a model name to auto-download:\n")
+fmt.Fprintf(os.Stderr, "    %s--whisper-model base%s           (recommended, 142MB)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "    %s--whisper-model large-v3-turbo%s (high accuracy, 809MB)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "    %s--whisper-model large-v3%s       (highest accuracy, 3.1GB)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "  Available: tiny / base / small / medium / large-v3 / large-v3-turbo\n")
+fmt.Fprintf(os.Stderr, "  To use an existing file directly:\n")
 if runtime.GOOS == "windows" {
 fmt.Fprintf(os.Stderr, "    --whisper-model C:\\path\\to\\ggml-base.bin\n")
 } else {
@@ -72,14 +72,14 @@ fmt.Fprintf(os.Stderr, "    --whisper-model ./ggml-base.bin\n")
 }
 
 func printLlamaHelp() {
-fmt.Fprintf(os.Stderr, "  モデル名を指定すると自動ダウンロードします:\n")
-fmt.Fprintf(os.Stderr, "    %s--llama-model qwen3.5:4b-q4_k_m%s   (推奨 3.2GB、Thinking対応)\n", colorCyan, colorReset)
-fmt.Fprintf(os.Stderr, "    %s--llama-model qwen3.5:9b-q4_k_m%s   (高精度 5.3GB、Thinking対応)\n", colorCyan, colorReset)
-fmt.Fprintf(os.Stderr, "    %s--llama-model qwen3:4b-q4_k_m%s     (Qwen3 2.6GB、Thinking対応)\n", colorCyan, colorReset)
-fmt.Fprintf(os.Stderr, "    %s--llama-model calm3:22b-q4_k_m%s    (日英特化 13GB、要16GB VRAM)\n", colorCyan, colorReset)
-fmt.Fprintf(os.Stderr, "    %s--llama-model gemma4:e4b-q4_k_m%s   (Gemma4 2.6GB)\n", colorCyan, colorReset)
-fmt.Fprintf(os.Stderr, "  Ollama でダウンロード済みのモデルは自動的に共有されます。\n")
-fmt.Fprintf(os.Stderr, "  既存ファイルを直接指定する場合:\n")
+fmt.Fprintf(os.Stderr, "  Specify a model name to auto-download:\n")
+fmt.Fprintf(os.Stderr, "    %s--llama-model qwen3.5:4b-q4_k_m%s   (recommended, 3.2GB, Thinking)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "    %s--llama-model qwen3.5:9b-q4_k_m%s   (high accuracy, 5.3GB, Thinking)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "    %s--llama-model qwen3:4b-q4_k_m%s     (Qwen3, 2.6GB, Thinking)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "    %s--llama-model calm3:22b-q4_k_m%s    (JA/EN specialist, 13GB, requires 16GB VRAM)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "    %s--llama-model gemma4:e4b-q4_k_m%s   (Gemma4, 2.6GB)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "  Models downloaded via Ollama are shared automatically.\n")
+fmt.Fprintf(os.Stderr, "  To use an existing file directly:\n")
 if runtime.GOOS == "windows" {
 fmt.Fprintf(os.Stderr, "    --llama-model C:\\path\\to\\model.gguf\n")
 } else {

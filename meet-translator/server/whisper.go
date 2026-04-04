@@ -27,7 +27,7 @@ defer C.free(unsafe.Pointer(cpath))
 
 ctx := C.whisper_bridge_init(cpath)
 if ctx == nil {
-return nil, fmt.Errorf("whisper モデルのロードに失敗: %s", modelPath)
+return nil, fmt.Errorf("failed to load whisper model: %s", modelPath)
 }
 return ctx, nil
 }
@@ -35,13 +35,13 @@ return ctx, nil
 // transcribeInternal は WAV バイト列を文字起こしして返す。
 func (s *server) transcribeInternal(audioData []byte, lang string) (string, error) {
 if s.whisperCtx == nil {
-return "", fmt.Errorf("whisper コンテキストが初期化されていません")
+return "", fmt.Errorf("whisper context not initialized")
 }
 
 // WAV をパース → 16kHz float32 に変換
 wav, err := parseWAV(bytes.NewReader(audioData))
 if err != nil {
-return "", fmt.Errorf("WAV パース失敗: %w", err)
+return "", fmt.Errorf("failed to parse WAV: %w", err)
 }
 samples := resampleTo16k(wav.samples, wav.sampleRate)
 if len(samples) == 0 {
@@ -69,7 +69,7 @@ outBuf, C.int(outSize),
 errBuf, C.int(errSize),
 )
 if ret != 0 {
-return "", fmt.Errorf("whisper_bridge_transcribe 失敗: %s", C.GoString(errBuf))
+return "", fmt.Errorf("whisper_bridge_transcribe failed: %s", C.GoString(errBuf))
 }
 
 return strings.TrimSpace(C.GoString(outBuf)), nil

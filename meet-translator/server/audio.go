@@ -26,10 +26,10 @@ func parseWAV(r io.Reader) (*wavData, error) {
 	// ---- RIFF チャンク ----
 	var riffID [4]byte
 	if _, err := io.ReadFull(r, riffID[:]); err != nil {
-		return nil, errors.New("WAV: RIFF ヘッダー読み取り失敗")
+		return nil, errors.New("WAV: failed to read RIFF header")
 	}
 	if string(riffID[:]) != "RIFF" {
-		return nil, errors.New("WAV: RIFF シグネチャが不正")
+		return nil, errors.New("WAV: invalid RIFF signature")
 	}
 	var chunkSize uint32
 	if err := binary.Read(r, binary.LittleEndian, &chunkSize); err != nil {
@@ -40,7 +40,7 @@ func parseWAV(r io.Reader) (*wavData, error) {
 		return nil, err
 	}
 	if string(waveID[:]) != "WAVE" {
-		return nil, errors.New("WAV: WAVE シグネチャが不正")
+		return nil, errors.New("WAV: invalid WAVE signature")
 	}
 
 	var (
@@ -55,7 +55,7 @@ func parseWAV(r io.Reader) (*wavData, error) {
 		var subID [4]byte
 		if _, err := io.ReadFull(r, subID[:]); err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil, errors.New("WAV: data チャンクが見つかりません")
+				return nil, errors.New("WAV: data chunk not found")
 			}
 			return nil, err
 		}
@@ -70,7 +70,7 @@ func parseWAV(r io.Reader) (*wavData, error) {
 				return nil, err
 			}
 			if audioFormat != 1 {
-				return nil, errors.New("WAV: PCM 以外のフォーマットは非対応")
+				return nil, errors.New("WAV: only PCM format is supported")
 			}
 			if err := binary.Read(r, binary.LittleEndian, &numChannels); err != nil {
 				return nil, err
@@ -96,10 +96,10 @@ func parseWAV(r io.Reader) (*wavData, error) {
 
 		case "data":
 			if sampleRate == 0 {
-				return nil, errors.New("WAV: fmt チャンクより先に data チャンクが出現")
+				return nil, errors.New("WAV: data chunk appeared before fmt chunk")
 			}
 			if bitsPerSamp != 16 {
-				return nil, errors.New("WAV: 16-bit PCM のみサポート")
+				return nil, errors.New("WAV: only 16-bit PCM is supported")
 			}
 			numSamples := int(subSize) / 2
 			pcm16 := make([]int16, numSamples)
