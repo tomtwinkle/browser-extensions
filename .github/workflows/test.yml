@@ -56,7 +56,7 @@ jobs:
           echo "C:/msys64/usr/bin" >> $GITHUB_PATH
 
       # キャッシュを有効化してビルドの再実行を高速化
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cache/go-build
