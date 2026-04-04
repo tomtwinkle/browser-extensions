@@ -12,7 +12,7 @@
 
 # pinned versions
 LLAMA_VERSION   := b8664
-WHISPER_VERSION := v1.7.4
+WHISPER_VERSION := v1.8.4
 
 OS_NAME   := $(shell uname -s 2>/dev/null || echo Windows_NT)
 ARCH_NAME := $(shell uname -m 2>/dev/null || echo x86_64)
