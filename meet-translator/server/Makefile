@@ -81,7 +81,7 @@ endif
 BIN := meet-translator-server$(BIN_EXT)
 
 # ── ターゲット ────────────────────────────────────────────────────────────────
-.PHONY: all build deps clean distclean
+.PHONY: all build deps test clean distclean
 
 all: build
 
@@ -115,6 +115,15 @@ build: deps
 	CGO_ENABLED=1 \
 	CGO_LDFLAGS="$(CGO_EXTRA_LDFLAGS)" \
 	go build $(if $(GO_TAGS),-tags $(GO_TAGS)) -o $(BIN) .
+
+## test: CGo ヘッダーとライブラリパスを設定して go test を実行
+test: deps
+	@echo "[go test] tags=$(GO_TAGS) GPU=$(GPU_TARGET)"
+	C_INCLUDE_PATH="$(INCLUDE_PATH)" \
+	LIBRARY_PATH="$(LIBRARY_PATH)" \
+	CGO_ENABLED=1 \
+	CGO_LDFLAGS="$(CGO_EXTRA_LDFLAGS)" \
+	go test $(if $(GO_TAGS),-tags $(GO_TAGS)) -v -count=1 -timeout=120s ./...
 
 ## clean: バイナリと cmake ビルド成果物を削除
 clean:
