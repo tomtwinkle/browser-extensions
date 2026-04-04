@@ -25,4 +25,4 @@ _thumbs/
 */expressionengine/cache/*
 
 # Pem
-*.pem
+*.pemmeet-translator/server/vendor/
