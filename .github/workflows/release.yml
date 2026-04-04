@@ -6,7 +6,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 defaults:
   run:
@@ -14,26 +13,46 @@ defaults:
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
-  # release-please: parse conventional commits → create/merge Release PR → tag
+  # tag: conventional commits を解析して version を bump し tag + release を作成
+  #   feat:           → minor bump (0.1.0 → 0.2.0)
+  #   fix: / others   → patch bump (0.1.0 → 0.1.1)
+  #   BREAKING CHANGE → minor bump (pre-major: stay in 0.x)
   # ────────────────────────────────────────────────────────────────────────────
-  release-please:
+  tag:
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name:        ${{ steps.release.outputs.tag_name }}
+      new_tag:   ${{ steps.tag.outputs.new_tag }}
+      changelog: ${{ steps.tag.outputs.changelog }}
     steps:
-      - uses: googleapis/release-please-action@16a9c90856f42705d54a6fda1823352bdc62cf38 # v4
-        id: release
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+          fetch-depth: 0
+
+      - name: Bump version and push tag
+        id: tag
+        uses: mathieudutour/github-tag-action@a22cf08638b34d5badda920f9daf6e72c477b07b # v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tag_prefix: v
+          default_bump: patch
+          initial_version: 0.1.0
+
+      - name: Create GitHub Release
+        if: steps.tag.outputs.new_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.tag.outputs.new_tag }}" \
+            --title "${{ steps.tag.outputs.new_tag }}" \
+            --notes "${{ steps.tag.outputs.changelog }}" \
+            --repo "${{ github.repository }}"
 
   # ────────────────────────────────────────────────────────────────────────────
-  # build-server: build server binaries for each platform (only on release)
+  # build-server: server binary を各 platform でビルドして release にアタッチ
   # ────────────────────────────────────────────────────────────────────────────
   build-server:
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
+    needs: tag
+    if: ${{ needs.tag.outputs.new_tag != '' }}
     name: Build server (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -84,8 +103,7 @@ jobs:
       - name: Archive (Unix)
         if: matrix.os != 'windows-latest'
         working-directory: meet-translator/server
-        run: |
-          tar czf meet-translator-server-${{ matrix.name }}.tar.gz meet-translator-server
+        run: tar czf meet-translator-server-${{ matrix.name }}.tar.gz meet-translator-server
 
       - name: Archive (Windows)
         if: matrix.os == 'windows-latest'
@@ -100,11 +118,11 @@ jobs:
             meet-translator/server/meet-translator-server-*.zip
 
   # ────────────────────────────────────────────────────────────────────────────
-  # package-extension: zip the browser extension
+  # package-extension: browser extension を zip にまとめる
   # ────────────────────────────────────────────────────────────────────────────
   package-extension:
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
+    needs: tag
+    if: ${{ needs.tag.outputs.new_tag != '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -120,10 +138,10 @@ jobs:
           path: meet-translator-extension.zip
 
   # ────────────────────────────────────────────────────────────────────────────
-  # upload-assets: upload all artifacts to the GitHub Release
+  # upload-assets: 全成果物を GitHub Release にアップロード
   # ────────────────────────────────────────────────────────────────────────────
   upload-assets:
-    needs: [release-please, build-server, package-extension]
+    needs: [tag, build-server, package-extension]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -139,10 +157,9 @@ jobs:
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.release-please.outputs.tag_name }}
+          TAG: ${{ needs.tag.outputs.new_tag }}
           REPO: ${{ github.repository }}
         run: |
           for f in artifacts/*; do
             [ -f "$f" ] && gh release upload "$TAG" "$f" --repo "$REPO" --clobber
           done
-
