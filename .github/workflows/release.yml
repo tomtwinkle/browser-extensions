@@ -52,7 +52,7 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   build-server:
     needs: tag
-    if: ${{ needs.tag.outputs.new_tag != '' }}
+    if: needs.tag.outputs.new_tag != ''
     name: Build server (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -122,7 +122,7 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   package-extension:
     needs: tag
-    if: ${{ needs.tag.outputs.new_tag != '' }}
+    if: needs.tag.outputs.new_tag != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -142,8 +142,8 @@ jobs:
   # ────────────────────────────────────────────────────────────────────────────
   upload-assets:
     needs: [tag, build-server, package-extension]
+    if: needs.tag.outputs.new_tag != ''
     runs-on: ubuntu-latest
-    steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts

@@ -48,7 +48,8 @@ GO_TAGS         :=
 CGO_EXTRA_LDFLAGS :=
 
 ifeq ($(GPU_TARGET),metal)
-  CMAKE_GPU_FLAGS    := -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_BLAS=ON
+  # GGML_NATIVE=OFF: avoid i8mm/sve/sme CPU feature errors on GitHub Actions runners
+  CMAKE_GPU_FLAGS    := -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_BLAS=ON -DGGML_NATIVE=OFF
   GO_TAGS            := metal
   CGO_EXTRA_LDFLAGS  := -framework Foundation -framework Metal -framework MetalKit \
 	-framework Accelerate -framework CoreGraphics
