@@ -17,6 +17,11 @@ WHISPER_VERSION := v1.7.4
 OS_NAME   := $(shell uname -s 2>/dev/null || echo Windows_NT)
 ARCH_NAME := $(shell uname -m 2>/dev/null || echo x86_64)
 
+# MSYS2/MinGW/Cygwin の uname は MINGW... / MSYS... / CYGWIN... を返すので Windows_NT に正規化
+ifneq ($(filter MINGW% MSYS% CYGWIN%,$(OS_NAME)),)
+  OS_NAME := Windows_NT
+endif
+
 VENDOR_DIR  := vendor
 BUILD_DIR   := $(VENDOR_DIR)/build
 LLAMA_DIR   := $(VENDOR_DIR)/llama.cpp
@@ -72,9 +77,11 @@ endif
 # ── OS 固有設定 ────────────────────────────────────────────────────────────────
 ifeq ($(OS_NAME),Windows_NT)
   CMAKE_BUILD_FLAGS := --config Release
+  CMAKE_GENERATOR   := -G "MinGW Makefiles"
   BIN_EXT           := .exe
 else
   CMAKE_BUILD_FLAGS := -j
+  CMAKE_GENERATOR   :=
   BIN_EXT           :=
 endif
 
@@ -101,6 +108,7 @@ $(WHISPER_DIR):
 $(BUILD_DIR)/.built: $(LLAMA_DIR) $(WHISPER_DIR)
 	@echo "[cmake] GPU=$(GPU_TARGET) でビルド中..."
 	cmake -S . -B $(BUILD_DIR) \
+	$(CMAKE_GENERATOR) \
 	-DCMAKE_BUILD_TYPE=Release \
 	-DBUILD_SHARED_LIBS=OFF \
 	$(CMAKE_GPU_FLAGS)

@@ -6,6 +6,8 @@
 package main
 
 /*
+#cgo CFLAGS:   -I./vendor/llama.cpp/include -I./vendor/whisper.cpp/include -I./vendor/llama.cpp/ggml/include
+#cgo CXXFLAGS: -I./vendor/llama.cpp/include -I./vendor/whisper.cpp/include -I./vendor/llama.cpp/ggml/include
 #include "whisper_bridge.h"
 #include <stdlib.h>
 */
