@@ -2,15 +2,20 @@
 //
 // 外部依存なし。whisper.cpp + llama.cpp を CGo で直接組み込んだシングルバイナリ。
 //
-// 設定 (環境変数):
-//   PORT              リスンポート                    (デフォルト: 7070)
-//   WHISPER_MODEL     whisper モデル名またはパス       (例: base, /path/to/ggml-base.bin)
-//   LLAMA_MODEL       llama モデル名またはパス         (例: qwen3:8b-q4_k_m, /path/to/model.gguf)
-//   LLAMA_GPU_LAYERS  GPU にオフロードするレイヤ数     (デフォルト: -1 = 全レイヤ)
-//   WHISPER_GPU_LAYERS 同上 whisper 用               (デフォルト: -1)
-//   MODEL_CACHE_DIR   モデルキャッシュディレクトリ     (デフォルト: OS 標準)
+// 設定の優先度 (高→低):
+//   CLI フラグ > config ファイル > 環境変数 > デフォルト値
 //
-// モデル名を指定した場合は自動ダウンロードし、Ollama のキャッシュも共有する。
+// CLI フラグ:
+//   --port              リスンポート                    (デフォルト: 7070)
+//   --whisper-model     whisper モデル名またはパス       (例: base)
+//   --llama-model       llama モデル名またはパス         (例: qwen3:8b-q4_k_m)
+//   --llama-gpu-layers  GPU にオフロードするレイヤ数     (デフォルト: -1 = 全レイヤ)
+//   --whisper-gpu-layers 同上 whisper 用
+//   --model-cache-dir   モデルキャッシュディレクトリ
+//   --config            config ファイルパスの上書き
+//
+// フラグを明示指定すると config ファイルに保存され、次回以降は省略可能。
+// config ファイルの場所: server_config.go の configFilePath() を参照。
 
 package main
 
@@ -23,6 +28,8 @@ import "C"
 import (
 "context"
 "encoding/json"
+"flag"
+"fmt"
 "io"
 "log"
 "net/http"
@@ -62,13 +69,91 @@ return n
 }
 return def
 }
-return config{
-port:             env("PORT", "7070"),
-whisperModel:     os.Getenv("WHISPER_MODEL"),
-llamaModel:       os.Getenv("LLAMA_MODEL"),
-llamaGPULayers:   envInt("LLAMA_GPU_LAYERS", -1),
-whisperGPULayers: envInt("WHISPER_GPU_LAYERS", -1),
+
+// ── Step 1: デフォルト値 ────────────────────────────────────────────────────
+cfg := config{
+port:             "7070",
+llamaGPULayers:   -1,
+whisperGPULayers: -1,
 }
+
+// ── Step 2: 環境変数で上書き (後方互換) ────────────────────────────────────
+cfg.port             = env("PORT", cfg.port)
+cfg.whisperModel     = os.Getenv("WHISPER_MODEL")
+cfg.llamaModel       = os.Getenv("LLAMA_MODEL")
+cfg.llamaGPULayers   = envInt("LLAMA_GPU_LAYERS", cfg.llamaGPULayers)
+cfg.whisperGPULayers = envInt("WHISPER_GPU_LAYERS", cfg.whisperGPULayers)
+
+// ── Step 3: config ファイルで上書き ────────────────────────────────────────
+fileCfg, err := loadConfigFile()
+if err != nil {
+log.Printf("[config] ファイル読み込みエラー (無視): %v", err)
+} else {
+if fileCfg.Port != ""         { cfg.port = fileCfg.Port }
+if fileCfg.WhisperModel != "" { cfg.whisperModel = fileCfg.WhisperModel }
+if fileCfg.LlamaModel != ""   { cfg.llamaModel = fileCfg.LlamaModel }
+if fileCfg.LlamaGPULayers != nil   { cfg.llamaGPULayers = *fileCfg.LlamaGPULayers }
+if fileCfg.WhisperGPULayers != nil { cfg.whisperGPULayers = *fileCfg.WhisperGPULayers }
+if fileCfg.ModelCacheDir != "" {
+os.Setenv("MODEL_CACHE_DIR", fileCfg.ModelCacheDir)
+}
+}
+
+// ── Step 4: CLI フラグで上書き (最高優先度) ───────────────────────────────
+fPort            := flag.String("port",               "", "リスンポート (デフォルト: 7070)")
+fWhisperModel    := flag.String("whisper-model",      "", "whisper モデル名またはパス (例: base, small)")
+fLlamaModel      := flag.String("llama-model",        "", "llama モデル名またはパス (例: qwen3:8b-q4_k_m)")
+fLlamaGPU        := flag.Int("llama-gpu-layers",    -999, "llama GPU レイヤ数 (-1=全レイヤ, 0=CPU)")
+fWhisperGPU      := flag.Int("whisper-gpu-layers",  -999, "whisper GPU レイヤ数")
+fModelCacheDir   := flag.String("model-cache-dir",    "", "モデルキャッシュディレクトリ")
+_                 = flag.String("config",             "", "config ファイルパス (MEET_TRANSLATOR_CONFIG と同等)")
+
+flag.Usage = func() {
+fmt.Fprintf(os.Stderr, "使い方: meet-translator-server [オプション]\n\n")
+fmt.Fprintf(os.Stderr, "設定は config ファイルに保存され、次回以降は省略可能です。\n")
+fmt.Fprintf(os.Stderr, "config ファイル: %s\n\n", configFilePath())
+fmt.Fprintf(os.Stderr, "オプション:\n")
+flag.PrintDefaults()
+}
+flag.Parse()
+
+// 明示指定されたフラグを収集
+explicitFlags := map[string]bool{}
+flag.Visit(func(f *flag.Flag) { explicitFlags[f.Name] = true })
+
+if explicitFlags["port"]             { cfg.port = *fPort }
+if explicitFlags["whisper-model"]    { cfg.whisperModel = *fWhisperModel }
+if explicitFlags["llama-model"]      { cfg.llamaModel = *fLlamaModel }
+if explicitFlags["llama-gpu-layers"] { cfg.llamaGPULayers = *fLlamaGPU }
+if explicitFlags["whisper-gpu-layers"] { cfg.whisperGPULayers = *fWhisperGPU }
+if explicitFlags["model-cache-dir"]  {
+os.Setenv("MODEL_CACHE_DIR", *fModelCacheDir)
+}
+if explicitFlags["config"] {
+os.Setenv("MEET_TRANSLATOR_CONFIG", flag.Lookup("config").Value.String())
+}
+
+// ── Step 5: フラグが明示指定されていれば config ファイルに保存 ──────────────
+if len(explicitFlags) > 0 {
+save := persistedConfig{
+Port:          cfg.port,
+WhisperModel:  cfg.whisperModel,
+LlamaModel:    cfg.llamaModel,
+ModelCacheDir: os.Getenv("MODEL_CACHE_DIR"),
+}
+n := cfg.llamaGPULayers
+save.LlamaGPULayers = &n
+w := cfg.whisperGPULayers
+save.WhisperGPULayers = &w
+
+if err := saveConfigFile(save); err != nil {
+log.Printf("[config] 保存エラー (無視): %v", err)
+} else {
+log.Printf("[config] 設定を保存しました: %s", configFilePath())
+}
+}
+
+return cfg
 }
 
 // ---------------------------------------------------------------------------
