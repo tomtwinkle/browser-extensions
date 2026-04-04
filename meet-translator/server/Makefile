@@ -69,7 +69,9 @@ CGO_CFLAGS_VAL  := -I$(abspath $(LLAMA_DIR)/include) -I$(abspath $(WHISPER_DIR)/
 
 CGO_LDFLAGS_VAL := -L$(abspath $(BUILD_DIR)/vendor/llama.cpp/src) \
                    -L$(abspath $(BUILD_DIR)/vendor/whisper.cpp/src) \
-                   -L$(abspath $(BUILD_DIR)/vendor/llama.cpp/ggml/src)
+                   -L$(abspath $(BUILD_DIR)/vendor/llama.cpp/ggml/src) \
+                   -L$(abspath $(BUILD_DIR)/vendor/llama.cpp/ggml/src/ggml-metal) \
+                   -L$(abspath $(BUILD_DIR)/vendor/llama.cpp/ggml/src/ggml-blas)
 
 # ── OS-specific settings ──────────────────────────────────────────────────────
 ifeq ($(OS_NAME),Windows_NT)
