@@ -113,6 +113,15 @@ $(BUILD_DIR)/.built: $(LLAMA_DIR) $(WHISPER_DIR)
 	-DBUILD_SHARED_LIBS=OFF \
 	$(CMAKE_GPU_FLAGS)
 	cmake --build $(BUILD_DIR) $(CMAKE_BUILD_FLAGS) --target llama whisper
+	@if [ "$(OS_NAME)" = "Windows_NT" ]; then \
+		GGML_SRC="$(BUILD_DIR)/vendor/llama.cpp/ggml/src"; \
+		for lib in ggml ggml-base ggml-cpu; do \
+			if [ -f "$$GGML_SRC/$$lib.a" ] && [ ! -f "$$GGML_SRC/lib$$lib.a" ]; then \
+				echo "[fix] $$lib.a -> lib$$lib.a"; \
+				cp "$$GGML_SRC/$$lib.a" "$$GGML_SRC/lib$$lib.a"; \
+			fi; \
+		done; \
+	fi
 	@touch $(BUILD_DIR)/.built
 
 ## build: deps の後に Go バイナリをビルド
