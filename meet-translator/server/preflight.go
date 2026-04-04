@@ -7,6 +7,7 @@
 package main
 
 import (
+"flag"
 "fmt"
 "os"
 "runtime"
@@ -24,7 +25,8 @@ colorReset  = "\033[0m"
 func runPreflight(cfg *config) {
 whisperPath, err := resolveWhisperModel(cfg.whisperModel)
 if err != nil {
-fmt.Fprintf(os.Stderr, "\n%s[ERROR] WHISPER_MODEL の解決に失敗: %v%s\n", colorRed, err, colorReset)
+fmt.Fprintf(os.Stderr, "\n%s[ERROR] whisper モデルの解決に失敗: %v%s\n", colorRed, err, colorReset)
+fmt.Fprintln(os.Stderr)
 printWhisperHelp()
 fmt.Fprintln(os.Stderr)
 fmt.Fprintf(os.Stderr, "%s上記の問題を解決してから再度起動してください。%s\n", colorRed, colorReset)
@@ -34,7 +36,8 @@ cfg.whisperModel = whisperPath
 
 llamaPath, err := resolveLlamaModel(cfg.llamaModel)
 if err != nil {
-fmt.Fprintf(os.Stderr, "\n%s[ERROR] LLAMA_MODEL の解決に失敗: %v%s\n", colorRed, err, colorReset)
+fmt.Fprintf(os.Stderr, "\n%s[ERROR] llama モデルの解決に失敗: %v%s\n", colorRed, err, colorReset)
+fmt.Fprintln(os.Stderr)
 printLlamaHelp()
 fmt.Fprintln(os.Stderr)
 fmt.Fprintf(os.Stderr, "%s上記の問題を解決してから再度起動してください。%s\n", colorRed, colorReset)
@@ -43,30 +46,43 @@ os.Exit(1)
 cfg.llamaModel = llamaPath
 }
 
+// printFullHelp はパラメーター未指定時のフルヘルプを表示する。
+func printFullHelp() {
+flag.Usage()
+fmt.Fprintln(os.Stderr)
+fmt.Fprintf(os.Stderr, "%s━━ whisper model (音声認識) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n", colorYellow, colorReset)
+printWhisperHelp()
+fmt.Fprintln(os.Stderr)
+fmt.Fprintf(os.Stderr, "%s━━ llama model (翻訳 LLM) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n", colorYellow, colorReset)
+printLlamaHelp()
+}
+
 func printWhisperHelp() {
-fmt.Fprintf(os.Stderr, "%s使い方:%s\n", colorYellow, colorReset)
 fmt.Fprintf(os.Stderr, "  モデル名を指定すると自動ダウンロードします:\n")
-fmt.Fprintf(os.Stderr, "    %sWHISPER_MODEL=base%s  (推奨)\n", colorCyan, colorReset)
-fmt.Fprintf(os.Stderr, "  利用可能なモデル名: tiny / base / small / medium / large-v3 など\n")
-fmt.Fprintf(os.Stderr, "  既存ファイルを指定する場合:\n")
+fmt.Fprintf(os.Stderr, "    %s--whisper-model base%s           (推奨 142MB)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "    %s--whisper-model large-v3-turbo%s (高精度 809MB)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "    %s--whisper-model large-v3%s       (最高精度 3.1GB)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "  利用可能なモデル名: tiny / base / small / medium / large-v3 / large-v3-turbo\n")
+fmt.Fprintf(os.Stderr, "  既存ファイルを直接指定する場合:\n")
 if runtime.GOOS == "windows" {
-fmt.Fprintf(os.Stderr, "    set WHISPER_MODEL=C:\\path\\to\\ggml-base.bin\n")
+fmt.Fprintf(os.Stderr, "    --whisper-model C:\\path\\to\\ggml-base.bin\n")
 } else {
-fmt.Fprintf(os.Stderr, "    export WHISPER_MODEL=./ggml-base.bin\n")
+fmt.Fprintf(os.Stderr, "    --whisper-model ./ggml-base.bin\n")
 }
 }
 
 func printLlamaHelp() {
-fmt.Fprintf(os.Stderr, "%s使い方:%s\n", colorYellow, colorReset)
 fmt.Fprintf(os.Stderr, "  モデル名を指定すると自動ダウンロードします:\n")
-fmt.Fprintf(os.Stderr, "    %sLLAMA_MODEL=qwen2.5:7b-instruct-q4_k_m%s  (Qwen2.5 推奨)\n", colorCyan, colorReset)
-fmt.Fprintf(os.Stderr, "    %sLLAMA_MODEL=qwen3:8b-q4_k_m%s             (Qwen3、thinking対応)\n", colorCyan, colorReset)
-fmt.Fprintf(os.Stderr, "    %sLLAMA_MODEL=gemma4:e4b-q4_k_m%s           (Gemma4)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "    %s--llama-model qwen3.5:4b-q4_k_m%s   (推奨 3.2GB、Thinking対応)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "    %s--llama-model qwen3.5:9b-q4_k_m%s   (高精度 5.3GB、Thinking対応)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "    %s--llama-model qwen3:4b-q4_k_m%s     (Qwen3 2.6GB、Thinking対応)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "    %s--llama-model calm3:22b-q4_k_m%s    (日英特化 13GB、要16GB VRAM)\n", colorCyan, colorReset)
+fmt.Fprintf(os.Stderr, "    %s--llama-model gemma4:e4b-q4_k_m%s   (Gemma4 2.6GB)\n", colorCyan, colorReset)
 fmt.Fprintf(os.Stderr, "  Ollama でダウンロード済みのモデルは自動的に共有されます。\n")
-fmt.Fprintf(os.Stderr, "  既存ファイルを指定する場合:\n")
+fmt.Fprintf(os.Stderr, "  既存ファイルを直接指定する場合:\n")
 if runtime.GOOS == "windows" {
-fmt.Fprintf(os.Stderr, "    set LLAMA_MODEL=C:\\path\\to\\model.gguf\n")
+fmt.Fprintf(os.Stderr, "    --llama-model C:\\path\\to\\model.gguf\n")
 } else {
-fmt.Fprintf(os.Stderr, "    export LLAMA_MODEL=./model.gguf\n")
+fmt.Fprintf(os.Stderr, "    --llama-model ./model.gguf\n")
 }
 }

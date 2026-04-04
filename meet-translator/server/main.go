@@ -318,6 +318,15 @@ return nil
 func main() {
 cfg := loadConfig()
 
+// パラメーター未指定時はヘルプを表示して終了
+if cfg.whisperModel == "" && cfg.llamaModel == "" {
+printFullHelp()
+fmt.Fprintln(os.Stderr)
+fmt.Fprintf(os.Stderr, "%s起動例:%s\n", colorYellow, colorReset)
+fmt.Fprintf(os.Stderr, "  meet-translator-server --whisper-model base --llama-model qwen3.5:4b-q4_k_m\n")
+os.Exit(0)
+}
+
 // モデル名解決 (自動ダウンロード・Ollama キャッシュ共有)
 originalModelSpec := cfg.llamaModel
 runPreflight(&cfg)

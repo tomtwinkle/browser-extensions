@@ -108,6 +108,12 @@ var llamaRegistry = map[string]LlamaEntry{
 		HasThinking: true,
 	},
 
+	// ── CALM3 (日英特化, CyberAgent, Apache 2.0) ──────────────────────────────
+	"calm3:22b-q4_k_m": {
+		URL:      "https://huggingface.co/grapevine-AI/CALM3-22B-Chat-GGUF/resolve/main/calm3-22b-chat-Q4_K_M.gguf",
+		Template: "qwen",
+	},
+
 	// ── Gemma 4 ──────────────────────────────────────────────────────────────
 	"gemma4:e2b-q4_k_m": {
 		URL:      "https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/main/google_gemma-4-E2B-it-Q4_K_M.gguf",
