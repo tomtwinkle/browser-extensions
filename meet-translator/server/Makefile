@@ -74,10 +74,13 @@ CGO_LDFLAGS_VAL := -L$(abspath $(BUILD_DIR)/vendor/llama.cpp/src) \
 ifeq ($(OS_NAME),Windows_NT)
   CMAKE_BUILD_FLAGS := --config Release
   CMAKE_GENERATOR   := -G "MinGW Makefiles"
+  # Windows MinGW: ggml cmake が lib プレフィックスなしで .a を生成する場合があるため強制指定
+  CMAKE_EXTRA_FLAGS := -DCMAKE_STATIC_LIBRARY_PREFIX=lib
   BIN_EXT           := .exe
 else
   CMAKE_BUILD_FLAGS := -j
   CMAKE_GENERATOR   :=
+  CMAKE_EXTRA_FLAGS :=
   BIN_EXT           :=
 endif
 
@@ -105,6 +108,7 @@ $(BUILD_DIR)/.built: $(LLAMA_DIR) $(WHISPER_DIR)
 	@echo "[cmake] GPU=$(GPU_TARGET) でビルド中..."
 	cmake -S . -B $(BUILD_DIR) \
 	$(CMAKE_GENERATOR) \
+	$(CMAKE_EXTRA_FLAGS) \
 	-DCMAKE_BUILD_TYPE=Release \
 	-DBUILD_SHARED_LIBS=OFF \
 	$(CMAKE_GPU_FLAGS)
