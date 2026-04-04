@@ -172,16 +172,21 @@ model名を `--whisper-model` に指定すると自動downloadします。
 
 model名を `--llama-model` に指定すると自動downloadします。
 
-| model名 | size | 備考 |
-|---|---|---|
-| `qwen3:0.6b-q4_k_m` | ≈ 0.4 GB | 最軽量、Thinking 対応 |
-| `qwen3:1.7b-q4_k_m` | ≈ 1.1 GB | Thinking 対応 |
-| `qwen3:4b-q4_k_m`   | ≈ 2.6 GB | **推奨**、Thinking 対応 |
-| `qwen3:8b-q4_k_m`   | ≈ 5.2 GB | 高精度、Thinking 対応 |
-| `qwen2.5:7b-instruct-q4_k_m` | ≈ 4.7 GB | 安定版 |
-| `gemma4:e2b-q4_k_m` | ≈ 1.3 GB | Google Gemma 4 |
-| `gemma4:e4b-q4_k_m` | ≈ 2.6 GB | Google Gemma 4 |
-| `gemma4:26b-q4_k_m` | ≈ 16 GB | Google Gemma 4 高精度 |
+| model名 | size | ライセンス | 備考 |
+|---|---|---|---|
+| `qwen3:0.6b-q4_k_m` | ≈ 0.4 GB | Apache 2.0 | 最軽量、Thinking 対応 |
+| `qwen3:1.7b-q4_k_m` | ≈ 1.1 GB | Apache 2.0 | Thinking 対応 |
+| `qwen3:4b-q4_k_m`   | ≈ 2.6 GB | Apache 2.0 | **推奨**、Thinking 対応 |
+| `qwen3:8b-q4_k_m`   | ≈ 5.2 GB | Apache 2.0 | 高精度、Thinking 対応 |
+| `qwen3.5:0.8b-q4_k_m` | ≈ 0.6 GB | Apache 2.0 | 最軽量、Thinking 対応 |
+| `qwen3.5:2b-q4_k_m`   | ≈ 1.4 GB | Apache 2.0 | Thinking 対応 |
+| `qwen3.5:4b-q4_k_m`   | ≈ 3.2 GB | Apache 2.0 | **推奨**、Thinking 対応 |
+| `qwen3.5:9b-q4_k_m`   | ≈ 5.3 GB | Apache 2.0 | 高精度、Thinking 対応 |
+| `qwen2.5:7b-instruct-q4_k_m` | ≈ 4.7 GB | Apache 2.0 | 安定版 |
+| `qwen2.5:14b-instruct-q4_k_m` | ≈ 8.7 GB | Apache 2.0 | 高精度版 |
+| `gemma4:e2b-q4_k_m` | ≈ 1.3 GB | Apache 2.0 | Google Gemma 4 |
+| `gemma4:e4b-q4_k_m` | ≈ 2.6 GB | Apache 2.0 | Google Gemma 4 |
+| `gemma4:26b-q4_k_m` | ≈ 16 GB | Apache 2.0 | Google Gemma 4 高精度 |
 
 file pathを直接指定することも可能です:
 
@@ -189,9 +194,9 @@ file pathを直接指定することも可能です:
 ./meet-translator-server --llama-model /path/to/model.gguf
 ```
 
-### Thinking mode (Qwen3)
+### Thinking mode (Qwen3 / Qwen3.5)
 
-Qwen3 系modelは **Thinking mode** に対応しています。  
+Qwen3 系および Qwen3.5 系modelは **Thinking mode** に対応しています。  
 `<think>...</think>` で推論を展開してから翻訳するため精度が向上しますが、latencyが増加します。
 
 request時に `llama_options` fieldで制御できます:
@@ -244,22 +249,25 @@ request時に `llama_options` fieldで制御できます:
 
 ## release (GitHub Actions)
 
-`main` branchへのmerge時に **release-please** が conventional commits を解析し、  
-自動でversionを決定して Release PR を作成します。
+`main` branchへのmerge時に conventional commits を解析し、  
+自動でversionを決定してgit tagと GitHub Release を作成します。
 
 | commit prefix | bump | 例 |
 |---|---|---|
 | `feat:` | minor | `0.1.0 → 0.2.0` |
 | `fix:` | patch | `0.1.0 → 0.1.1` |
 
-Release PR をmergeすると各platformのbinaryと拡張機能 zip が  
+releaseが作成されると各platformのbinaryと拡張機能 zip が  
 自動buildされ GitHub Release にuploadされます。
 
 ---
 
 ## CI
 
-pull request時に以下の 4 platformでbuild・testが実行されます：
+pull request時に以下の 2 種類のworkflowが 4 platformで実行されます：
+
+**Test** (`test.yml`): ビルド + Go テスト  
+**Execute Test** (`execute-test.yml`): ビルド環境と実行環境を分離し、クリーンなrunnerでバイナリの動作を検証
 
 | platform | runner |
 |---|---|
@@ -289,4 +297,8 @@ pull request時に以下の 4 platformでbuild・testが実行されます：
 This software embeds [whisper.cpp](https://github.com/ggerganov/whisper.cpp) and
 [llama.cpp](https://github.com/ggerganov/llama.cpp), both released under the MIT License.
 
-See [THIRDPARTY.md](./THIRDPARTY.md) for the full copyright and permission notices.
+Models downloaded at runtime (Whisper, Qwen3, Qwen2.5-7B/14B, Gemma4) are released
+under MIT or Apache 2.0. Qwen2.5-3B is excluded from the registry as it carries a
+non-commercial-only license.
+
+See [THIRDPARTY.md](./THIRDPARTY.md) for full copyright notices and model license details.

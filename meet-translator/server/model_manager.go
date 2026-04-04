@@ -53,10 +53,8 @@ type LlamaEntry struct {
 
 var llamaRegistry = map[string]LlamaEntry{
 	// ── Qwen2.5 ──────────────────────────────────────────────────────────────
-	"qwen2.5:3b-instruct-q4_k_m": {
-		URL:      "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
-		Template: "qwen",
-	},
+	// NOTE: qwen2.5:3b は Qwen Research License（非商用専用）のため除外。
+	//       Qwen2.5-7B 以上および Qwen3 全サイズは Apache 2.0。
 	"qwen2.5:7b-instruct-q4_k_m": {
 		URL:      "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf",
 		Template: "qwen",
@@ -84,6 +82,28 @@ var llamaRegistry = map[string]LlamaEntry{
 	},
 	"qwen3:8b-q4_k_m": {
 		URL:         "https://huggingface.co/unsloth/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
+		Template:    "qwen3",
+		HasThinking: true,
+	},
+
+	// ── Qwen3.5 (thinking 対応, Unsloth GGUF) ────────────────────────────────
+	"qwen3.5:0.8b-q4_k_m": {
+		URL:         "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf",
+		Template:    "qwen3",
+		HasThinking: true,
+	},
+	"qwen3.5:2b-q4_k_m": {
+		URL:         "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf",
+		Template:    "qwen3",
+		HasThinking: true,
+	},
+	"qwen3.5:4b-q4_k_m": {
+		URL:         "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
+		Template:    "qwen3",
+		HasThinking: true,
+	},
+	"qwen3.5:9b-q4_k_m": {
+		URL:         "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
 		Template:    "qwen3",
 		HasThinking: true,
 	},
