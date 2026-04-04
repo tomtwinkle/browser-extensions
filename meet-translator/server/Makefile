@@ -72,10 +72,11 @@ CGO_LDFLAGS_VAL := -L$(abspath $(BUILD_DIR)/vendor/llama.cpp/src) \
 
 # ── OS 固有設定 ────────────────────────────────────────────────────────────────
 ifeq ($(OS_NAME),Windows_NT)
-  CMAKE_BUILD_FLAGS := --config Release
-  CMAKE_GENERATOR   := -G "MinGW Makefiles"
-  # Windows MinGW: ggml cmake が lib プレフィックスなしで .a を生成する場合があるため強制指定
-  CMAKE_EXTRA_FLAGS := -DCMAKE_STATIC_LIBRARY_PREFIX=lib
+  # Ninja: Go CGo と同じ C:\mingw64\bin\gcc を使う (MSYS2 混在回避)
+  # GGML_OPENMP=OFF: OpenMP 依存を除去 (-lgomp 不要にする)
+  CMAKE_GENERATOR   := -G Ninja
+  CMAKE_EXTRA_FLAGS := -DCMAKE_STATIC_LIBRARY_PREFIX=lib -DGGML_OPENMP=OFF
+  CMAKE_BUILD_FLAGS :=
   BIN_EXT           := .exe
 else
   CMAKE_BUILD_FLAGS := -j

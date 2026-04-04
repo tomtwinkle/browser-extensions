@@ -54,8 +54,8 @@ jobs:
       - name: Install build tools (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          # MSYS2 の gcc/g++/make を PATH に追加
-          echo "C:/msys64/mingw64/bin" >> $GITHUB_PATH
+          # MSYS2 bash provides make natively; only add usr/bin for POSIX tools
+          # Do NOT add msys64/mingw64/bin - Go CGo uses C:\mingw64 and cmake must match
           echo "C:/msys64/usr/bin" >> $GITHUB_PATH
 
       # キャッシュを有効化してビルドの再実行を高速化
