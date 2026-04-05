@@ -110,10 +110,9 @@ function calcRms(chunks) {
 // ---------------------------------------------------------------------------
 // Audio helpers
 // ---------------------------------------------------------------------------
-/** Start audio processing with the tab stream, and optionally mix in mic. */
-function startAudioProcessing(stream, micMediaStream) {
+/** Start audio processing. tabStream and/or micMediaStream can be null. */
+function startAudioProcessing(tabStream, micMediaStream) {
   audioContext = new AudioContext();
-  mediaStream = stream;
   bgLog('info', 'AudioContext created, state=' + audioContext.state + ' sampleRate=' + audioContext.sampleRate);
 
   // Resume in case AudioContext starts suspended (Chrome autoplay policy)
@@ -128,16 +127,19 @@ function startAudioProcessing(stream, micMediaStream) {
     collectedSamples.push(new Float32Array(inputData)); // copy the buffer
   };
 
-  // Tab audio source
-  sourceNode = audioContext.createMediaStreamSource(stream);
-  sourceNode.connect(processorNode);
+  // Tab audio source (null when mic-only)
+  if (tabStream) {
+    mediaStream = tabStream;
+    sourceNode = audioContext.createMediaStreamSource(tabStream);
+    sourceNode.connect(processorNode);
+  }
 
   // Microphone source – mixed into the same processor node (signals are summed)
   if (micMediaStream) {
     micStream = micMediaStream;
     micSourceNode = audioContext.createMediaStreamSource(micMediaStream);
     micSourceNode.connect(processorNode);
-    bgLog('info', 'microphone mixed in');
+    bgLog('info', 'microphone source connected');
   }
 
   // Connect to destination so the graph stays alive
@@ -210,52 +212,48 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   switch (message.type) {
 
     case 'OFFSCREEN_START_AUDIO': {
-      console.info('[offscreen] OFFSCREEN_START_AUDIO received, streamId=', message.streamId);
+      bgLog('info', 'OFFSCREEN_START_AUDIO received, audioSource=' + message.audioSource);
       // Acknowledge receipt synchronously so background.js knows the doc is ready
       sendResponse({ ack: true });
 
-      // Chrome tab capture requires both audio AND video in mandatory constraints.
-      // Video tracks are stopped immediately after the stream is obtained.
-      const streamId = message.streamId;
+      const { streamId, audioSource } = message;
       (async () => {
-        bgLog('info', 'calling getUserMedia...');
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              mandatory: {
-                chromeMediaSource: 'tab',
-                chromeMediaSourceId: streamId,
-              },
-            },
-            video: {
-              mandatory: {
-                chromeMediaSource: 'tab',
-                chromeMediaSourceId: streamId,
-              },
-            },
-          });
-          // Keep video tracks alive – stopping them can mute the shared tab capture source.
-          // We simply disconnect video from the audio graph so it has no effect on output.
-          const audioTracks = stream.getAudioTracks();
-          bgLog('info', 'getUserMedia succeeded, audio tracks=' + audioTracks.length
-            + ' video tracks=' + stream.getVideoTracks().length);
-          audioTracks.forEach((t) =>
-            bgLog('info', 'audio track: label=' + t.label + ' enabled=' + t.enabled + ' readyState=' + t.readyState));
+        // --- Tab stream ---
+        let tabStream = null;
+        if (audioSource !== 'mic-only' && streamId) {
+          bgLog('info', 'calling getUserMedia (tab)...');
+          try {
+            tabStream = await navigator.mediaDevices.getUserMedia({
+              audio: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId } },
+              video: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId } },
+            });
+            const at = tabStream.getAudioTracks();
+            bgLog('info', 'tab stream ok, audio tracks=' + at.length + ' video tracks=' + tabStream.getVideoTracks().length);
+            at.forEach((t) => bgLog('info', 'tab audio: label=' + t.label + ' enabled=' + t.enabled + ' state=' + t.readyState));
+          } catch (err) {
+            bgLog('error', 'tab getUserMedia failed: ' + err.name + ' ' + err.message);
+          }
+        }
 
-          // Try to also capture microphone so user's own voice is included.
-          // Permission should have been pre-granted by the popup.
-          let micMediaStream = null;
+        // --- Microphone stream ---
+        let micMediaStream = null;
+        if (audioSource !== 'tab-only') {
+          bgLog('info', 'calling getUserMedia (mic)...');
           try {
             micMediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-            bgLog('info', 'microphone stream obtained, tracks=' + micMediaStream.getAudioTracks().length);
-          } catch (micErr) {
-            bgLog('warn', 'microphone access failed (tab-only capture): ' + micErr.name + ' ' + micErr.message);
+            bgLog('info', 'mic stream ok, tracks=' + micMediaStream.getAudioTracks().length);
+          } catch (err) {
+            bgLog('warn', 'mic getUserMedia failed (continuing without mic): ' + err.name + ' ' + err.message);
           }
-
-          startAudioProcessing(stream, micMediaStream);
-        } catch (err) {
-          bgLog('error', 'getUserMedia failed: ' + err.name + ' ' + err.message);
         }
+
+        if (!tabStream && !micMediaStream) {
+          bgLog('error', 'no audio source available – aborting');
+          return;
+        }
+
+        startAudioProcessing(tabStream, micMediaStream);
+      })();
       })();
       return false; // sendResponse was already called synchronously
     }

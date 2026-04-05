@@ -36,6 +36,7 @@ async function getSettings() {
     whisperModel:  'base',
     llamaModel:    '',
     llamaThinking: true,
+    audioSource:   'mic-only', // 'both' | 'mic-only' | 'tab-only'
   };
   const stored = await chrome.storage.local.get(Object.keys(defaults));
   return { ...defaults, ...stored };
@@ -182,26 +183,33 @@ async function startCapture(tabId) {
     // Make sure the offscreen document is ready for audio processing
     await ensureOffscreenDocument();
 
-    // getMediaStreamId をラップして失敗時にエラーを呼び出し元まで伝播させる
-    const streamId = await new Promise((resolve, reject) => {
-      chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
-        if (chrome.runtime.lastError || !id) {
-          reject(new Error(chrome.runtime.lastError?.message ?? 'tabCapture: failed to get stream ID'));
-        } else {
-          resolve(id);
-        }
-      });
-    });
+    const cfg = await getSettings();
+    const needsTabCapture = cfg.audioSource !== 'mic-only';
 
-    // Forward the stream ID to the offscreen document and wait for ack
+    // tab 音声が必要な場合のみ getMediaStreamId を呼ぶ
+    let streamId = null;
+    if (needsTabCapture) {
+      streamId = await new Promise((resolve, reject) => {
+        chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
+          if (chrome.runtime.lastError || !id) {
+            reject(new Error(chrome.runtime.lastError?.message ?? 'tabCapture: failed to get stream ID'));
+          } else {
+            resolve(id);
+          }
+        });
+      });
+    }
+
+    // Forward the stream ID (and audioSource) to the offscreen document and wait for ack
     const ack = await chrome.runtime.sendMessage({
       type: 'OFFSCREEN_START_AUDIO',
-      streamId,
+      streamId,          // null if mic-only
+      audioSource: cfg.audioSource,
       tabId,
     }).catch((err) => {
       throw new Error('offscreen document not ready: ' + (err?.message ?? String(err)));
     });
-    console.info('[background] OFFSCREEN_START_AUDIO ack=', ack);
+    console.info('[background] OFFSCREEN_START_AUDIO ack=', ack, 'audioSource=', cfg.audioSource);
     console.info('[background] startCapture: audio capture started, tabId=', tabId);
   } catch (err) {
     console.error('[background] startCapture failed:', err);
