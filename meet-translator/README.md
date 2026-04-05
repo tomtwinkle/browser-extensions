@@ -139,9 +139,9 @@ make
 | ≥ 64 GB | `large-v3-turbo` | `calm3:22b-q4_k_m` |
 | ≥ 32 GB | `medium` | `calm3:22b-q4_k_m` |
 | ≥  4 GB | `small` | `bonsai-8b` |
-| < 4 GB  | `tiny` | `gemma4:e2b-q4_k_m` |
+| < 4 GB  | `tiny` | `bonsai-8b` |
 
-CPU のみの場合は `bonsai-8b`（8 GB以上）/ `gemma4:e4b-q4_k_m`（4–8 GB）/ `gemma4:e2b-q4_k_m`（4 GB未満）を選択します。
+CPU のみの場合は `bonsai-8b`（4 GB以上）/ `gemma4:e2b-q4_k_m`（4 GB未満）を選択します。
 
 ### モデルを手動指定する場合
 
