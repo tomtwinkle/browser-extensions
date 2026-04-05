@@ -11,3 +11,6 @@ package main
 #cgo linux LDFLAGS: -fopenmp
 */
 import "C"
+
+// gpuAvailable は CUDA GPU が利用可能であることを示す。
+func gpuAvailable() bool { return true }

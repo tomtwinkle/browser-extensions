@@ -22,3 +22,6 @@ package main
 #cgo windows LDFLAGS: -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic
 */
 import "C"
+
+// gpuAvailable は CPU のみビルドでは GPU が利用できないことを示す。
+func gpuAvailable() bool { return false }

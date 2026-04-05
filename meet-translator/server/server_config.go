@@ -93,3 +93,9 @@ func saveConfigFile(cfg persistedConfig) error {
 	}
 	return os.WriteFile(path, data, 0o640)
 }
+
+// configFileExists は config.json が存在するかどうかを返す。
+func configFileExists() bool {
+	_, err := os.Stat(configFilePath())
+	return err == nil
+}
