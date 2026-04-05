@@ -71,16 +71,23 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: echo "C:/msys64/usr/bin" >> $GITHUB_PATH
 
+      # Go モジュールキャッシュは部分一致でも安全
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-            meet-translator/server/vendor
-          key: ${{ runner.os }}-${{ runner.arch }}-execute-${{ hashFiles('meet-translator/server/Makefile') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-go-${{ hashFiles('meet-translator/server/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-execute-
-            ${{ runner.os }}-${{ runner.arch }}-deps-
+            ${{ runner.os }}-${{ runner.arch }}-go-
+
+      # vendor (llama.cpp/whisper.cpp クローン + cmake ビルド成果物) は
+      # Makefile が変わったら必ず再ビルドする必要があるため restore-keys を使わない。
+      # restore-keys を使うと古い llama.cpp クローンが再利用されて型サポートの不一致が起きる。
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: meet-translator/server/vendor
+          key: ${{ runner.os }}-${{ runner.arch }}-vendor-${{ hashFiles('meet-translator/server/Makefile') }}
 
       - name: Build native dependencies
         working-directory: meet-translator/server
