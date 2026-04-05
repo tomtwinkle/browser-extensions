@@ -254,7 +254,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         startAudioProcessing(tabStream, micMediaStream);
       })();
-      })();
       return false; // sendResponse was already called synchronously
     }
 
