@@ -102,14 +102,21 @@ func buildGemmaPrompt(text, src, tgt, termsHint string, history []contextEntry) 
 }
 
 // stripThinkingTokens は Qwen3 thinking モードの <think>...</think> ブロックを除去する。
+// 閉じタグ </think> が存在しない場合（max_tokens による途中切断）は
+// <think> 以降をすべて除去する。
 func stripThinkingTokens(text string) string {
 	for {
 		start := strings.Index(text, "<think>")
-		end := strings.Index(text, "</think>")
-		if start == -1 || end == -1 || end < start {
+		if start == -1 {
 			break
 		}
-		text = text[:start] + text[end+len("</think>"):]
+		end := strings.Index(text[start:], "</think>")
+		if end == -1 {
+			// 閉じタグなし: <think> 以降を全除去
+			text = text[:start]
+			break
+		}
+		text = text[:start] + text[start+end+len("</think>"):]
 	}
 	return strings.TrimSpace(text)
 }
