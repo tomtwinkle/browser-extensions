@@ -317,6 +317,80 @@ curl -X POST http://localhost:7070/glossary/learn \
 
 ---
 
+## LLM 翻訳ベンチマーク
+
+`cmd/benchmark` はモデルの翻訳品質と速度を計測し、autoconfig のモデル優先度を決定するためのツールです。
+
+### テストケース
+
+英語⇔日本語の双方向で各 20 件、計 40 件の会議シーン向けフレーズを収録しています。
+
+| カテゴリ | 件数 | 内容 |
+|---|---|---|
+| greeting | 8 (4+4) | 挨拶・日常会話 |
+| technical | 12 (6+6) | pull request / API / CI / refactor 等の技術用語 |
+| action | 8 (4+4) | 依頼・指示 |
+| question | 8 (4+4) | 質問文 |
+| complex | 4 (2+2) | 複合文 |
+
+### 品質指標: ChrF
+
+文字 n-gram F スコア (n=1,2,3 平均) を使用します。
+形態素解析なしに日本語・英語の両方で機能し、部分一致もスコアに反映されます。
+
+| 指標 | 説明 |
+|---|---|
+| **Quality** | ChrF スコア (0.0〜1.0) |
+| **Latency** | 翻訳 1 件あたりの平均レイテンシ |
+| **Score** | `quality×0.6 + speed×0.4`（speed = 1/(1+latency/300ms)）|
+
+### 実行方法
+
+```bash
+# 1. サーバーを起動 (計測したいモデルを指定)
+./server --llama-model bonsai-8b
+
+# 2. ベンチマークを実行して結果を保存
+make bench OUTPUT=results/bonsai-8b.json
+
+# 3. 別モデルで繰り返し (サーバーを再起動)
+./server --llama-model qwen3:4b-q4_k_m
+make bench OUTPUT=results/qwen3-4b.json
+
+# 4. 結果を比較してモデル順位を表示
+go run ./cmd/benchmark/ --compare results/
+```
+
+その他のフラグ:
+
+```
+--server  URL   サーバーアドレス (デフォルト: http://localhost:7070)
+--runs    N     各テストケースの実行回数 (デフォルト: 3)
+--warmup  N     ウォームアップ回数 (デフォルト: 2)
+--dir     STR   方向フィルタ: "en-ja" | "ja-en" | "both" (デフォルト: both)
+--verbose       各テストケースの入出力を詳細表示
+```
+
+### 比較出力例
+
+```
+=== Benchmark Comparison (4 models) ===
+
+Rank Model                         Quality   Latency     Score
+────────────────────────────────────────────────────────────────────
+   1 calm3:22b-q4_k_m              0.851     890ms     0.643
+   2 qwen3:8b-q4_k_m               0.823     312ms     0.766
+   3 bonsai-8b                     0.800     238ms     0.768
+   4 qwen3:4b-q4_k_m               0.791     198ms     0.763
+
+Score = quality×0.6 + speed×0.4  (speed = 1/(1 + latency/300ms))
+```
+
+> **Note**: 上記はサンプル値です。実際の数値は実行環境・GPU の有無によって異なります。
+> 結果を `results/` に保存してコミットすることでチームで共有できます。
+
+---
+
 ## 拡張機能のsetup
 
 ### 開発版 (sourceから読み込む)

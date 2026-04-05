@@ -95,7 +95,7 @@ endif
 BIN := server$(BIN_EXT)
 
 # ── targets ───────────────────────────────────────────────────────────────────
-.PHONY: all build deps test clean rebuild distclean
+.PHONY: all build deps test bench-build bench clean rebuild distclean
 
 all: build
 
@@ -147,6 +147,17 @@ test: deps
 	CGO_CFLAGS="$(CGO_CFLAGS_VAL)" \
 	CGO_LDFLAGS="$(CGO_LDFLAGS_VAL) $(CGO_EXTRA_LDFLAGS)" \
 	go test $(if $(GO_TAGS),-tags $(GO_TAGS)) -v -count=1 -timeout=120s ./...
+
+## bench-build: ベンチマークツールをビルドする (CGo 不要)
+bench-build:
+	@echo "[go build] benchmark tool"
+	go build -o benchmark ./cmd/benchmark/
+
+## bench: 起動中のサーバー (localhost:7070) に対してベンチマークを実行する
+##        事前に ./server --llama-model <model> でサーバーを起動しておくこと
+##        例: make bench OUTPUT=results/bonsai-8b.json
+bench: bench-build
+	./benchmark $(if $(OUTPUT),--output $(OUTPUT),)
 
 ## clean: remove binary and cmake build artifacts
 clean:
