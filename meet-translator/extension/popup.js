@@ -7,10 +7,12 @@
 
 'use strict';
 
-const toggleBtn = document.getElementById('toggle-btn');
-const statusDot = document.getElementById('status-dot');
-const statusText = document.getElementById('status-text');
-const errorMsg = document.getElementById('error-msg');
+const toggleBtn    = document.getElementById('toggle-btn');
+const statusDot    = document.getElementById('status-dot');
+const statusText   = document.getElementById('status-text');
+const errorMsg     = document.getElementById('error-msg');
+const serverInfo   = document.getElementById('server-info');
+const serverUnavailable = document.getElementById('server-unavailable');
 
 let isActive = false;
 
@@ -42,12 +44,47 @@ function setLoading(loading) {
   toggleBtn.disabled = loading;
 }
 
+/** サーバーから取得したモデル情報を表示する。null を渡すと「未接続」表示。 */
+function updateServerInfo(info) {
+  if (info) {
+    document.getElementById('whisper-model-label').textContent = info.whisperModel || '—';
+    document.getElementById('llama-model-label').textContent   = info.llamaModel   || '—';
+    serverInfo.style.display       = 'block';
+    serverUnavailable.style.display = 'none';
+  } else {
+    serverInfo.style.display        = 'none';
+    serverUnavailable.style.display = 'block';
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Initialise: read current state from the background worker
 // ---------------------------------------------------------------------------
 chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
   if (chrome.runtime.lastError) return;
-  if (response) setUI(response.isActive);
+  if (!response) return;
+  setUI(response.isActive);
+  if (response.lastError) showError(response.lastError);
+  if (response.serverInfo) updateServerInfo(response.serverInfo);
+});
+
+// サーバーの最新モデル情報を取得（キャプチャ中かどうかに関わらず）
+chrome.runtime.sendMessage({ type: 'GET_SERVER_INFO' }, (response) => {
+  if (chrome.runtime.lastError) return;
+  if (response?.ok) {
+    updateServerInfo({ whisperModel: response.whisperModel, llamaModel: response.llamaModel });
+  } else {
+    updateServerInfo(null);
+  }
+});
+
+// サーバー切断をバックグラウンドからブロードキャストされたとき
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === 'SERVER_UNREACHABLE') {
+    setUI(false);
+    updateServerInfo(null);
+    showError('サーバーへの接続が切断されました。自動翻訳を停止しました。');
+  }
 });
 
 // Settings link
@@ -80,10 +117,15 @@ toggleBtn.addEventListener('click', async () => {
         (response) => {
           setLoading(false);
           if (chrome.runtime.lastError || !response?.success) {
-            showError('開始に失敗しました。ページを再読み込みして再試行してください。');
+            showError(response?.error || '開始に失敗しました。サーバーが起動しているか確認してください。');
+            updateServerInfo(null);
             return;
           }
           setUI(true);
+          // キャプチャ開始後にモデル情報を更新
+          chrome.runtime.sendMessage({ type: 'GET_STATE' }, (r) => {
+            if (r?.serverInfo) updateServerInfo(r.serverInfo);
+          });
         }
       );
     } else {

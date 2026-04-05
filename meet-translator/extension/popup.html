@@ -51,6 +51,46 @@
       color: #5f6368;
     }
 
+    /* ---- server info panel ---- */
+    #server-info {
+      margin-bottom: 12px;
+      padding: 7px 10px;
+      background: #f8f9fa;
+      border-radius: 4px;
+      font-size: 11px;
+    }
+
+    .info-row {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      margin-bottom: 2px;
+    }
+    .info-row:last-child { margin-bottom: 0; }
+
+    .info-label {
+      color: #9aa0a6;
+      flex-shrink: 0;
+      min-width: 52px;
+    }
+
+    .info-value {
+      color: #202124;
+      font-family: monospace;
+      font-size: 11px;
+      word-break: break-all;
+    }
+
+    #server-unavailable {
+      margin-bottom: 12px;
+      padding: 6px 10px;
+      background: #fce8e6;
+      border-radius: 4px;
+      font-size: 11px;
+      color: #c5221f;
+      display: none;
+    }
+
     #toggle-btn {
       width: 100%;
       padding: 10px 0;
@@ -111,6 +151,19 @@
   </div>
 
   <button id="toggle-btn">自動翻訳チャット開始</button>
+
+  <!-- server model info (shown when server is reachable) -->
+  <div id="server-info" style="display:none">
+    <div class="info-row">
+      <span class="info-label">Whisper</span>
+      <span id="whisper-model-label" class="info-value">—</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">LLM</span>
+      <span id="llama-model-label" class="info-value">—</span>
+    </div>
+  </div>
+  <div id="server-unavailable">⚠ サーバー未接続</div>
 
   <p id="error-msg"></p>
 

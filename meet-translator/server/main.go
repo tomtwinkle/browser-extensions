@@ -218,7 +218,14 @@ _ = json.NewEncoder(w).Encode(v)
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+s.modelMu.Lock()
+llamaModel := s.loadedModelSpec
+s.modelMu.Unlock()
+writeJSON(w, http.StatusOK, map[string]string{
+"status":        "ok",
+"whisper_model": s.cfg.whisperModel,
+"llama_model":   llamaModel,
+})
 }
 
 func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Request) {

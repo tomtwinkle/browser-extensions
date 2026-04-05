@@ -18,6 +18,9 @@
 const state = {
   isActive: false,
   tabId: null,
+  lastError: null,
+  healthCheckTimer: null,
+  serverInfo: null, // { whisperModel, llamaModel } – populated from /health
 };
 
 // ---------------------------------------------------------------------------
@@ -36,6 +39,28 @@ async function getSettings() {
   };
   const stored = await chrome.storage.local.get(Object.keys(defaults));
   return { ...defaults, ...stored };
+}
+
+/**
+ * GET /health を叩いてサーバーの疎通とロード済みモデルを確認する。
+ * @returns {{ ok: boolean, whisperModel?: string, llamaModel?: string }}
+ */
+async function checkServerHealth() {
+  const cfg = await getSettings();
+  try {
+    const res = await fetch(`${cfg.serverUrl}/health`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return { ok: false };
+    const data = await res.json();
+    return {
+      ok: true,
+      whisperModel: data.whisper_model || '',
+      llamaModel:   data.llama_model   || '',
+    };
+  } catch {
+    return { ok: false };
+  }
 }
 
 async function transcribeAndTranslate(wavBuffer) {
@@ -112,8 +137,30 @@ async function closeOffscreenDocument() {
 async function startCapture(tabId) {
   if (state.isActive) return;
 
+  // サーバー疎通確認 – 接続できなければ開始を拒否
+  const health = await checkServerHealth();
+  if (!health.ok) {
+    throw new Error('サーバーに接続できません。サーバーが起動しているか確認してください。');
+  }
+
   state.isActive = true;
-  state.tabId = tabId;
+  state.tabId    = tabId;
+  state.lastError = null;
+  state.serverInfo = { whisperModel: health.whisperModel, llamaModel: health.llamaModel };
+
+  // 定期ヘルスチェック（30 秒ごと）- サーバーが落ちたら自動停止
+  state.healthCheckTimer = setInterval(async () => {
+    if (!state.isActive) return;
+    const h = await checkServerHealth();
+    if (!h.ok) {
+      console.warn('[background] server health check failed – stopping capture.');
+      state.lastError = 'サーバーへの接続が切断されました。';
+      await stopCapture();
+      chrome.runtime.sendMessage({ type: 'SERVER_UNREACHABLE' }).catch(() => {});
+      return;
+    }
+    state.serverInfo = { whisperModel: h.whisperModel, llamaModel: h.llamaModel };
+  }, 30_000);
 
   try {
     // Make sure the offscreen document is ready for audio processing
@@ -144,6 +191,12 @@ async function startCapture(tabId) {
 
 async function stopCapture() {
   if (!state.isActive) return;
+
+  // 定期ヘルスチェックを停止
+  if (state.healthCheckTimer) {
+    clearInterval(state.healthCheckTimer);
+    state.healthCheckTimer = null;
+  }
 
   state.isActive = false;
   const tabId = state.tabId;
@@ -184,8 +237,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return true;
 
     case 'GET_STATE':
-      sendResponse({ isActive: state.isActive });
+      sendResponse({ isActive: state.isActive, lastError: state.lastError, serverInfo: state.serverInfo });
       return false;
+
+    // ---- popup がサーバー情報を要求（キャプチャ中かどうかに関わらず） -------
+    case 'GET_SERVER_INFO':
+      (async () => {
+        const health = await checkServerHealth();
+        if (health.ok) {
+          state.serverInfo = { whisperModel: health.whisperModel, llamaModel: health.llamaModel };
+          sendResponse({ ok: true, whisperModel: health.whisperModel, llamaModel: health.llamaModel });
+        } else {
+          sendResponse({ ok: false });
+        }
+      })();
+      return true; // 非同期レスポンスのためチャネルを維持
 
     // ---- Audio data from the offscreen document -------------------------
     case 'AUDIO_DATA': {
