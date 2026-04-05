@@ -27,6 +27,8 @@ func newTestServer(t *testing.T, m mockFuncs) *server {
 		mux:             http.NewServeMux(),
 		loadedModelSpec: "",
 		contextBuf:      newContextBuffer(3),
+		glossary:        loadGlossary(), // テスト用：空の辞書
+		improver:        nil,            // テスト中はバックグラウンド LLM 解析なし
 	}
 	if m.transcribe != nil {
 		s.transcribeFn = m.transcribe
@@ -50,6 +52,12 @@ func newTestServer(t *testing.T, m mockFuncs) *server {
 	s.mux.HandleFunc("POST /transcribe-and-translate", s.handleTranscribeAndTranslate)
 	s.mux.HandleFunc("POST /transcribe", s.handleTranscribe)
 	s.mux.HandleFunc("POST /translate", s.handleTranslate)
+	s.mux.HandleFunc("GET /glossary", s.handleGlossaryGet)
+	s.mux.HandleFunc("POST /glossary/corrections", s.handleGlossaryUpsertCorrection)
+	s.mux.HandleFunc("DELETE /glossary/corrections/{source}", s.handleGlossaryDeleteCorrection)
+	s.mux.HandleFunc("POST /glossary/terms", s.handleGlossaryUpsertTerm)
+	s.mux.HandleFunc("DELETE /glossary/terms/{source}", s.handleGlossaryDeleteTerm)
+	s.mux.HandleFunc("POST /glossary/learn", s.handleGlossaryLearn)
 	return s
 }
 

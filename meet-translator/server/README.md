@@ -92,3 +92,76 @@ GGUF ファイルを直接指定することも可能です:
 | `LLAMA_GPU_LAYERS` | `-1` | GPU オフロードレイヤ数 (`0`=CPU only, `-1`=全レイヤ) |
 | `WHISPER_GPU_LAYERS` | `-1` | 同上 (whisper 用) |
 | `MODEL_CACHE_DIR` | OS 標準 | モデルキャッシュディレクトリ |
+
+## 辞書 (Glossary) による精度向上
+
+起動時に自動的に辞書ファイルを読み込み、2 段階で精度を向上させます。
+
+```
+macOS/Linux: ~/.config/meet-translator/glossary.json
+Windows:     %APPDATA%\meet-translator\glossary.json
+```
+
+### 辞書の種類
+
+| 種類 | 用途 | 動作 |
+|---|---|---|
+| `corrections` | ASR 誤認識の修正 | Whisper 出力後にテキスト置換（例: "a pie" → "API"） |
+| `terms` | 専門用語の翻訳マッピング | LLM プロンプトに注入し、一貫した訳語を強制 |
+
+### 辞書の手動管理 (REST API)
+
+```bash
+# 全エントリ確認
+curl http://localhost:7070/glossary
+
+# ASR 修正を追加
+curl -X POST http://localhost:7070/glossary/corrections \
+  -H "Content-Type: application/json" \
+  -d '{"source":"a pie","target":"API","description":"Common Whisper misrecognition"}'
+
+# 専門用語を追加
+curl -X POST http://localhost:7070/glossary/terms \
+  -H "Content-Type: application/json" \
+  -d '{"source":"pull request","target":"プルリクエスト"}'
+
+# エントリ削除
+curl -X DELETE http://localhost:7070/glossary/corrections/a%20pie
+curl -X DELETE http://localhost:7070/glossary/terms/pull%20request
+
+# 外部から学習結果を送信 (kind = "correction" | "term")
+curl -X POST http://localhost:7070/glossary/learn \
+  -H "Content-Type: application/json" \
+  -d '{"kind":"correction","source":"get hub","target":"GitHub"}'
+```
+
+### 辞書の直接編集とホットリロード
+
+`glossary.json` はテキストエディタで直接編集できます。  
+サーバーは **30 秒ごとにファイルの更新を監視**し、変更があれば自動的に再読み込みします。  
+再起動不要でリアルタイムに辞書を更新できます。
+
+```jsonc
+// ~/.config/meet-translator/glossary.json
+{
+  "corrections": {
+    "a pie": {"source":"a pie","target":"API","description":"Whisper misrecognition"},
+    "get hub": {"source":"get hub","target":"GitHub"}
+  },
+  "terms": {
+    "pull request": {"source":"pull request","target":"プルリクエスト"},
+    "merge": {"source":"merge","target":"マージ"}
+  }
+}
+```
+
+### バックグラウンド自己改善
+
+翻訳が **5 件**蓄積されるたびに、バックグラウンドで LLM が以下を自動解析します:
+
+1. **ASR 誤認識候補** を検出して `corrections` に追加
+2. **翻訳で一貫性のある訳語が必要な専門用語** を検出して `terms` に追加
+
+追加されたエントリには `"description": "auto-improved"` タグが付きます。  
+不要なエントリは REST API または直接編集で削除できます。
+

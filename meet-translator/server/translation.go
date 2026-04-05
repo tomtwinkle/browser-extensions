@@ -30,23 +30,33 @@ func langLabel(code string) string {
 // buildTranslationPrompt はモデルのチャットテンプレートに合わせたプロンプトを生成する。
 // history に直前の発話ペアを渡すと few-shot context として組み込まれ、
 // 代名詞解決・専門用語の一貫性が向上する。
-func buildTranslationPrompt(text, sourceLang, targetLang, template string, opts ModelOptions, history []contextEntry) string {
+func buildTranslationPrompt(text, sourceLang, targetLang, template string, opts ModelOptions, history []contextEntry, termsHint string) string {
 	src := langLabel(sourceLang)
 	tgt := langLabel(targetLang)
 	switch template {
 	case "qwen3":
-		return buildQwen3Prompt(text, src, tgt, opts, history)
+		return buildQwen3Prompt(text, src, tgt, opts, history, termsHint)
 	case "gemma":
-		return buildGemmaPrompt(text, src, tgt, history)
+		return buildGemmaPrompt(text, src, tgt, termsHint, history)
 	default: // "qwen" (Qwen2.5) およびその他
-		return buildQwenPrompt(text, src, tgt, history)
+		return buildQwenPrompt(text, src, tgt, termsHint, history)
 	}
 }
 
+// systemPrompt は翻訳用システムプロンプトを組み立てる。
+// termsHint が指定された場合に用語マッピングを付加する。
+func systemPrompt(termsHint string) string {
+	base := "You are a translator. Translate the given text accurately. Output only the translated text."
+	if termsHint == "" {
+		return base
+	}
+	return base + "\nUse these term translations: " + termsHint
+}
+
 // buildQwenPrompt は Qwen2.5 用プロンプトを生成する。
-func buildQwenPrompt(text, src, tgt string, history []contextEntry) string {
+func buildQwenPrompt(text, src, tgt, termsHint string, history []contextEntry) string {
 	var sb strings.Builder
-	sb.WriteString("<|im_start|>system\nYou are a translator. Translate the given text accurately. Output only the translated text.<|im_end|>\n")
+	sb.WriteString(fmt.Sprintf("<|im_start|>system\n%s<|im_end|>\n", systemPrompt(termsHint)))
 	for _, h := range history {
 		sb.WriteString(fmt.Sprintf("<|im_start|>user\nTranslate from %s to %s:\n%s<|im_end|>\n", src, tgt, h.Transcription))
 		sb.WriteString(fmt.Sprintf("<|im_start|>assistant\n%s<|im_end|>\n", h.Translation))
@@ -58,9 +68,9 @@ func buildQwenPrompt(text, src, tgt string, history []contextEntry) string {
 
 // buildQwen3Prompt は Qwen3 用プロンプトを生成する。
 // opts.Thinking=false の場合は /no-think タグで思考を抑制する。
-func buildQwen3Prompt(text, src, tgt string, opts ModelOptions, history []contextEntry) string {
+func buildQwen3Prompt(text, src, tgt string, opts ModelOptions, history []contextEntry, termsHint string) string {
 	var sb strings.Builder
-	sb.WriteString("<|im_start|>system\nYou are a translator. Translate the given text accurately. Output only the translated text.<|im_end|>\n")
+	sb.WriteString(fmt.Sprintf("<|im_start|>system\n%s<|im_end|>\n", systemPrompt(termsHint)))
 	for _, h := range history {
 		sb.WriteString(fmt.Sprintf("<|im_start|>user\nTranslate from %s to %s:\n%s<|im_end|>\n", src, tgt, h.Transcription))
 		sb.WriteString(fmt.Sprintf("<|im_start|>assistant\n%s<|im_end|>\n", h.Translation))
@@ -75,7 +85,7 @@ func buildQwen3Prompt(text, src, tgt string, opts ModelOptions, history []contex
 }
 
 // buildGemmaPrompt は Gemma 3/4 用プロンプトを生成する。
-func buildGemmaPrompt(text, src, tgt string, history []contextEntry) string {
+func buildGemmaPrompt(text, src, tgt, termsHint string, history []contextEntry) string {
 	var sb strings.Builder
 	for _, h := range history {
 		sb.WriteString(fmt.Sprintf("<start_of_turn>user\nTranslate from %s to %s:\n%s<end_of_turn>\n", src, tgt, h.Transcription))
@@ -83,10 +93,10 @@ func buildGemmaPrompt(text, src, tgt string, history []contextEntry) string {
 	}
 	sb.WriteString(fmt.Sprintf(
 		"<start_of_turn>user\n"+
-			"You are a translator. Translate the given text accurately. Output only the translated text.\n"+
+			"%s\n"+
 			"Translate from %s to %s:\n%s<end_of_turn>\n"+
 			"<start_of_turn>model\n",
-		src, tgt, text,
+		systemPrompt(termsHint), src, tgt, text,
 	))
 	return sb.String()
 }
@@ -131,4 +141,44 @@ func stripLLMArtifacts(text string) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// ---------------------------------------------------------------------------
+// Analysis prompt (辞書自己改善用)
+// ---------------------------------------------------------------------------
+
+// buildAnalysisPrompt は GlossaryImprover が LLM に渡す解析プロンプトを生成する。
+// 翻訳レコードのリストを受け取り、ASR 誤認識と専門用語を JSON で返すよう指示する。
+func buildAnalysisPrompt(records []TranslationRecord, template string) string {
+	var sb strings.Builder
+	sb.WriteString("Review these speech-to-text transcriptions and their translations.\n\n")
+	for i, r := range records {
+		sb.WriteString(fmt.Sprintf("%d. \"%s\" → \"%s\"\n", i+1, r.Transcription, r.Translation))
+	}
+	sb.WriteString("\nTasks:\n")
+	sb.WriteString("1. Find ASR errors: words likely misheard (e.g. 'poll request' should be 'pull request')\n")
+	sb.WriteString("2. Extract technical terms worth adding to a translation glossary\n\n")
+	sb.WriteString("Output ONLY valid JSON (no explanation):\n")
+	sb.WriteString(`{"corrections":[{"source":"...","target":"..."}],"terms":[{"source":"...","target":"..."}]}`)
+	sb.WriteString("\nIf nothing to suggest: {\"corrections\":[],\"terms\":[]}\n")
+	userContent := sb.String()
+	sys := "You are a linguistic analysis assistant. Identify speech recognition errors and translation glossary terms. Output only valid JSON."
+
+	switch template {
+	case "qwen3":
+		return fmt.Sprintf(
+			"<|im_start|>system\n%s<|im_end|>\n<|im_start|>user\n/no-think\n%s<|im_end|>\n<|im_start|>assistant\n",
+			sys, userContent,
+		)
+	case "gemma":
+		return fmt.Sprintf(
+			"<start_of_turn>user\n%s\n%s<end_of_turn>\n<start_of_turn>model\n",
+			sys, userContent,
+		)
+	default:
+		return fmt.Sprintf(
+			"<|im_start|>system\n%s<|im_end|>\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n",
+			sys, userContent,
+		)
+	}
 }
