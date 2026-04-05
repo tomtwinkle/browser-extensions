@@ -82,7 +82,8 @@ ifeq ($(OS_NAME),Windows_NT)
   CMAKE_BUILD_FLAGS :=
   BIN_EXT           := .exe
 else
-  CMAKE_BUILD_FLAGS := -j
+  # -j2: cap parallel compilation to avoid OOM on CI runners (arm64: 2-core/8GB)
+  CMAKE_BUILD_FLAGS := -j2
   CMAKE_GENERATOR   :=
   CMAKE_EXTRA_FLAGS :=
   BIN_EXT           :=
