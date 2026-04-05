@@ -47,6 +47,8 @@ func newTestServer(t *testing.T, m mockFuncs) *server {
 	}
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("POST /transcribe-and-translate", s.handleTranscribeAndTranslate)
+	s.mux.HandleFunc("POST /transcribe", s.handleTranscribe)
+	s.mux.HandleFunc("POST /translate", s.handleTranslate)
 	return s
 }
 

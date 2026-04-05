@@ -201,6 +201,8 @@ s.translateFn = s.translateInternal
 s.swapModelFn = s.swapModel
 s.mux.HandleFunc("GET /health", s.handleHealth)
 s.mux.HandleFunc("POST /transcribe-and-translate", s.handleTranscribeAndTranslate)
+s.mux.HandleFunc("POST /transcribe", s.handleTranscribe)
+s.mux.HandleFunc("POST /translate", s.handleTranslate)
 return s
 }
 
@@ -328,6 +330,100 @@ writeJSON(w, http.StatusOK, map[string]string{
 "transcription": transcription,
 "translation":   strings.TrimSpace(translation),
 })
+}
+
+// handleTranscribe は音声データを受け取り、Whisper で文字起こしのみを行う。
+// POST /transcribe  multipart/form-data: audio(WAV), source_lang(optional)
+func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		http.Error(w, "failed to parse form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	f, _, err := r.FormFile("audio")
+	if err != nil {
+		http.Error(w, "missing audio field", http.StatusBadRequest)
+		return
+	}
+	defer f.Close()
+
+	audioData, err := io.ReadAll(f)
+	if err != nil {
+		http.Error(w, "failed to read audio", http.StatusInternalServerError)
+		return
+	}
+
+	sourceLang := r.FormValue("source_lang")
+	if s.cfg.verbose {
+		hdrLen := 12
+		if len(audioData) < hdrLen {
+			hdrLen = len(audioData)
+		}
+		s.logVerbose("transcribe: audio=%d bytes, header=[% x], source_lang=%q",
+			len(audioData), audioData[:hdrLen], sourceLang)
+	}
+
+	transcription, err := s.transcribeFn(audioData, sourceLang)
+	if err != nil {
+		log.Printf("[transcribe] %v", err)
+		http.Error(w, "transcription failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	transcription = strings.TrimSpace(transcription)
+	s.logVerbose("transcription: %q", transcription)
+
+	writeJSON(w, http.StatusOK, map[string]string{"transcription": transcription})
+}
+
+// handleTranslate はテキストを受け取り、LLM で翻訳のみを行う。
+// POST /translate  application/x-www-form-urlencoded:
+//
+//	text, target_lang, source_lang(optional), llama_model(optional), llama_options(optional)
+func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "failed to parse form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	text := strings.TrimSpace(r.FormValue("text"))
+	if text == "" {
+		http.Error(w, "missing text field", http.StatusBadRequest)
+		return
+	}
+
+	sourceLang := r.FormValue("source_lang")
+	targetLang := r.FormValue("target_lang")
+	if targetLang == "" {
+		targetLang = "ja"
+	}
+
+	requestedModel := strings.TrimSpace(r.FormValue("llama_model"))
+	rawOpts := r.FormValue("llama_options")
+
+	s.logVerbose("translate: text=%q, target_lang=%q, llama_model=%q", text, targetLang, requestedModel)
+
+	s.modelMu.Lock()
+	defer s.modelMu.Unlock()
+
+	if requestedModel != "" && requestedModel != s.loadedModelSpec {
+		if err := s.swapModelFn(requestedModel); err != nil {
+			log.Printf("[model] hot-swap failed: %v", err)
+			http.Error(w, "model swap failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	opts := parseModelOptions(rawOpts, s.loadedModelSpec)
+
+	translation, err := s.translateFn(text, sourceLang, targetLang, opts)
+	if err != nil {
+		log.Printf("[translate] %v", err)
+		http.Error(w, "translation failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	translation = strings.TrimSpace(translation)
+	s.logVerbose("translation: %q", translation)
+
+	writeJSON(w, http.StatusOK, map[string]string{"translation": translation})
 }
 
 // swapModel は現在ロード中のモデルを解放して新しいモデルをロードする。

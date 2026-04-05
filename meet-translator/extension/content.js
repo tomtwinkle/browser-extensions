@@ -105,9 +105,12 @@ async function postToChat(text) {
   input.focus();
 
   if (input.contentEditable === 'true') {
-    // contenteditable div  –  React / Angular apps track DOM mutation events
-    input.textContent = text;
-    input.dispatchEvent(new Event('input', { bubbles: true }));
+    // contenteditable div (Google Meet / React)
+    // execCommand('insertText') は \n を <br> として扱い、
+    // React のイベントデリゲーションも正しく発火する。
+    input.focus();
+    document.execCommand('selectAll', false, null);
+    document.execCommand('insertText', false, text);
   } else {
     // Plain <textarea>
     const nativeSetter = Object.getOwnPropertyDescriptor(
