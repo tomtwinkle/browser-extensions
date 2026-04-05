@@ -11,7 +11,20 @@
 
 'use strict';
 
-console.info('[offscreen] script loaded');
+// ---------------------------------------------------------------------------
+// Log bridge – forwards all offscreen logs to background.js service worker
+// so they appear in the service worker DevTools console.
+// ---------------------------------------------------------------------------
+function bgLog(level, ...args) {
+  const msg = args
+    .map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : typeof a === 'object' ? JSON.stringify(a) : String(a)))
+    .join(' ');
+  // eslint-disable-next-line no-console
+  console[level]('[offscreen]', msg);
+  chrome.runtime.sendMessage({ type: 'OFFSCREEN_LOG', level, msg }).catch(() => {});
+}
+
+bgLog('info', 'script loaded');
 
 // How often (ms) a collected audio buffer is forwarded to the background
 const SEND_INTERVAL_MS = 5000;
@@ -120,7 +133,7 @@ function startAudioProcessing(stream) {
 
 function sendAudioBuffer() {
   if (collectedSamples.length === 0) {
-    console.info('[offscreen] sendAudioBuffer: no samples collected yet');
+    bgLog('info', 'sendAudioBuffer: no samples collected yet');
     return;
   }
 
@@ -130,14 +143,14 @@ function sendAudioBuffer() {
   // VAD: skip silent chunks
   const rms = calcRms(chunks);
   if (rms < SILENCE_RMS_THRESHOLD) {
-    console.info('[offscreen] sendAudioBuffer: silent (RMS=' + rms.toFixed(6) + '), skipping');
+    bgLog('info', 'sendAudioBuffer: silent (RMS=' + rms.toFixed(6) + '), skipping');
     return;
   }
 
   const sampleRate = audioContext ? audioContext.sampleRate : 48000;
   const wavBuffer = encodeWav(chunks, sampleRate);
 
-  console.info('[offscreen] sendAudioBuffer: sending WAV', wavBuffer.byteLength, 'bytes, RMS=' + rms.toFixed(6));
+  bgLog('info', 'sendAudioBuffer: sending WAV ' + wavBuffer.byteLength + ' bytes, RMS=' + rms.toFixed(6));
   // Send the WAV buffer to the background service worker.
   // chrome.runtime.sendMessage serialises via structured clone — no transfer list needed.
   chrome.runtime.sendMessage({ type: 'AUDIO_DATA', wavBuffer });
@@ -182,7 +195,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       // Video tracks are stopped immediately after the stream is obtained.
       const streamId = message.streamId;
       (async () => {
-        console.info('[offscreen] calling getUserMedia...');
+        bgLog('info', 'calling getUserMedia...');
         try {
           const stream = await navigator.mediaDevices.getUserMedia({
             audio: {
@@ -200,11 +213,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           });
           // Discard video – audio only
           stream.getVideoTracks().forEach((t) => t.stop());
-          console.info('[offscreen] getUserMedia succeeded, audio tracks=',
-            stream.getAudioTracks().length);
+          bgLog('info', 'getUserMedia succeeded, audio tracks=' + stream.getAudioTracks().length);
           startAudioProcessing(stream);
         } catch (err) {
-          console.error('[offscreen] getUserMedia failed:', err.name, err.message, err);
+          bgLog('error', 'getUserMedia failed: ' + err.name + ' ' + err.message);
         }
       })();
       return false; // sendResponse was already called synchronously

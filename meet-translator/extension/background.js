@@ -274,6 +274,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       })();
       return true; // 非同期レスポンスのためチャネルを維持
 
+    // ---- Log bridge from offscreen document -----------------------------
+    case 'OFFSCREEN_LOG': {
+      const fn = console[message.level] ?? console.info;
+      fn('[offscreen→bg]', message.msg);
+      return false;
+    }
+
     // ---- Audio data from the offscreen document -------------------------
     case 'AUDIO_DATA': {
       console.info('[background] AUDIO_DATA received, isActive=', state.isActive,
