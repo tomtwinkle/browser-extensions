@@ -40,7 +40,8 @@ import (
 "strconv"
 "strings"
 "sync"
-"syscall"
+	"sync/atomic"
+	"syscall"
 "time"
 )
 
@@ -175,14 +176,20 @@ whisperCtx *C.whisper_context
 // 起動時に指定されたオリジナルのモデルスペック（パス解決前）
 whisperModelSpec string
 
+// whisper コンテキスト保護 (非スレッドセーフなため直列化必須)
+whisperMu sync.Mutex
+
 // llama モデル管理 (modelMu で保護)
 modelMu         sync.Mutex
 llamaModel      C.llama_bridge_model
 loadedModelSpec string // 現在ロード中のモデル名またはパス
 
+// 直近の発話履歴 (Whisper initial_prompt + LLM few-shot context に使用)
+contextBuf *contextBuffer
+
 // テスト時にモック実装を注入できる関数フィールド
-transcribeFn func(audioData []byte, lang string) (string, error)
-translateFn  func(text, srcLang, tgtLang string, opts ModelOptions) (string, error)
+transcribeFn func(audioData []byte, lang, initialPrompt string) (string, error)
+translateFn  func(text, srcLang, tgtLang string, opts ModelOptions, history []contextEntry) (string, error)
 swapModelFn  func(spec string) error
 }
 
@@ -194,6 +201,7 @@ whisperCtx:      whisperCtx,
 whisperModelSpec: whisperSpec,
 llamaModel:      llamaModel,
 loadedModelSpec: llamaSpec,
+contextBuf:      newContextBuffer(3),
 }
 // デフォルトは CGo 実装を使用
 s.transcribeFn = s.transcribeInternal
@@ -201,6 +209,8 @@ s.translateFn = s.translateInternal
 s.swapModelFn = s.swapModel
 s.mux.HandleFunc("GET /health", s.handleHealth)
 s.mux.HandleFunc("POST /transcribe-and-translate", s.handleTranscribeAndTranslate)
+s.mux.HandleFunc("POST /transcribe", s.handleTranscribe)
+s.mux.HandleFunc("POST /translate", s.handleTranslate)
 return s
 }
 
@@ -217,11 +227,12 @@ s.mux.ServeHTTP(w, r)
 
 // verboseEnabled はパッケージレベルの verbose フラグ。
 // main() で cfg.verbose が確定した後にセットされ、model_manager.go 等からも参照される。
-var verboseEnabled bool
+// atomic.Bool を使うことでスタートアップ後の並行読み取りを安全にする。
+var verboseEnabled atomic.Bool
 
 // logV はパッケージレベルの verbose ロガー。server 構造体が生成される前でも使える。
 func logV(format string, args ...any) {
-if verboseEnabled {
+if verboseEnabled.Load() {
 log.Printf("[verbose] "+format, args...)
 }
 }
@@ -289,24 +300,17 @@ s.logVerbose("request: audio=%d bytes, header=[% x], target_lang=%q, source_lang
 len(audioData), audioData[:hdrLen], targetLang, sourceLang, requestedModel, rawOpts)
 }
 
-// モデルのホットスワップと翻訳は排他制御
-s.modelMu.Lock()
-defer s.modelMu.Unlock()
+// contextBuf 読み取りはロック外で行う (contextBuf 自身に内部ロックあり)
+initialPrompt := strings.Join(s.contextBuf.Transcriptions(), " ")
 
-if requestedModel != "" && requestedModel != s.loadedModelSpec {
-if err := s.swapModelFn(requestedModel); err != nil {
-log.Printf("[model] hot-swap failed: %v", err)
-http.Error(w, "model swap failed: "+err.Error(), http.StatusInternalServerError)
-return
-}
-}
+// Whisper は非スレッドセーフ – whisperMu で直列化 (contextBuf アクセスを含めない)
+s.whisperMu.Lock()
+transcription, transcribeErr := s.transcribeFn(audioData, sourceLang, initialPrompt)
+s.whisperMu.Unlock()
 
-opts := parseModelOptions(rawOpts, s.loadedModelSpec)
-
-transcription, err := s.transcribeFn(audioData, sourceLang)
-if err != nil {
-log.Printf("[transcribe] %v", err)
-http.Error(w, "transcription failed: "+err.Error(), http.StatusInternalServerError)
+if transcribeErr != nil {
+log.Printf("[transcribe] %v", transcribeErr)
+http.Error(w, "transcription failed: "+transcribeErr.Error(), http.StatusInternalServerError)
 return
 }
 transcription = strings.TrimSpace(transcription)
@@ -314,20 +318,157 @@ if transcription == "" {
 writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
 return
 }
-s.logVerbose("transcription: %q", transcription)
-
-translation, err := s.translateFn(transcription, sourceLang, targetLang, opts)
-if err != nil {
-log.Printf("[translate] %v", err)
-http.Error(w, "translation failed: "+err.Error(), http.StatusInternalServerError)
+if !isMeaningfulTranscription(transcription) {
+s.logVerbose("transcription filtered (noise): %q", transcription)
+writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
 return
 }
-s.logVerbose("translation: %q", strings.TrimSpace(translation))
+s.logVerbose("transcription: %q", transcription)
+
+// LLM の few-shot context を modelMu 取得前に読む (ネストロック回避)
+history := s.contextBuf.Entries()
+
+// モデルのホットスワップと翻訳は排他制御 (llama のみ)
+// defer を使わず明示的 Unlock で Add をロック外に置く
+s.modelMu.Lock()
+if requestedModel != "" && requestedModel != s.loadedModelSpec {
+if err := s.swapModelFn(requestedModel); err != nil {
+s.modelMu.Unlock()
+log.Printf("[model] hot-swap failed: %v", err)
+http.Error(w, "model swap failed: "+err.Error(), http.StatusInternalServerError)
+return
+}
+}
+opts := parseModelOptions(rawOpts, s.loadedModelSpec)
+translation, translateErr := s.translateFn(transcription, sourceLang, targetLang, opts, history)
+s.modelMu.Unlock()
+
+if translateErr != nil {
+log.Printf("[translate] %v", translateErr)
+http.Error(w, "translation failed: "+translateErr.Error(), http.StatusInternalServerError)
+return
+}
+translation = strings.TrimSpace(translation)
+s.logVerbose("translation: %q", translation)
+
+// バッファに追加 (全ロック解放後)
+s.contextBuf.Add(contextEntry{Transcription: transcription, Translation: translation})
 
 writeJSON(w, http.StatusOK, map[string]string{
 "transcription": transcription,
-"translation":   strings.TrimSpace(translation),
+"translation":   translation,
 })
+}
+
+// handleTranscribe は音声データを受け取り、Whisper で文字起こしのみを行う。
+// POST /transcribe  multipart/form-data: audio(WAV), source_lang(optional)
+func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		http.Error(w, "failed to parse form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	f, _, err := r.FormFile("audio")
+	if err != nil {
+		http.Error(w, "missing audio field", http.StatusBadRequest)
+		return
+	}
+	defer f.Close()
+
+	audioData, err := io.ReadAll(f)
+	if err != nil {
+		http.Error(w, "failed to read audio", http.StatusInternalServerError)
+		return
+	}
+
+	sourceLang := r.FormValue("source_lang")
+	if s.cfg.verbose {
+		hdrLen := 12
+		if len(audioData) < hdrLen {
+			hdrLen = len(audioData)
+		}
+		s.logVerbose("transcribe: audio=%d bytes, header=[% x], source_lang=%q",
+			len(audioData), audioData[:hdrLen], sourceLang)
+	}
+
+	// contextBuf 読み取りはロック外で行う (contextBuf 自身に内部ロックあり)
+	initialPrompt := strings.Join(s.contextBuf.Transcriptions(), " ")
+	// Whisper は非スレッドセーフ – whisperMu で直列化 (contextBuf アクセスを含めない)
+	s.whisperMu.Lock()
+	transcription, err := s.transcribeFn(audioData, sourceLang, initialPrompt)
+	s.whisperMu.Unlock()
+	if err != nil {
+		log.Printf("[transcribe] %v", err)
+		http.Error(w, "transcription failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	transcription = strings.TrimSpace(transcription)
+	if !isMeaningfulTranscription(transcription) {
+		s.logVerbose("transcription filtered (noise): %q", transcription)
+		writeJSON(w, http.StatusOK, map[string]string{"transcription": ""})
+		return
+	}
+	s.logVerbose("transcription: %q", transcription)
+
+	writeJSON(w, http.StatusOK, map[string]string{"transcription": transcription})
+}
+
+// handleTranslate はテキストを受け取り、LLM で翻訳のみを行う。
+// POST /translate  application/x-www-form-urlencoded:
+//
+//	text, target_lang, source_lang(optional), llama_model(optional), llama_options(optional)
+func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "failed to parse form: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	text := strings.TrimSpace(r.FormValue("text"))
+	if text == "" {
+		http.Error(w, "missing text field", http.StatusBadRequest)
+		return
+	}
+
+	sourceLang := r.FormValue("source_lang")
+	targetLang := r.FormValue("target_lang")
+	if targetLang == "" {
+		targetLang = "ja"
+	}
+
+	requestedModel := strings.TrimSpace(r.FormValue("llama_model"))
+	rawOpts := r.FormValue("llama_options")
+
+	s.logVerbose("translate: text=%q, target_lang=%q, llama_model=%q", text, targetLang, requestedModel)
+
+	// LLM の few-shot context を modelMu 取得前に読む (ネストロック回避)
+	history := s.contextBuf.Entries()
+
+	// モデルのホットスワップと翻訳は排他制御
+	// defer を使わず明示的 Unlock で Add をロック外に置く
+	s.modelMu.Lock()
+	if requestedModel != "" && requestedModel != s.loadedModelSpec {
+		if err := s.swapModelFn(requestedModel); err != nil {
+			s.modelMu.Unlock()
+			log.Printf("[model] hot-swap failed: %v", err)
+			http.Error(w, "model swap failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	opts := parseModelOptions(rawOpts, s.loadedModelSpec)
+	translation, err := s.translateFn(text, sourceLang, targetLang, opts, history)
+	s.modelMu.Unlock()
+
+	if err != nil {
+		log.Printf("[translate] %v", err)
+		http.Error(w, "translation failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	translation = strings.TrimSpace(translation)
+	s.logVerbose("translation: %q", translation)
+
+	// バッファに追加 (全ロック解放後, text = 直前の /transcribe の出力)
+	s.contextBuf.Add(contextEntry{Transcription: text, Translation: translation})
+
+	writeJSON(w, http.StatusOK, map[string]string{"translation": translation})
 }
 
 // swapModel は現在ロード中のモデルを解放して新しいモデルをロードする。
@@ -373,7 +514,7 @@ originalModelSpec := cfg.llamaModel
 runPreflight(&cfg)
 
 // verbose フラグをパッケージレベル変数に反映（model_manager.go 等で使用）
-verboseEnabled = cfg.verbose
+verboseEnabled.Store(cfg.verbose)
 
 // llama バックエンド初期化
 initLlamaBackend()

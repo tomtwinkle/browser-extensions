@@ -7,7 +7,9 @@ const DEFAULTS = {
   whisperModel:  'base',
   llamaModel:    '',
   llamaThinking: true,
-  audioSource:   'mic-only', // 'both' | 'mic-only' | 'tab-only'
+  audioSource:   'mic-only',  // 'both' | 'mic-only' | 'tab-only'
+  chatEnabled:   true,        // チャットへの自動投稿
+  chatFormat:    'both',      // 'both' | 'translation' | 'transcription'
 };
 
 // モデル別オプション定義: どのモデルがどのオプションパネルを持つか
@@ -35,7 +37,10 @@ chrome.storage.local.get(Object.keys(DEFAULTS), (stored) => {
   $('whisper-model').value = cfg.whisperModel;
   $('llama-model').value   = cfg.llamaModel;
   $('qwen3-thinking').checked = cfg.llamaThinking;
-  $('audio-source').value  = cfg.audioSource;
+  $('audio-source').value   = cfg.audioSource;
+  $('chat-enabled').checked = cfg.chatEnabled;
+  $('chat-format').value    = cfg.chatFormat;
+  updateChatFormatField(cfg.chatEnabled);
   updateModelOptions(cfg.llamaModel);
 });
 
@@ -45,6 +50,14 @@ chrome.storage.local.get(Object.keys(DEFAULTS), (stored) => {
 $('llama-model').addEventListener('change', () => {
   updateModelOptions($('llama-model').value);
 });
+
+$('chat-enabled').addEventListener('change', () => {
+  updateChatFormatField($('chat-enabled').checked);
+});
+
+function updateChatFormatField(enabled) {
+  $('chat-format-field').style.display = enabled ? '' : 'none';
+}
 
 function updateModelOptions(modelName) {
   const group = MODEL_OPTIONS_MAP[modelName] || null;
@@ -71,6 +84,8 @@ $('save-btn').addEventListener('click', () => {
     llamaModel:    $('llama-model').value,
     llamaThinking: $('qwen3-thinking').checked,
     audioSource:   $('audio-source').value,
+    chatEnabled:   $('chat-enabled').checked,
+    chatFormat:    $('chat-format').value,
   };
   chrome.storage.local.set(cfg, () => {
     showStatus('保存しました ✓', 'ok');

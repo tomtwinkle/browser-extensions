@@ -15,8 +15,8 @@ import (
 // ─── テスト用サーバー構築 ─────────────────────────────────────────────────────
 
 type mockFuncs struct {
-	transcribe func([]byte, string) (string, error)
-	translate  func(string, string, string, ModelOptions) (string, error)
+	transcribe func([]byte, string, string) (string, error)
+	translate  func(string, string, string, ModelOptions, []contextEntry) (string, error)
 	swapModel  func(string) error
 }
 
@@ -26,16 +26,17 @@ func newTestServer(t *testing.T, m mockFuncs) *server {
 		cfg:             config{port: "7070"},
 		mux:             http.NewServeMux(),
 		loadedModelSpec: "",
+		contextBuf:      newContextBuffer(3),
 	}
 	if m.transcribe != nil {
 		s.transcribeFn = m.transcribe
 	} else {
-		s.transcribeFn = func([]byte, string) (string, error) { return "hello", nil }
+		s.transcribeFn = func([]byte, string, string) (string, error) { return "hello", nil }
 	}
 	if m.translate != nil {
 		s.translateFn = m.translate
 	} else {
-		s.translateFn = func(string, string, string, ModelOptions) (string, error) { return "こんにちは", nil }
+		s.translateFn = func(string, string, string, ModelOptions, []contextEntry) (string, error) { return "こんにちは", nil }
 	}
 	if m.swapModel != nil {
 		s.swapModelFn = m.swapModel
@@ -47,6 +48,8 @@ func newTestServer(t *testing.T, m mockFuncs) *server {
 	}
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("POST /transcribe-and-translate", s.handleTranscribeAndTranslate)
+	s.mux.HandleFunc("POST /transcribe", s.handleTranscribe)
+	s.mux.HandleFunc("POST /translate", s.handleTranslate)
 	return s
 }
 
@@ -126,8 +129,8 @@ func TestHandleHealth_CORS_Preflight(t *testing.T) {
 
 func TestHandleTranscribeAndTranslate_Success(t *testing.T) {
 	s := newTestServer(t, mockFuncs{
-		transcribe: func([]byte, string) (string, error) { return "hello world", nil },
-		translate:  func(string, string, string, ModelOptions) (string, error) { return "こんにちは世界", nil },
+		transcribe: func([]byte, string, string) (string, error) { return "hello world", nil },
+		translate:  func(string, string, string, ModelOptions, []contextEntry) (string, error) { return "こんにちは世界", nil },
 	})
 
 	req := buildAudioForm(t, map[string]string{"target_lang": "ja"}, fakeWAV)
@@ -160,7 +163,7 @@ func TestHandleTranscribeAndTranslate_MissingAudio(t *testing.T) {
 
 func TestHandleTranscribeAndTranslate_EmptyTranscription(t *testing.T) {
 	s := newTestServer(t, mockFuncs{
-		transcribe: func([]byte, string) (string, error) { return "  ", nil }, // whitespace only
+		transcribe: func([]byte, string, string) (string, error) { return "  ", nil }, // whitespace only
 	})
 	req := buildAudioForm(t, map[string]string{"target_lang": "ja"}, fakeWAV)
 	w := httptest.NewRecorder()
@@ -178,7 +181,7 @@ func TestHandleTranscribeAndTranslate_EmptyTranscription(t *testing.T) {
 
 func TestHandleTranscribeAndTranslate_TranscribeError(t *testing.T) {
 	s := newTestServer(t, mockFuncs{
-		transcribe: func([]byte, string) (string, error) { return "", errors.New("whisper error") },
+		transcribe: func([]byte, string, string) (string, error) { return "", errors.New("whisper error") },
 	})
 	req := buildAudioForm(t, nil, fakeWAV)
 	w := httptest.NewRecorder()
@@ -191,8 +194,8 @@ func TestHandleTranscribeAndTranslate_TranscribeError(t *testing.T) {
 
 func TestHandleTranscribeAndTranslate_TranslateError(t *testing.T) {
 	s := newTestServer(t, mockFuncs{
-		transcribe: func([]byte, string) (string, error) { return "hello", nil },
-		translate:  func(string, string, string, ModelOptions) (string, error) { return "", errors.New("llama error") },
+		transcribe: func([]byte, string, string) (string, error) { return "hello", nil },
+		translate:  func(string, string, string, ModelOptions, []contextEntry) (string, error) { return "", errors.New("llama error") },
 	})
 	req := buildAudioForm(t, nil, fakeWAV)
 	w := httptest.NewRecorder()
@@ -206,7 +209,7 @@ func TestHandleTranscribeAndTranslate_TranslateError(t *testing.T) {
 func TestHandleTranscribeAndTranslate_DefaultTargetLang(t *testing.T) {
 	var capturedTgt string
 	s := newTestServer(t, mockFuncs{
-		translate: func(_, _, tgt string, _ ModelOptions) (string, error) {
+		translate: func(_, _, tgt string, _ ModelOptions, _ []contextEntry) (string, error) {
 			capturedTgt = tgt
 			return "翻訳", nil
 		},
@@ -224,7 +227,7 @@ func TestHandleTranscribeAndTranslate_DefaultTargetLang(t *testing.T) {
 func TestHandleTranscribeAndTranslate_ModelOptions_Thinking(t *testing.T) {
 	var capturedOpts ModelOptions
 	s := newTestServer(t, mockFuncs{
-		translate: func(_, _, _ string, opts ModelOptions) (string, error) {
+		translate: func(_, _, _ string, opts ModelOptions, _ []contextEntry) (string, error) {
 			capturedOpts = opts
 			return "result", nil
 		},
@@ -320,7 +323,7 @@ func TestResponseIsJSON(t *testing.T) {
 func TestHandleTranscribeAndTranslate_SourceLangPassed(t *testing.T) {
 	var capturedSrc string
 	s := newTestServer(t, mockFuncs{
-		transcribe: func(_ []byte, lang string) (string, error) {
+		transcribe: func(_ []byte, lang string, _ string) (string, error) {
 			capturedSrc = lang
 			return "transcript", nil
 		},
@@ -335,12 +338,72 @@ func TestHandleTranscribeAndTranslate_SourceLangPassed(t *testing.T) {
 	}
 }
 
+// ─── context buffer 連携テスト ────────────────────────────────────────────────
+
+func TestHandleTranscribeAndTranslate_ContextPassedToTranscribe(t *testing.T) {
+	var capturedPrompt string
+	s := newTestServer(t, mockFuncs{
+		transcribe: func(_ []byte, _ string, prompt string) (string, error) {
+			capturedPrompt = prompt
+			return "transcript", nil
+		},
+	})
+	// バッファに直前の発話を追加
+	s.contextBuf.Add(contextEntry{Transcription: "previous utterance", Translation: "前の発話"})
+
+	req := buildAudioForm(t, nil, fakeWAV)
+	w := httptest.NewRecorder()
+	s.handleTranscribeAndTranslate(w, req)
+
+	if capturedPrompt != "previous utterance" {
+		t.Errorf("initial_prompt not passed to transcribe: got %q", capturedPrompt)
+	}
+}
+
+func TestHandleTranscribeAndTranslate_HistoryPassedToTranslate(t *testing.T) {
+	var capturedHistory []contextEntry
+	s := newTestServer(t, mockFuncs{
+		translate: func(_ string, _ string, _ string, _ ModelOptions, hist []contextEntry) (string, error) {
+			capturedHistory = hist
+			return "result", nil
+		},
+	})
+	s.contextBuf.Add(contextEntry{Transcription: "Hello", Translation: "こんにちは"})
+
+	req := buildAudioForm(t, nil, fakeWAV)
+	w := httptest.NewRecorder()
+	s.handleTranscribeAndTranslate(w, req)
+
+	if len(capturedHistory) != 1 || capturedHistory[0].Transcription != "Hello" {
+		t.Errorf("history not passed to translate: got %v", capturedHistory)
+	}
+}
+
+func TestHandleTranscribeAndTranslate_AddsToContextBuf(t *testing.T) {
+	s := newTestServer(t, mockFuncs{
+		transcribe: func([]byte, string, string) (string, error) { return "good morning", nil },
+		translate:  func(string, string, string, ModelOptions, []contextEntry) (string, error) { return "おはよう", nil },
+	})
+
+	req := buildAudioForm(t, nil, fakeWAV)
+	w := httptest.NewRecorder()
+	s.handleTranscribeAndTranslate(w, req)
+
+	entries := s.contextBuf.Entries()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 context entry, got %d", len(entries))
+	}
+	if entries[0].Transcription != "good morning" || entries[0].Translation != "おはよう" {
+		t.Errorf("unexpected context entry: %+v", entries[0])
+	}
+}
+
 // ─── インテグレーション: 実サーバー経由の E2E ─────────────────────────────────
 
 func TestServerEndToEnd(t *testing.T) {
 	s := newTestServer(t, mockFuncs{
-		transcribe: func([]byte, string) (string, error) { return "good morning", nil },
-		translate:  func(text, _, tgt string, _ ModelOptions) (string, error) {
+		transcribe: func([]byte, string, string) (string, error) { return "good morning", nil },
+		translate: func(text, _, tgt string, _ ModelOptions, _ []contextEntry) (string, error) {
 			return fmt.Sprintf("[%s] %s", tgt, text), nil
 		},
 	})

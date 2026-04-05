@@ -151,6 +151,23 @@
     <p class="hint">Google Meet は自分の声をタブに返さないため、自分の発話も翻訳するには「マイク」を含む設定を選んでください。</p>
   </div>
 
+  <h2>チャット投稿設定</h2>
+  <div class="field">
+    <label class="checkbox-label">
+      <input type="checkbox" id="chat-enabled">
+      <span>翻訳結果をチャットに自動投稿する</span>
+    </label>
+  </div>
+  <div class="field" id="chat-format-field">
+    <label for="chat-format">投稿形式</label>
+    <select id="chat-format">
+      <option value="both">原文＋翻訳（各ラベル付き・2回投稿）</option>
+      <option value="translation">翻訳のみ</option>
+      <option value="transcription">原文のみ</option>
+    </select>
+    <p class="hint">「原文＋翻訳」では Whisper の文字起こし直後に原文を投稿し、翻訳完了後に翻訳を続けて投稿します。</p>
+  </div>
+
   <h2>言語設定</h2>
   <div class="field">
     <label for="source-lang">翻訳元言語</label>

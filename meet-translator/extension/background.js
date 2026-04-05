@@ -12,6 +12,13 @@
 
 'use strict';
 
+/** 言語コード → 表示名マッピング */
+const LANG_LABELS = {
+  en: 'English', ja: '日本語', zh: '中文', ko: '한국어',
+  fr: 'Français', de: 'Deutsch', es: 'Español', pt: 'Português',
+};
+const langLabel = (code) => LANG_LABELS[code] || code || '原文';
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -37,6 +44,8 @@ async function getSettings() {
     llamaModel:    '',
     llamaThinking: true,
     audioSource:   'mic-only', // 'both' | 'mic-only' | 'tab-only'
+    chatEnabled:   true,        // チャットへの自動投稿
+    chatFormat:    'both',      // 'both' | 'translation' | 'transcription'
   };
   const stored = await chrome.storage.local.get(Object.keys(defaults));
   return { ...defaults, ...stored };
@@ -76,37 +85,52 @@ async function checkServerHealth() {
   }
 }
 
-async function transcribeAndTranslate(wavBytes) {
-  // Reconstruct ArrayBuffer from the plain Array<number> received via sendMessage
+/**
+ * POST /transcribe – 音声データを Whisper で文字起こしして返す。
+ * @param {number[]} wavBytes - offscreen から送られてきた Array<number>
+ * @param {object}  cfg       - getSettings() の結果
+ * @returns {Promise<string|null>}
+ */
+async function transcribeOnly(wavBytes, cfg) {
   const wavBuffer = new Uint8Array(wavBytes).buffer;
-  const cfg = await getSettings();
-
   const form = new FormData();
   form.append('audio', new Blob([wavBuffer], { type: 'audio/wav' }), 'audio.wav');
-  form.append('target_lang', cfg.targetLang);
   if (cfg.sourceLang) form.append('source_lang', cfg.sourceLang);
 
-  // モデル指定 (空の場合はサーバーデフォルトを使用)
-  if (cfg.llamaModel) {
-    form.append('llama_model', cfg.llamaModel);
-    // モデル別オプションを JSON で送信
-    const opts = buildModelOptions(cfg);
-    form.append('llama_options', JSON.stringify(opts));
-  }
-
-  const url = `${cfg.serverUrl}/transcribe-and-translate`;
-  console.info('[background] transcribeAndTranslate: POST', url, '– wav', wavBuffer.byteLength, 'bytes');
-
-  const res = await fetch(url, {
-    method: 'POST',
-    body: form,
-  });
-
+  console.info('[background] transcribeOnly: POST', `${cfg.serverUrl}/transcribe`, '–', wavBuffer.byteLength, 'bytes');
+  const res = await fetch(`${cfg.serverUrl}/transcribe`, { method: 'POST', body: form });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
     throw new Error(`server error ${res.status}: ${detail}`);
   }
+  const { transcription } = await res.json();
+  return transcription || null;
+}
 
+/**
+ * POST /translate – テキストを LLM で翻訳して返す。
+ * @param {string}  text - 翻訳元テキスト
+ * @param {object}  cfg  - getSettings() の結果
+ * @returns {Promise<string|null>}
+ */
+async function translateOnly(text, cfg) {
+  const params = new URLSearchParams({ text, target_lang: cfg.targetLang });
+  if (cfg.sourceLang)  params.set('source_lang', cfg.sourceLang);
+  if (cfg.llamaModel) {
+    params.set('llama_model', cfg.llamaModel);
+    params.set('llama_options', JSON.stringify(buildModelOptions(cfg)));
+  }
+
+  console.info('[background] translateOnly: POST', `${cfg.serverUrl}/translate`);
+  const res = await fetch(`${cfg.serverUrl}/translate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params,
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`server error ${res.status}: ${detail}`);
+  }
   const { translation } = await res.json();
   return translation || null;
 }
@@ -117,6 +141,29 @@ function buildModelOptions(cfg) {
     return { thinking: cfg.llamaThinking };
   }
   return {};
+}
+
+/**
+ * content.js へメッセージを送る。
+ * 「Receiving end does not exist」の場合は content.js を動的注入してリトライする。
+ * 拡張機能の更新後に開いたままのタブでも確実に届くようにする。
+ */
+async function sendToContentScript(tabId, message) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch (err) {
+    if (!err.message?.includes('Receiving end does not exist')) throw err;
+
+    // content.js が未注入 → 動的注入してリトライ
+    console.info('[background] content.js not found, injecting into tab', tabId);
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+      return await chrome.tabs.sendMessage(tabId, message);
+    } catch (injectErr) {
+      console.warn('[background] content script injection failed:', injectErr.message);
+      return null;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +289,7 @@ async function stopCapture() {
   // Notify the content script that translation has stopped
   if (tabId) {
     try {
-      await chrome.tabs.sendMessage(tabId, { type: 'TRANSLATION_STOPPED' });
+      await sendToContentScript(tabId, { type: 'TRANSLATION_STOPPED' });
     } catch (_) {}
   }
 }
@@ -301,15 +348,34 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const tabId = state.tabId; // capture before async – state may change mid-await
       (async () => {
         try {
-          const translatedText = await transcribeAndTranslate(message.wavBytes);
-          if (tabId && translatedText) {
-            await chrome.tabs.sendMessage(tabId, {
+          const cfg = await getSettings();
+
+          // Step 1: Whisper 文字起こし → 即チャット投稿
+          const transcription = await transcribeOnly(message.wavBytes, cfg);
+          if (!transcription) return;
+
+          console.info('[background] transcription:', transcription.slice(0, 100));
+          if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'translation') {
+            await sendToContentScript(tabId, {
               type: 'POST_TRANSLATION',
-              text: translatedText,
+              text: `[${langLabel(cfg.sourceLang)}]\n${transcription}`,
+            });
+          }
+
+          // Step 2: LLM 翻訳 → チャット投稿
+          if (cfg.chatFormat === 'transcription') return;
+          const translation = await translateOnly(transcription, cfg);
+          if (!translation) return;
+
+          console.info('[background] translation:', translation.slice(0, 100));
+          if (tabId && cfg.chatEnabled) {
+            await sendToContentScript(tabId, {
+              type: 'POST_TRANSLATION',
+              text: `[${langLabel(cfg.targetLang)}]\n${translation}`,
             });
           }
         } catch (err) {
-          console.error('[background] transcribeAndTranslate error:', err);
+          console.error('[background] audio processing error:', err);
         }
       })();
       return false;

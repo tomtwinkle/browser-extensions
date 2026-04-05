@@ -8,7 +8,7 @@ import (
 // ─── buildTranslationPrompt ──────────────────────────────────────────────────
 
 func TestBuildQwenPrompt(t *testing.T) {
-	got := buildTranslationPrompt("Hello", "en", "ja", "qwen", ModelOptions{})
+	got := buildTranslationPrompt("Hello", "en", "ja", "qwen", ModelOptions{}, nil)
 	assertContains(t, got, "<|im_start|>system")
 	assertContains(t, got, "<|im_start|>user")
 	assertContains(t, got, "Translate from English to Japanese")
@@ -20,7 +20,7 @@ func TestBuildQwenPrompt(t *testing.T) {
 
 func TestBuildQwen3Prompt_ThinkingOn(t *testing.T) {
 	opts := ModelOptions{Thinking: true}
-	got := buildTranslationPrompt("Hello", "en", "ja", "qwen3", opts)
+	got := buildTranslationPrompt("Hello", "en", "ja", "qwen3", opts, nil)
 	assertContains(t, got, "<|im_start|>system")
 	assertContains(t, got, "Translate from English to Japanese")
 	assertNotContains(t, got, "/no-think")
@@ -28,13 +28,13 @@ func TestBuildQwen3Prompt_ThinkingOn(t *testing.T) {
 
 func TestBuildQwen3Prompt_ThinkingOff(t *testing.T) {
 	opts := ModelOptions{Thinking: false}
-	got := buildTranslationPrompt("Hello", "en", "ja", "qwen3", opts)
+	got := buildTranslationPrompt("Hello", "en", "ja", "qwen3", opts, nil)
 	assertContains(t, got, "/no-think")
 	assertContains(t, got, "Hello")
 }
 
 func TestBuildGemmaPrompt(t *testing.T) {
-	got := buildTranslationPrompt("Hello", "en", "ja", "gemma", ModelOptions{})
+	got := buildTranslationPrompt("Hello", "en", "ja", "gemma", ModelOptions{}, nil)
 	assertContains(t, got, "<start_of_turn>user")
 	assertContains(t, got, "<end_of_turn>")
 	assertContains(t, got, "<start_of_turn>model")
@@ -44,14 +44,39 @@ func TestBuildGemmaPrompt(t *testing.T) {
 }
 
 func TestBuildTranslationPrompt_UnknownTemplateUsesQwen(t *testing.T) {
-	got := buildTranslationPrompt("Hi", "en", "fr", "unknown-template", ModelOptions{})
+	got := buildTranslationPrompt("Hi", "en", "fr", "unknown-template", ModelOptions{}, nil)
 	assertContains(t, got, "<|im_start|>system")
 	assertContains(t, got, "French")
 }
 
 func TestBuildTranslationPrompt_EmptySourceLang(t *testing.T) {
-	got := buildTranslationPrompt("Hi", "", "ja", "qwen", ModelOptions{})
+	got := buildTranslationPrompt("Hi", "", "ja", "qwen", ModelOptions{}, nil)
 	assertContains(t, got, "the detected language")
+}
+
+func TestBuildTranslationPrompt_WithHistory(t *testing.T) {
+	history := []contextEntry{
+		{Transcription: "Good morning", Translation: "おはようございます"},
+	}
+	got := buildTranslationPrompt("Hello", "en", "ja", "qwen", ModelOptions{}, history)
+	assertContains(t, got, "Good morning")
+	assertContains(t, got, "おはようございます")
+	assertContains(t, got, "Hello")
+}
+
+func TestBuildGemmaPrompt_WithHistory(t *testing.T) {
+	history := []contextEntry{
+		{Transcription: "Good morning", Translation: "おはようございます"},
+	}
+	got := buildTranslationPrompt("Hello", "en", "ja", "gemma", ModelOptions{}, history)
+	assertContains(t, got, "Good morning")
+	assertContains(t, got, "おはようございます")
+	// history turns should appear before the current question
+	historyIdx := strings.Index(got, "Good morning")
+	currentIdx := strings.Index(got, "Hello")
+	if historyIdx >= currentIdx {
+		t.Errorf("history should appear before current text in prompt")
+	}
 }
 
 // ─── stripThinkingTokens ─────────────────────────────────────────────────────
@@ -135,5 +160,60 @@ func assertNotContains(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if strings.Contains(haystack, needle) {
 		t.Errorf("expected %q NOT to contain %q", haystack, needle)
+	}
+}
+
+// ─── stripLLMArtifacts ────────────────────────────────────────────────────────
+
+func TestStripLLMArtifacts(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "gemma end_of_turn",
+			input: "(スタッフ)<end_of_turn>",
+			want:  "(スタッフ)",
+		},
+		{
+			name:  "gemma full turn artifact",
+			input: "(スタッフ)<end_of_turn>\n<start_of_turn>model\n(スタッフ)<end_of_turn>",
+			want:  "(スタッフ)\n(スタッフ)",
+		},
+		{
+			name:  "qwen im tokens",
+			input: "こんにちは<|im_end|>",
+			want:  "こんにちは",
+		},
+		{
+			name:  "qwen im_start assistant",
+			input: "<|im_start|>assistant\nこんにちは<|im_end|>",
+			want:  "こんにちは",
+		},
+		{
+			name:  "llama inst tokens",
+			input: "[INST] hello [/INST] こんにちは",
+			want:  "hello\nこんにちは",
+		},
+		{
+			name:  "clean text unchanged",
+			input: "こんにちは、元気ですか？",
+			want:  "こんにちは、元気ですか？",
+		},
+		{
+			name:  "multiline clean",
+			input: "Hello\nWorld",
+			want:  "Hello\nWorld",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripLLMArtifacts(tt.input)
+			if got != tt.want {
+				t.Errorf("stripLLMArtifacts(%q)\n  got  %q\n  want %q", tt.input, got, tt.want)
+			}
+		})
 	}
 }
