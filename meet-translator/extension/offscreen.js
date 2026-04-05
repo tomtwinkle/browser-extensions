@@ -111,6 +111,12 @@ function calcRms(chunks) {
 function startAudioProcessing(stream) {
   audioContext = new AudioContext();
   mediaStream = stream;
+  bgLog('info', 'AudioContext created, state=' + audioContext.state + ' sampleRate=' + audioContext.sampleRate);
+
+  // Resume in case AudioContext starts suspended (Chrome autoplay policy)
+  if (audioContext.state === 'suspended') {
+    audioContext.resume().then(() => bgLog('info', 'AudioContext resumed'));
+  }
 
   sourceNode = audioContext.createMediaStreamSource(stream);
 
@@ -211,9 +217,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
               },
             },
           });
-          // Discard video – audio only
-          stream.getVideoTracks().forEach((t) => t.stop());
-          bgLog('info', 'getUserMedia succeeded, audio tracks=' + stream.getAudioTracks().length);
+          // Keep video tracks alive – stopping them can mute the shared tab capture source.
+          // We simply disconnect video from the audio graph so it has no effect on output.
+          const audioTracks = stream.getAudioTracks();
+          bgLog('info', 'getUserMedia succeeded, audio tracks=' + audioTracks.length
+            + ' video tracks=' + stream.getVideoTracks().length);
+          audioTracks.forEach((t) =>
+            bgLog('info', 'audio track: label=' + t.label + ' enabled=' + t.enabled + ' readyState=' + t.readyState));
           startAudioProcessing(stream);
         } catch (err) {
           bgLog('error', 'getUserMedia failed: ' + err.name + ' ' + err.message);
