@@ -78,7 +78,8 @@ func printWhisperHelp(w io.Writer) {
 
 func printLlamaHelp(w io.Writer) {
 	fmt.Fprintf(w, "  Specify a model name to auto-download:\n")
-	fmt.Fprintf(w, "    %s--llama-model qwen3.5:4b-q4_k_m%s   (recommended, 3.2GB, Thinking)\n", colorCyan, colorReset)
+	fmt.Fprintf(w, "    %s--llama-model bonsai-8b%s            (1-bit 8B, 1.15GB, Thinking) ★推奨\n", colorCyan, colorReset)
+	fmt.Fprintf(w, "    %s--llama-model qwen3.5:4b-q4_k_m%s   (Qwen3.5, 3.2GB, Thinking)\n", colorCyan, colorReset)
 	fmt.Fprintf(w, "    %s--llama-model qwen3.5:9b-q4_k_m%s   (high accuracy, 5.3GB, Thinking)\n", colorCyan, colorReset)
 	fmt.Fprintf(w, "    %s--llama-model qwen3:4b-q4_k_m%s     (Qwen3, 2.6GB, Thinking)\n", colorCyan, colorReset)
 	fmt.Fprintf(w, "    %s--llama-model calm3:22b-q4_k_m%s    (JA/EN specialist, 13GB, requires 16GB VRAM)\n", colorCyan, colorReset)
