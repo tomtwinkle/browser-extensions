@@ -168,9 +168,11 @@ function sendAudioBuffer() {
   const wavBuffer = encodeWav(chunks, sampleRate);
 
   bgLog('info', 'sendAudioBuffer: sending WAV ' + wavBuffer.byteLength + ' bytes, RMS=' + rms.toFixed(6));
-  // Send the WAV buffer to the background service worker.
-  // chrome.runtime.sendMessage serialises via structured clone — no transfer list needed.
-  chrome.runtime.sendMessage({ type: 'AUDIO_DATA', wavBuffer });
+  // ArrayBuffer does not survive the offscreen→service-worker structured-clone boundary intact;
+  // convert to a plain Array<number> so it round-trips safely. Background reconstructs with
+  // new Uint8Array(wavBytes).buffer.
+  const wavBytes = Array.from(new Uint8Array(wavBuffer));
+  chrome.runtime.sendMessage({ type: 'AUDIO_DATA', wavBytes });
 }
 
 function stopAudioProcessing() {

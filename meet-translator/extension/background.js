@@ -76,7 +76,9 @@ async function checkServerHealth() {
   }
 }
 
-async function transcribeAndTranslate(wavBuffer) {
+async function transcribeAndTranslate(wavBytes) {
+  // Reconstruct ArrayBuffer from the plain Array<number> received via sendMessage
+  const wavBuffer = new Uint8Array(wavBytes).buffer;
   const cfg = await getSettings();
 
   const form = new FormData();
@@ -93,8 +95,7 @@ async function transcribeAndTranslate(wavBuffer) {
   }
 
   const url = `${cfg.serverUrl}/transcribe-and-translate`;
-  const bufLen = wavBuffer instanceof ArrayBuffer ? wavBuffer.byteLength : typeof wavBuffer;
-  console.info('[background] transcribeAndTranslate: POST', url, '– wav', bufLen, 'bytes');
+  console.info('[background] transcribeAndTranslate: POST', url, '– wav', wavBuffer.byteLength, 'bytes');
 
   const res = await fetch(url, {
     method: 'POST',
@@ -292,7 +293,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // ---- Audio data from the offscreen document -------------------------
     case 'AUDIO_DATA': {
       console.info('[background] AUDIO_DATA received, isActive=', state.isActive,
-        'bufLen=', message.wavBuffer instanceof ArrayBuffer ? message.wavBuffer.byteLength : typeof message.wavBuffer);
+        'bytes=', Array.isArray(message.wavBytes) ? message.wavBytes.length : '?');
       if (!state.isActive) {
         console.warn('[background] AUDIO_DATA dropped: capture is not active');
         return false;
@@ -300,7 +301,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const tabId = state.tabId; // capture before async – state may change mid-await
       (async () => {
         try {
-          const translatedText = await transcribeAndTranslate(message.wavBuffer);
+          const translatedText = await transcribeAndTranslate(message.wavBytes);
           if (tabId && translatedText) {
             await chrome.tabs.sendMessage(tabId, {
               type: 'POST_TRANSLATION',
