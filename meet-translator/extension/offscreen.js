@@ -30,11 +30,17 @@ bgLog('info', 'script loaded');
 // Voice Activity Detection (VAD) parameters
 // ---------------------------------------------------------------------------
 
-// RMS above this triggers SPEAKING state (speech start)
-const SPEECH_RMS_THRESHOLD = 1.5e-3;
+// RMS above this triggers the confirmation phase (candidate speech start).
+// Raised from 1.5e-3 to 3e-3 to filter keyboard clicks and background hum.
+const SPEECH_RMS_THRESHOLD = 3e-3;
 
 // RMS below this while SPEAKING counts as silence (hysteresis vs start threshold)
-const SILENCE_RMS_THRESHOLD = 5e-4;
+const SILENCE_RMS_THRESHOLD = 8e-4;
+
+// How many milliseconds of continuous above-threshold audio must be observed
+// before the state machine transitions SILENCE → SPEAKING.
+// Prevents brief noise spikes (keyboard click, mic pop) from starting recording.
+const SPEECH_CONFIRM_MS = 150;
 
 // How many milliseconds of continuous silence ends an utterance
 const SILENCE_AFTER_SPEECH_MS = 800;
@@ -43,7 +49,7 @@ const SILENCE_AFTER_SPEECH_MS = 800;
 const MAX_SPEECH_DURATION_MS = 15000;
 
 // Minimum speech duration (ms) worth sending to the server
-const MIN_SPEECH_DURATION_MS = 400;
+const MIN_SPEECH_DURATION_MS = 500;
 
 // ---------------------------------------------------------------------------
 // Internal state

@@ -38,3 +38,41 @@ func TestIsMeaningfulTranscription(t *testing.T) {
 		})
 	}
 }
+
+// ─── isRepeatTranscription ───────────────────────────────────────────────────
+
+func TestIsRepeatTranscription(t *testing.T) {
+	history := []contextEntry{
+		{Transcription: "Hello everyone.", Translation: "皆さんこんにちは。"},
+		{Transcription: "Good morning.", Translation: "おはようございます。"},
+	}
+
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{"exact match",               "Hello everyone.",     true},
+		{"case difference",           "hello everyone.",     true},
+		{"punctuation difference",    "Hello everyone",      true},
+		{"different text",            "Good afternoon.",     false},
+		{"partial overlap is not dup","Hello",               false},
+		{"empty input",               "",                    false},
+		{"second entry match",        "Good morning.",       true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isRepeatTranscription(tt.text, history)
+			if got != tt.want {
+				t.Errorf("isRepeatTranscription(%q) = %v, want %v", tt.text, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsRepeatTranscription_EmptyHistory(t *testing.T) {
+	if isRepeatTranscription("hello", nil) {
+		t.Error("empty history should never match")
+	}
+}

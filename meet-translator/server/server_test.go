@@ -15,7 +15,7 @@ import (
 // ─── テスト用サーバー構築 ─────────────────────────────────────────────────────
 
 type mockFuncs struct {
-	transcribe func([]byte, string, string) (string, error)
+	transcribe func([]byte, string) (string, error)
 	translate  func(string, string, string, ModelOptions, []contextEntry) (string, error)
 	swapModel  func(string) error
 }
@@ -33,7 +33,7 @@ func newTestServer(t *testing.T, m mockFuncs) *server {
 	if m.transcribe != nil {
 		s.transcribeFn = m.transcribe
 	} else {
-		s.transcribeFn = func([]byte, string, string) (string, error) { return "hello", nil }
+		s.transcribeFn = func([]byte, string) (string, error) { return "hello", nil }
 	}
 	if m.translate != nil {
 		s.translateFn = m.translate
@@ -137,7 +137,7 @@ func TestHandleHealth_CORS_Preflight(t *testing.T) {
 
 func TestHandleTranscribeAndTranslate_Success(t *testing.T) {
 	s := newTestServer(t, mockFuncs{
-		transcribe: func([]byte, string, string) (string, error) { return "hello world", nil },
+		transcribe: func([]byte, string) (string, error) { return "hello world", nil },
 		translate:  func(string, string, string, ModelOptions, []contextEntry) (string, error) { return "こんにちは世界", nil },
 	})
 
@@ -171,7 +171,7 @@ func TestHandleTranscribeAndTranslate_MissingAudio(t *testing.T) {
 
 func TestHandleTranscribeAndTranslate_EmptyTranscription(t *testing.T) {
 	s := newTestServer(t, mockFuncs{
-		transcribe: func([]byte, string, string) (string, error) { return "  ", nil }, // whitespace only
+		transcribe: func([]byte, string) (string, error) { return "  ", nil }, // whitespace only
 	})
 	req := buildAudioForm(t, map[string]string{"target_lang": "ja"}, fakeWAV)
 	w := httptest.NewRecorder()
@@ -189,7 +189,7 @@ func TestHandleTranscribeAndTranslate_EmptyTranscription(t *testing.T) {
 
 func TestHandleTranscribeAndTranslate_TranscribeError(t *testing.T) {
 	s := newTestServer(t, mockFuncs{
-		transcribe: func([]byte, string, string) (string, error) { return "", errors.New("whisper error") },
+		transcribe: func([]byte, string) (string, error) { return "", errors.New("whisper error") },
 	})
 	req := buildAudioForm(t, nil, fakeWAV)
 	w := httptest.NewRecorder()
@@ -202,7 +202,7 @@ func TestHandleTranscribeAndTranslate_TranscribeError(t *testing.T) {
 
 func TestHandleTranscribeAndTranslate_TranslateError(t *testing.T) {
 	s := newTestServer(t, mockFuncs{
-		transcribe: func([]byte, string, string) (string, error) { return "hello", nil },
+		transcribe: func([]byte, string) (string, error) { return "hello", nil },
 		translate:  func(string, string, string, ModelOptions, []contextEntry) (string, error) { return "", errors.New("llama error") },
 	})
 	req := buildAudioForm(t, nil, fakeWAV)
@@ -331,7 +331,7 @@ func TestResponseIsJSON(t *testing.T) {
 func TestHandleTranscribeAndTranslate_SourceLangPassed(t *testing.T) {
 	var capturedSrc string
 	s := newTestServer(t, mockFuncs{
-		transcribe: func(_ []byte, lang string, _ string) (string, error) {
+		transcribe: func(_ []byte, lang string) (string, error) {
 			capturedSrc = lang
 			return "transcript", nil
 		},
@@ -348,29 +348,35 @@ func TestHandleTranscribeAndTranslate_SourceLangPassed(t *testing.T) {
 
 // ─── context buffer 連携テスト ────────────────────────────────────────────────
 
-func TestHandleTranscribeAndTranslate_ContextPassedToTranscribe(t *testing.T) {
-	var capturedPrompt string
+func TestHandleTranscribeAndTranslate_RepeatFiltered(t *testing.T) {
+	// Whisper が直近の発話と同一テキストを返した場合（hallucination）は破棄する
 	s := newTestServer(t, mockFuncs{
-		transcribe: func(_ []byte, _ string, prompt string) (string, error) {
-			capturedPrompt = prompt
-			return "transcript", nil
+		transcribe: func(_ []byte, _ string) (string, error) {
+			return "previous utterance", nil // 直前と同一
 		},
 	})
-	// バッファに直前の発話を追加
 	s.contextBuf.Add(contextEntry{Transcription: "previous utterance", Translation: "前の発話"})
 
 	req := buildAudioForm(t, nil, fakeWAV)
 	w := httptest.NewRecorder()
 	s.handleTranscribeAndTranslate(w, req)
 
-	if capturedPrompt != "previous utterance" {
-		t.Errorf("initial_prompt not passed to transcribe: got %q", capturedPrompt)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["transcription"] != "" || resp["translation"] != "" {
+		t.Errorf("repeated transcription should be filtered, got transcription=%q translation=%q",
+			resp["transcription"], resp["translation"])
 	}
 }
 
 func TestHandleTranscribeAndTranslate_HistoryPassedToTranslate(t *testing.T) {
 	var capturedHistory []contextEntry
 	s := newTestServer(t, mockFuncs{
+		// "good morning" is distinct from the pre-loaded "Hello" so repeat-filter won't trigger
+		transcribe: func([]byte, string) (string, error) { return "good morning", nil },
 		translate: func(_ string, _ string, _ string, _ ModelOptions, hist []contextEntry) (string, error) {
 			capturedHistory = hist
 			return "result", nil
@@ -389,7 +395,7 @@ func TestHandleTranscribeAndTranslate_HistoryPassedToTranslate(t *testing.T) {
 
 func TestHandleTranscribeAndTranslate_AddsToContextBuf(t *testing.T) {
 	s := newTestServer(t, mockFuncs{
-		transcribe: func([]byte, string, string) (string, error) { return "good morning", nil },
+		transcribe: func([]byte, string) (string, error) { return "good morning", nil },
 		translate:  func(string, string, string, ModelOptions, []contextEntry) (string, error) { return "おはよう", nil },
 	})
 
@@ -410,7 +416,7 @@ func TestHandleTranscribeAndTranslate_AddsToContextBuf(t *testing.T) {
 
 func TestServerEndToEnd(t *testing.T) {
 	s := newTestServer(t, mockFuncs{
-		transcribe: func([]byte, string, string) (string, error) { return "good morning", nil },
+		transcribe: func([]byte, string) (string, error) { return "good morning", nil },
 		translate: func(text, _, tgt string, _ ModelOptions, _ []contextEntry) (string, error) {
 			return fmt.Sprintf("[%s] %s", tgt, text), nil
 		},

@@ -1,6 +1,8 @@
 // context_buffer.go – 直近の発話履歴を保持するリングバッファ
 //
-// Whisper の initial_prompt と LLM の few-shot context の両方に使われる。
+// LLM の few-shot context に使用する。
+// ※ Whisper の initial_prompt には使用しない（過去発話を含めると
+//    無音時に hallucination が発生し翻訳連鎖を引き起こすため）。
 // サーバー全体で単一のバッファを共有する（シングルユーザーのローカルサーバー想定）。
 
 package main
@@ -46,7 +48,8 @@ func (b *contextBuffer) Entries() []contextEntry {
 	return cp
 }
 
-// Transcriptions は全エントリの文字起こし部分のみを返す。Whisper initial_prompt 用。
+// Transcriptions は全エントリの文字起こし部分のみを返す。
+// 重複検出（isRepeatTranscription）などで使用する。
 func (b *contextBuffer) Transcriptions() []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
