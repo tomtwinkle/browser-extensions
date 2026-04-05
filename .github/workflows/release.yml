@@ -109,14 +109,17 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: echo "C:/msys64/usr/bin" >> $GITHUB_PATH
 
+      # キャッシュキーに GPU 種別・bridge ファイルを含め restore-keys は設定しない。
+      # restore-keys によるフォールバックは cmake の .built 番人ファイルが存在する
+      # 古いキャッシュを復元し cmake がスキップされ古いヘッダーでビルドが壊れる
+      # 原因となるため使用しない。
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
             meet-translator/server/vendor
-          key: ${{ runner.os }}-${{ runner.arch }}-release-${{ hashFiles('meet-translator/server/Makefile') }}
-          restore-keys: ${{ runner.os }}-${{ runner.arch }}-release-
+          key: ${{ runner.os }}-${{ runner.arch }}-release-${{ matrix.gpu }}-${{ hashFiles('meet-translator/server/Makefile', 'meet-translator/server/llama_bridge.cpp', 'meet-translator/server/llama_bridge.h', 'meet-translator/server/whisper_bridge.cpp', 'meet-translator/server/whisper_bridge.h') }}
 
       - name: Build
         working-directory: meet-translator/server
