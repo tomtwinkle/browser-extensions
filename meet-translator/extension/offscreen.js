@@ -178,25 +178,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       // Acknowledge receipt synchronously so background.js knows the doc is ready
       sendResponse({ ack: true });
 
-      const constraints = {
-        audio: {
-          mandatory: {
-            chromeMediaSource: 'tab',
-            chromeMediaSourceId: message.streamId,
-          },
-        },
-        video: false,
-      };
-
-      navigator.mediaDevices
-        .getUserMedia(constraints)
-        .then((stream) => {
-          console.info('[offscreen] getUserMedia succeeded, tracks=', stream.getAudioTracks().length);
+      // Chrome tab capture requires both audio AND video in mandatory constraints.
+      // Video tracks are stopped immediately after the stream is obtained.
+      const streamId = message.streamId;
+      (async () => {
+        console.info('[offscreen] calling getUserMedia...');
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              mandatory: {
+                chromeMediaSource: 'tab',
+                chromeMediaSourceId: streamId,
+              },
+            },
+            video: {
+              mandatory: {
+                chromeMediaSource: 'tab',
+                chromeMediaSourceId: streamId,
+              },
+            },
+          });
+          // Discard video – audio only
+          stream.getVideoTracks().forEach((t) => t.stop());
+          console.info('[offscreen] getUserMedia succeeded, audio tracks=',
+            stream.getAudioTracks().length);
           startAudioProcessing(stream);
-        })
-        .catch((err) => {
-          console.error('[offscreen] getUserMedia failed:', err.name, err.message);
-        });
+        } catch (err) {
+          console.error('[offscreen] getUserMedia failed:', err.name, err.message, err);
+        }
+      })();
       return false; // sendResponse was already called synchronously
     }
 
