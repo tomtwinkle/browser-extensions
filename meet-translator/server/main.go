@@ -316,6 +316,11 @@ if transcription == "" {
 writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
 return
 }
+if !isMeaningfulTranscription(transcription) {
+s.logVerbose("transcription filtered (noise): %q", transcription)
+writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
+return
+}
 s.logVerbose("transcription: %q", transcription)
 
 translation, err := s.translateFn(transcription, sourceLang, targetLang, opts)
@@ -369,6 +374,11 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	transcription = strings.TrimSpace(transcription)
+	if !isMeaningfulTranscription(transcription) {
+		s.logVerbose("transcription filtered (noise): %q", transcription)
+		writeJSON(w, http.StatusOK, map[string]string{"transcription": ""})
+		return
+	}
 	s.logVerbose("transcription: %q", transcription)
 
 	writeJSON(w, http.StatusOK, map[string]string{"transcription": transcription})
