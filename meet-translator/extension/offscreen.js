@@ -35,10 +35,12 @@ const SILENCE_RMS_THRESHOLD = 5e-4;
 // ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
-let audioContext = null;
-let sourceNode = null;
+let audioContext  = null;
+let sourceNode    = null;   // tab audio source
+let micSourceNode = null;   // microphone source (optional)
 let processorNode = null;
-let mediaStream = null;
+let mediaStream   = null;   // tab MediaStream
+let micStream     = null;   // microphone MediaStream
 let collectedSamples = []; // Array of Float32Array
 let sendTimer = null;
 
@@ -108,7 +110,8 @@ function calcRms(chunks) {
 // ---------------------------------------------------------------------------
 // Audio helpers
 // ---------------------------------------------------------------------------
-function startAudioProcessing(stream) {
+/** Start audio processing with the tab stream, and optionally mix in mic. */
+function startAudioProcessing(stream, micMediaStream) {
   audioContext = new AudioContext();
   mediaStream = stream;
   bgLog('info', 'AudioContext created, state=' + audioContext.state + ' sampleRate=' + audioContext.sampleRate);
@@ -118,19 +121,25 @@ function startAudioProcessing(stream) {
     audioContext.resume().then(() => bgLog('info', 'AudioContext resumed'));
   }
 
-  sourceNode = audioContext.createMediaStreamSource(stream);
-
-  // ScriptProcessorNode is deprecated but still universally supported.
-  // Replace with an AudioWorklet before production deployment.
   const bufferSize = 4096;
   processorNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
-
   processorNode.onaudioprocess = (event) => {
     const inputData = event.inputBuffer.getChannelData(0);
     collectedSamples.push(new Float32Array(inputData)); // copy the buffer
   };
 
+  // Tab audio source
+  sourceNode = audioContext.createMediaStreamSource(stream);
   sourceNode.connect(processorNode);
+
+  // Microphone source – mixed into the same processor node (signals are summed)
+  if (micMediaStream) {
+    micStream = micMediaStream;
+    micSourceNode = audioContext.createMediaStreamSource(micMediaStream);
+    micSourceNode.connect(processorNode);
+    bgLog('info', 'microphone mixed in');
+  }
+
   // Connect to destination so the graph stays alive
   processorNode.connect(audioContext.destination);
 
@@ -166,6 +175,10 @@ function stopAudioProcessing() {
   clearInterval(sendTimer);
   sendTimer = null;
 
+  if (micSourceNode) {
+    micSourceNode.disconnect();
+    micSourceNode = null;
+  }
   if (processorNode) {
     processorNode.disconnect();
     processorNode = null;
@@ -181,6 +194,10 @@ function stopAudioProcessing() {
   if (mediaStream) {
     mediaStream.getTracks().forEach((t) => t.stop());
     mediaStream = null;
+  }
+  if (micStream) {
+    micStream.getTracks().forEach((t) => t.stop());
+    micStream = null;
   }
 
   collectedSamples = [];
@@ -224,7 +241,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             + ' video tracks=' + stream.getVideoTracks().length);
           audioTracks.forEach((t) =>
             bgLog('info', 'audio track: label=' + t.label + ' enabled=' + t.enabled + ' readyState=' + t.readyState));
-          startAudioProcessing(stream);
+
+          // Try to also capture microphone so user's own voice is included.
+          // Permission should have been pre-granted by the popup.
+          let micMediaStream = null;
+          try {
+            micMediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            bgLog('info', 'microphone stream obtained, tracks=' + micMediaStream.getAudioTracks().length);
+          } catch (micErr) {
+            bgLog('warn', 'microphone access failed (tab-only capture): ' + micErr.name + ' ' + micErr.message);
+          }
+
+          startAudioProcessing(stream, micMediaStream);
         } catch (err) {
           bgLog('error', 'getUserMedia failed: ' + err.name + ' ' + err.message);
         }

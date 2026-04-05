@@ -112,10 +112,19 @@ toggleBtn.addEventListener('click', async () => {
         return;
       }
 
+      // マイク権限を事前取得 (offscreen document での getUserMedia に必要)
+      // 取得したストリームはすぐ停止 — 実際の録音は offscreen.js で行う
+      try {
+        const tmpMicStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        tmpMicStream.getTracks().forEach((t) => t.stop());
+      } catch (micErr) {
+        // 許可を得られなかった場合は警告表示のみ（他参加者の音声のみ翻訳）
+        showError('マイクへのアクセスを拒否しました。他の参加者の音声のみ翻訳されます。');
+      }
+
       chrome.runtime.sendMessage(
         { type: 'START_CAPTURE', tabId: tab.id },
-        (response) => {
-          setLoading(false);
+        (response) => {          setLoading(false);
           if (chrome.runtime.lastError || !response?.success) {
             showError(response?.error || '開始に失敗しました。サーバーが起動しているか確認してください。');
             updateServerInfo(null);
