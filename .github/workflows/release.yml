@@ -13,12 +13,34 @@ defaults:
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
-  # tag: conventional commits を解析して version を bump し tag + release を作成
+  # changed: どの extension のファイルが変更されたかを検出する
+  # ────────────────────────────────────────────────────────────────────────────
+  changed:
+    runs-on: ubuntu-latest
+    outputs:
+      meet-translator: ${{ steps.filter.outputs.meet-translator }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3
+        id: filter
+        with:
+          filters: |
+            meet-translator:
+              - 'meet-translator/**'
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # tag-meet-translator: conventional commits を解析して version を bump し
+  #                      meet-translator/vX.Y.Z タグと release を作成
   #   feat:           → minor bump (0.1.0 → 0.2.0)
   #   fix: / others   → patch bump (0.1.0 → 0.1.1)
   #   BREAKING CHANGE → minor bump (pre-major: stay in 0.x)
   # ────────────────────────────────────────────────────────────────────────────
-  tag:
+  tag-meet-translator:
+    needs: changed
+    if: needs.changed.outputs.meet-translator == 'true'
     runs-on: ubuntu-latest
     outputs:
       new_tag:   ${{ steps.tag.outputs.new_tag }}
@@ -33,7 +55,7 @@ jobs:
         uses: mathieudutour/github-tag-action@a22cf08638b34d5badda920f9daf6e72c477b07b # v6.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          tag_prefix: v
+          tag_prefix: meet-translator/v
           default_bump: patch
           initial_version: 0.1.0
 
@@ -51,8 +73,8 @@ jobs:
   # build-server: server binary を各 platform でビルドして release にアタッチ
   # ────────────────────────────────────────────────────────────────────────────
   build-server:
-    needs: tag
-    if: needs.tag.outputs.new_tag != ''
+    needs: tag-meet-translator
+    if: needs.tag-meet-translator.outputs.new_tag != ''
     name: Build server (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -138,8 +160,8 @@ jobs:
   # package-extension: browser extension を zip にまとめる
   # ────────────────────────────────────────────────────────────────────────────
   package-extension:
-    needs: tag
-    if: needs.tag.outputs.new_tag != ''
+    needs: tag-meet-translator
+    if: needs.tag-meet-translator.outputs.new_tag != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -158,8 +180,8 @@ jobs:
   # upload-assets: 全成果物を GitHub Release にアップロード
   # ────────────────────────────────────────────────────────────────────────────
   upload-assets:
-    needs: [tag, build-server, package-extension]
-    if: needs.tag.outputs.new_tag != ''
+    needs: [tag-meet-translator, build-server, package-extension]
+    if: needs.tag-meet-translator.outputs.new_tag != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -175,7 +197,7 @@ jobs:
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.tag.outputs.new_tag }}
+          TAG: ${{ needs.tag-meet-translator.outputs.new_tag }}
           REPO: ${{ github.repository }}
         run: |
           for f in artifacts/*; do
