@@ -70,7 +70,7 @@ async function transcribeAndTranslate(wavBuffer) {
 
 /** モデル名に応じたオプションオブジェクトを組み立てる。 */
 function buildModelOptions(cfg) {
-  if (cfg.llamaModel.startsWith('qwen3:')) {
+  if (cfg.llamaModel.startsWith('qwen3:') || cfg.llamaModel.startsWith('qwen3.5:')) {
     return { thinking: cfg.llamaThinking };
   }
   return {};
@@ -188,13 +188,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return false;
 
     // ---- Audio data from the offscreen document -------------------------
-    case 'AUDIO_DATA':
+    case 'AUDIO_DATA': {
       if (!state.isActive) return false;
+      const tabId = state.tabId; // capture before async – state may change mid-await
       (async () => {
         try {
           const translatedText = await transcribeAndTranslate(message.wavBuffer);
-          if (state.tabId && translatedText) {
-            await chrome.tabs.sendMessage(state.tabId, {
+          if (tabId && translatedText) {
+            await chrome.tabs.sendMessage(tabId, {
               type: 'POST_TRANSLATION',
               text: translatedText,
             });
@@ -204,6 +205,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
       })();
       return false;
+    }
 
     default:
       return false;

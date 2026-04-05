@@ -11,10 +11,14 @@ const DEFAULTS = {
 
 // モデル別オプション定義: どのモデルがどのオプションパネルを持つか
 const MODEL_OPTIONS_MAP = {
-  'qwen3:0.6b-q4_k_m': 'qwen3',
-  'qwen3:1.7b-q4_k_m': 'qwen3',
-  'qwen3:4b-q4_k_m':   'qwen3',
-  'qwen3:8b-q4_k_m':   'qwen3',
+  'qwen3:0.6b-q4_k_m':   'qwen3',
+  'qwen3:1.7b-q4_k_m':   'qwen3',
+  'qwen3:4b-q4_k_m':     'qwen3',
+  'qwen3:8b-q4_k_m':     'qwen3',
+  'qwen3.5:0.8b-q4_k_m': 'qwen3',
+  'qwen3.5:2b-q4_k_m':   'qwen3',
+  'qwen3.5:4b-q4_k_m':   'qwen3',
+  'qwen3.5:9b-q4_k_m':   'qwen3',
 };
 
 const $ = (id) => document.getElementById(id);

@@ -131,8 +131,9 @@ function sendAudioBuffer() {
   const sampleRate = audioContext ? audioContext.sampleRate : 48000;
   const wavBuffer = encodeWav(chunks, sampleRate);
 
-  // Transfer the ArrayBuffer (zero-copy) to the background service worker
-  chrome.runtime.sendMessage({ type: 'AUDIO_DATA', wavBuffer }, [wavBuffer]);
+  // Send the WAV buffer to the background service worker.
+  // chrome.runtime.sendMessage serialises via structured clone — no transfer list needed.
+  chrome.runtime.sendMessage({ type: 'AUDIO_DATA', wavBuffer });
 }
 
 function stopAudioProcessing() {
