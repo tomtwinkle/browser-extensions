@@ -172,6 +172,9 @@ cfg        config
 mux        *http.ServeMux
 whisperCtx *C.whisper_context
 
+// 起動時に指定されたオリジナルのモデルスペック（パス解決前）
+whisperModelSpec string
+
 // llama モデル管理 (modelMu で保護)
 modelMu         sync.Mutex
 llamaModel      C.llama_bridge_model
@@ -183,13 +186,14 @@ translateFn  func(text, srcLang, tgtLang string, opts ModelOptions) (string, err
 swapModelFn  func(spec string) error
 }
 
-func newServer(cfg config, whisperCtx *C.whisper_context, llamaModel C.llama_bridge_model, modelSpec string) *server {
+func newServer(cfg config, whisperCtx *C.whisper_context, llamaModel C.llama_bridge_model, whisperSpec, llamaSpec string) *server {
 s := &server{
 cfg:             cfg,
 mux:             http.NewServeMux(),
 whisperCtx:      whisperCtx,
+whisperModelSpec: whisperSpec,
 llamaModel:      llamaModel,
-loadedModelSpec: modelSpec,
+loadedModelSpec: llamaSpec,
 }
 // デフォルトは CGo 実装を使用
 s.transcribeFn = s.transcribeInternal
@@ -234,7 +238,7 @@ llamaModel := s.loadedModelSpec
 s.modelMu.Unlock()
 writeJSON(w, http.StatusOK, map[string]string{
 "status":        "ok",
-"whisper_model": s.cfg.whisperModel,
+"whisper_model": s.whisperModelSpec,
 "llama_model":   llamaModel,
 })
 }
@@ -353,6 +357,7 @@ os.Exit(0)
 }
 
 // モデル名解決 (自動ダウンロード・Ollama キャッシュ共有)
+originalWhisperSpec := cfg.whisperModel
 originalModelSpec := cfg.llamaModel
 runPreflight(&cfg)
 
@@ -380,7 +385,7 @@ log.Printf("llama model loaded")
 
 httpSrv := &http.Server{
 Addr:    ":" + cfg.port,
-Handler: newServer(cfg, whisperCtx, llamaModel, originalModelSpec),
+Handler: newServer(cfg, whisperCtx, llamaModel, originalWhisperSpec, originalModelSpec),
 }
 
 quit := make(chan os.Signal, 1)

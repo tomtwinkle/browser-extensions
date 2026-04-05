@@ -81,7 +81,7 @@ var fakeWAV = []byte("RIFF\x00\x00\x00\x00WAVEfmt ")
 
 func TestHandleHealth_OK(t *testing.T) {
 	s := newTestServer(t, mockFuncs{})
-	s.cfg.whisperModel = "base"
+	s.whisperModelSpec = "base"
 	s.loadedModelSpec = "qwen3.5:4b-q4_k_m"
 	w := httptest.NewRecorder()
 	s.handleHealth(w, httptest.NewRequest(http.MethodGet, "/health", nil))
