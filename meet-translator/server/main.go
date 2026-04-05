@@ -175,6 +175,9 @@ whisperCtx *C.whisper_context
 // 起動時に指定されたオリジナルのモデルスペック（パス解決前）
 whisperModelSpec string
 
+// whisper コンテキスト保護 (非スレッドセーフなため直列化必須)
+whisperMu sync.Mutex
+
 // llama モデル管理 (modelMu で保護)
 modelMu         sync.Mutex
 llamaModel      C.llama_bridge_model
@@ -295,26 +298,14 @@ s.logVerbose("request: audio=%d bytes, header=[% x], target_lang=%q, source_lang
 len(audioData), audioData[:hdrLen], targetLang, sourceLang, requestedModel, rawOpts)
 }
 
-// モデルのホットスワップと翻訳は排他制御
-s.modelMu.Lock()
-defer s.modelMu.Unlock()
-
-if requestedModel != "" && requestedModel != s.loadedModelSpec {
-if err := s.swapModelFn(requestedModel); err != nil {
-log.Printf("[model] hot-swap failed: %v", err)
-http.Error(w, "model swap failed: "+err.Error(), http.StatusInternalServerError)
-return
-}
-}
-
-opts := parseModelOptions(rawOpts, s.loadedModelSpec)
-
-// 直前の発話テキストを Whisper の initial_prompt に使用
+// Whisper は非スレッドセーフ – whisperMu で直列化
+s.whisperMu.Lock()
 initialPrompt := strings.Join(s.contextBuf.Transcriptions(), " ")
-transcription, err := s.transcribeFn(audioData, sourceLang, initialPrompt)
-if err != nil {
-log.Printf("[transcribe] %v", err)
-http.Error(w, "transcription failed: "+err.Error(), http.StatusInternalServerError)
+transcription, transcribeErr := s.transcribeFn(audioData, sourceLang, initialPrompt)
+s.whisperMu.Unlock()
+if transcribeErr != nil {
+log.Printf("[transcribe] %v", transcribeErr)
+http.Error(w, "transcription failed: "+transcribeErr.Error(), http.StatusInternalServerError)
 return
 }
 transcription = strings.TrimSpace(transcription)
@@ -328,6 +319,20 @@ writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation"
 return
 }
 s.logVerbose("transcription: %q", transcription)
+
+// モデルのホットスワップと翻訳は排他制御 (llama のみ)
+s.modelMu.Lock()
+defer s.modelMu.Unlock()
+
+if requestedModel != "" && requestedModel != s.loadedModelSpec {
+if err := s.swapModelFn(requestedModel); err != nil {
+log.Printf("[model] hot-swap failed: %v", err)
+http.Error(w, "model swap failed: "+err.Error(), http.StatusInternalServerError)
+return
+}
+}
+
+opts := parseModelOptions(rawOpts, s.loadedModelSpec)
 
 // 直前の発話ペアを LLM の few-shot context に使用
 history := s.contextBuf.Entries()
@@ -379,9 +384,11 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 			len(audioData), audioData[:hdrLen], sourceLang)
 	}
 
-	// 直前の発話テキストを Whisper の initial_prompt に使用
+	// Whisper は非スレッドセーフ – whisperMu で直列化
+	s.whisperMu.Lock()
 	initialPrompt := strings.Join(s.contextBuf.Transcriptions(), " ")
 	transcription, err := s.transcribeFn(audioData, sourceLang, initialPrompt)
+	s.whisperMu.Unlock()
 	if err != nil {
 		log.Printf("[transcribe] %v", err)
 		http.Error(w, "transcription failed: "+err.Error(), http.StatusInternalServerError)
