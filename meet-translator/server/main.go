@@ -40,7 +40,8 @@ import (
 "strconv"
 "strings"
 "sync"
-"syscall"
+	"sync/atomic"
+	"syscall"
 "time"
 )
 
@@ -226,11 +227,12 @@ s.mux.ServeHTTP(w, r)
 
 // verboseEnabled はパッケージレベルの verbose フラグ。
 // main() で cfg.verbose が確定した後にセットされ、model_manager.go 等からも参照される。
-var verboseEnabled bool
+// atomic.Bool を使うことでスタートアップ後の並行読み取りを安全にする。
+var verboseEnabled atomic.Bool
 
 // logV はパッケージレベルの verbose ロガー。server 構造体が生成される前でも使える。
 func logV(format string, args ...any) {
-if verboseEnabled {
+if verboseEnabled.Load() {
 log.Printf("[verbose] "+format, args...)
 }
 }
@@ -298,11 +300,14 @@ s.logVerbose("request: audio=%d bytes, header=[% x], target_lang=%q, source_lang
 len(audioData), audioData[:hdrLen], targetLang, sourceLang, requestedModel, rawOpts)
 }
 
-// Whisper は非スレッドセーフ – whisperMu で直列化
-s.whisperMu.Lock()
+// contextBuf 読み取りはロック外で行う (contextBuf 自身に内部ロックあり)
 initialPrompt := strings.Join(s.contextBuf.Transcriptions(), " ")
+
+// Whisper は非スレッドセーフ – whisperMu で直列化 (contextBuf アクセスを含めない)
+s.whisperMu.Lock()
 transcription, transcribeErr := s.transcribeFn(audioData, sourceLang, initialPrompt)
 s.whisperMu.Unlock()
+
 if transcribeErr != nil {
 log.Printf("[transcribe] %v", transcribeErr)
 http.Error(w, "transcription failed: "+transcribeErr.Error(), http.StatusInternalServerError)
@@ -320,32 +325,33 @@ return
 }
 s.logVerbose("transcription: %q", transcription)
 
-// モデルのホットスワップと翻訳は排他制御 (llama のみ)
-s.modelMu.Lock()
-defer s.modelMu.Unlock()
+// LLM の few-shot context を modelMu 取得前に読む (ネストロック回避)
+history := s.contextBuf.Entries()
 
+// モデルのホットスワップと翻訳は排他制御 (llama のみ)
+// defer を使わず明示的 Unlock で Add をロック外に置く
+s.modelMu.Lock()
 if requestedModel != "" && requestedModel != s.loadedModelSpec {
 if err := s.swapModelFn(requestedModel); err != nil {
+s.modelMu.Unlock()
 log.Printf("[model] hot-swap failed: %v", err)
 http.Error(w, "model swap failed: "+err.Error(), http.StatusInternalServerError)
 return
 }
 }
-
 opts := parseModelOptions(rawOpts, s.loadedModelSpec)
+translation, translateErr := s.translateFn(transcription, sourceLang, targetLang, opts, history)
+s.modelMu.Unlock()
 
-// 直前の発話ペアを LLM の few-shot context に使用
-history := s.contextBuf.Entries()
-translation, err := s.translateFn(transcription, sourceLang, targetLang, opts, history)
-if err != nil {
-log.Printf("[translate] %v", err)
-http.Error(w, "translation failed: "+err.Error(), http.StatusInternalServerError)
+if translateErr != nil {
+log.Printf("[translate] %v", translateErr)
+http.Error(w, "translation failed: "+translateErr.Error(), http.StatusInternalServerError)
 return
 }
 translation = strings.TrimSpace(translation)
 s.logVerbose("translation: %q", translation)
 
-// バッファに追加して次のリクエストで使用
+// バッファに追加 (全ロック解放後)
 s.contextBuf.Add(contextEntry{Transcription: transcription, Translation: translation})
 
 writeJSON(w, http.StatusOK, map[string]string{
@@ -384,9 +390,10 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 			len(audioData), audioData[:hdrLen], sourceLang)
 	}
 
-	// Whisper は非スレッドセーフ – whisperMu で直列化
-	s.whisperMu.Lock()
+	// contextBuf 読み取りはロック外で行う (contextBuf 自身に内部ロックあり)
 	initialPrompt := strings.Join(s.contextBuf.Transcriptions(), " ")
+	// Whisper は非スレッドセーフ – whisperMu で直列化 (contextBuf アクセスを含めない)
+	s.whisperMu.Lock()
 	transcription, err := s.transcribeFn(audioData, sourceLang, initialPrompt)
 	s.whisperMu.Unlock()
 	if err != nil {
@@ -432,22 +439,24 @@ func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 
 	s.logVerbose("translate: text=%q, target_lang=%q, llama_model=%q", text, targetLang, requestedModel)
 
-	s.modelMu.Lock()
-	defer s.modelMu.Unlock()
+	// LLM の few-shot context を modelMu 取得前に読む (ネストロック回避)
+	history := s.contextBuf.Entries()
 
+	// モデルのホットスワップと翻訳は排他制御
+	// defer を使わず明示的 Unlock で Add をロック外に置く
+	s.modelMu.Lock()
 	if requestedModel != "" && requestedModel != s.loadedModelSpec {
 		if err := s.swapModelFn(requestedModel); err != nil {
+			s.modelMu.Unlock()
 			log.Printf("[model] hot-swap failed: %v", err)
 			http.Error(w, "model swap failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
-
 	opts := parseModelOptions(rawOpts, s.loadedModelSpec)
-
-	// 直前の発話ペアを LLM の few-shot context に使用
-	history := s.contextBuf.Entries()
 	translation, err := s.translateFn(text, sourceLang, targetLang, opts, history)
+	s.modelMu.Unlock()
+
 	if err != nil {
 		log.Printf("[translate] %v", err)
 		http.Error(w, "translation failed: "+err.Error(), http.StatusInternalServerError)
@@ -456,7 +465,7 @@ func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 	translation = strings.TrimSpace(translation)
 	s.logVerbose("translation: %q", translation)
 
-	// バッファに追加して次のリクエストで使用 (text = 直前の /transcribe の出力)
+	// バッファに追加 (全ロック解放後, text = 直前の /transcribe の出力)
 	s.contextBuf.Add(contextEntry{Transcription: text, Translation: translation})
 
 	writeJSON(w, http.StatusOK, map[string]string{"translation": translation})
@@ -505,7 +514,7 @@ originalModelSpec := cfg.llamaModel
 runPreflight(&cfg)
 
 // verbose フラグをパッケージレベル変数に反映（model_manager.go 等で使用）
-verboseEnabled = cfg.verbose
+verboseEnabled.Store(cfg.verbose)
 
 // llama バックエンド初期化
 initLlamaBackend()
