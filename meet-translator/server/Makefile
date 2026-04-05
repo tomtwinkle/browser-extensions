@@ -12,7 +12,9 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 # pinned versions
-LLAMA_VERSION   := b8664
+# llama.cpp: PrismML fork (adds Q1_0_g128 1-bit quantization support for Bonsai-8B)
+LLAMA_VERSION   := v0.0.2-prism
+LLAMA_REPO      := https://github.com/PrismML-Eng/llama.cpp.git
 WHISPER_VERSION := v1.8.4
 
 OS_NAME   := $(shell uname -s 2>/dev/null || echo Windows_NT)
@@ -103,7 +105,7 @@ deps: $(BUILD_DIR)/.built
 $(LLAMA_DIR):
 	@echo "[deps] Cloning llama.cpp ($(LLAMA_VERSION))..."
 	git clone --depth=1 --branch $(LLAMA_VERSION) \
-	https://github.com/ggerganov/llama.cpp.git $(LLAMA_DIR)
+	$(LLAMA_REPO) $(LLAMA_DIR)
 
 $(WHISPER_DIR):
 	@echo "[deps] Cloning whisper.cpp ($(WHISPER_VERSION))..."

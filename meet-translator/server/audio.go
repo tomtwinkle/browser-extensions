@@ -114,7 +114,7 @@ func parseWAV(r io.Reader) (*wavData, error) {
 					samples[i] = float32(s) / 32768.0
 				}
 			} else {
-				for i := 0; i < len(samples); i++ {
+				for i := range samples {
 					var sum float32
 					for ch := 0; ch < int(numChannels); ch++ {
 						sum += float32(pcm16[i*int(numChannels)+ch])

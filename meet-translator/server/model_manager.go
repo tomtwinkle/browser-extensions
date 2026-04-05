@@ -114,6 +114,15 @@ var llamaRegistry = map[string]LlamaEntry{
 		Template: "qwen",
 	},
 
+	// ── Bonsai 8B (PrismML 1-bit, Qwen3-8B ベース, Apache 2.0) ──────────────
+	// Q1_0_g128 形式: ~1.15 GB, 標準 llama.cpp では読み込み不可。
+	// PrismML fork (v0.0.2-prism 以降) が必要。
+	"bonsai-8b": {
+		URL:         "https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B.gguf",
+		Template:    "qwen3",
+		HasThinking: true,
+	},
+
 	// ── Gemma 4 ──────────────────────────────────────────────────────────────
 	"gemma4:e2b-q4_k_m": {
 		URL:      "https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/main/google_gemma-4-E2B-it-Q4_K_M.gguf",

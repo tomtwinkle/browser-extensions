@@ -46,19 +46,17 @@ type modelTier struct {
 var gpuTiers = []modelTier{
 	{64, "large-v3-turbo", "calm3:22b-q4_k_m"},
 	{32, "medium", "calm3:22b-q4_k_m"},
-	{16, "small", "gemma4:e4b-q4_k_m"},
-	{8, "small", "gemma4:e4b-q4_k_m"},
-	{4, "base", "gemma4:e4b-q4_k_m"},
-	{0, "tiny", "gemma4:e2b-q4_k_m"},
+	{4, "small", "bonsai-8b"}, // ~1.15GB VRAM, 8B quality
+	{0, "tiny", "bonsai-8b"},  // <4GB: bonsai-8b is smaller than gemma4:e2b (1.3GB)
 }
 
 // cpuTiers は CPU のみのモデル選択テーブル。
 // 推論速度を優先し、リアルタイム翻訳が成立する範囲で最大品質を選ぶ。
 var cpuTiers = []modelTier{
-	{16, "small", "gemma4:e4b-q4_k_m"},
-	{8, "base", "gemma4:e4b-q4_k_m"},
-	{4, "base", "gemma4:e2b-q4_k_m"},
-	{0, "tiny", "gemma4:e2b-q4_k_m"},
+	{16, "small", "bonsai-8b"}, // ~1.15GB RAM, 8B quality
+	{8, "base", "bonsai-8b"},
+	{4, "base", "bonsai-8b"},         // was gemma4:e4b (2.6GB); bonsai-8b fits in 4GB RAM
+	{0, "tiny", "gemma4:e2b-q4_k_m"}, // <4GB RAM: 軽量フォールバック
 }
 
 // AutoSelectModels は SystemInfo に基づいて最適な whisper / llama モデル名を返す。
