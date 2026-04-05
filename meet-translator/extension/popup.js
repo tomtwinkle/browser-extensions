@@ -94,6 +94,49 @@ document.getElementById('settings-link').addEventListener('click', (e) => {
 });
 
 // ---------------------------------------------------------------------------
+// Microphone permission helper
+// ---------------------------------------------------------------------------
+/**
+ * マイク権限を確認し、未確認なら getUserMedia でダイアログを表示する。
+ * @returns {Promise<boolean>} 利用可能なら true
+ */
+async function ensureMicPermission() {
+  // まず現在の権限状態を確認
+  let state = 'prompt';
+  try {
+    const status = await navigator.permissions.query({ name: 'microphone' });
+    state = status.state; // 'granted' | 'denied' | 'prompt'
+  } catch (_) {
+    // permissions API 非対応環境 → getUserMedia に任せる
+  }
+
+  if (state === 'granted') return true;
+
+  if (state === 'denied') {
+    showError(
+      'マイクへのアクセスが拒否されています。\n' +
+      'Chrome の設定 → プライバシーとセキュリティ → サイトの設定 → マイク\n' +
+      'から、この拡張機能のブロックを解除してください。',
+    );
+    return false;
+  }
+
+  // 'prompt' → getUserMedia でダイアログを出す
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    stream.getTracks().forEach((t) => t.stop());
+    return true;
+  } catch (err) {
+    showError(
+      'マイクへのアクセスを拒否しました。\n' +
+      'Chrome の設定 → プライバシーとセキュリティ → サイトの設定 → マイク\n' +
+      'から拡張機能の許可を確認してください。',
+    );
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Button handler
 // ---------------------------------------------------------------------------
 toggleBtn.addEventListener('click', async () => {
@@ -112,14 +155,18 @@ toggleBtn.addEventListener('click', async () => {
         return;
       }
 
-      // マイク権限を事前取得 (offscreen document での getUserMedia に必要)
-      // 取得したストリームはすぐ停止 — 実際の録音は offscreen.js で行う
-      try {
-        const tmpMicStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        tmpMicStream.getTracks().forEach((t) => t.stop());
-      } catch (micErr) {
-        // 許可を得られなかった場合は警告表示のみ（他参加者の音声のみ翻訳）
-        showError('マイクへのアクセスを拒否しました。他の参加者の音声のみ翻訳されます。');
+      // マイク権限の確認（マイクを使うモードの場合）
+      const cfg = await new Promise((resolve) =>
+        chrome.storage.local.get({ audioSource: 'mic-only' }, resolve));
+      const needsMic = cfg.audioSource !== 'tab-only';
+
+      if (needsMic) {
+        const micOk = await ensureMicPermission();
+        if (!micOk && cfg.audioSource === 'mic-only') {
+          // mic-only なのにマイクが使えない → 開始を中止
+          setLoading(false);
+          return;
+        }
       }
 
       chrome.runtime.sendMessage(
