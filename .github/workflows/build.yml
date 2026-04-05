@@ -1,14 +1,16 @@
-name: Test
+name: Build Check
 
 on:
   pull_request:
     branches: ["**"]
+    paths:
+      - 'meet-translator/**'
 
 # ──────────────────────────────────────────────────────────────────────────────
-# meet-translator サーバーのテスト (マルチプラットフォーム)
+# meet-translator サーバーのリリースビルド確認 (マルチプラットフォーム)
 #
-# CGo が必要なため whisper.cpp + llama.cpp を先にビルドしてから go test を実行する。
-# 全プラットフォームで CPU ビルドを使用（CI コスト最小化）。
+# release.yml と同じマトリクス・GPU フラグでビルドし、PR 段階でリリースビルドの
+# 失敗を検知する。
 # ──────────────────────────────────────────────────────────────────────────────
 
 defaults:
@@ -16,26 +18,28 @@ defaults:
     shell: bash
 
 jobs:
-  test:
-    name: Test (${{ matrix.name }})
+  build:
+    name: Build (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            name: ubuntu-amd64
+            name: linux-amd64
+            gpu: cpu
           - os: ubuntu-24.04-arm
-            name: ubuntu-arm64
+            name: linux-arm64
+            gpu: cpu
           - os: macos-latest
-            name: macos-arm64
+            name: darwin-arm64
+            gpu: metal
           - os: windows-latest
             name: windows-amd64
+            gpu: cpu
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          fetch-depth: 0
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -44,7 +48,7 @@ jobs:
 
       - name: Install build tools (Linux)
         if: startsWith(matrix.os, 'ubuntu')
-        run: sudo apt-get install -y cmake build-essential
+        run: sudo apt-get install -y cmake build-essential ninja-build
 
       # macOS: cmake は Xcode CLT で利用可能。追加インストール不要。
 
@@ -62,12 +66,9 @@ jobs:
 
       - name: Install build tools (Windows)
         if: matrix.os == 'windows-latest'
-        run: |
-          # MSYS2 bash provides make natively; only add usr/bin for POSIX tools
-          # Do NOT add msys64/mingw64/bin - Go CGo uses C:\mingw64 and cmake must match
-          echo "C:/msys64/usr/bin" >> $GITHUB_PATH
+        run: echo "C:/msys64/usr/bin" >> $GITHUB_PATH
 
-      # キャッシュキーに bridge ファイルを含め restore-keys は設定しない。
+      # キャッシュキーに GPU 種別・bridge ファイルを含め restore-keys は設定しない。
       # restore-keys によるフォールバックは cmake の .built 番人ファイルが存在する
       # 古いキャッシュを復元し cmake がスキップされ古いヘッダーでビルドが壊れる
       # 原因となるため使用しない。
@@ -77,17 +78,8 @@ jobs:
             ~/.cache/go-build
             ~/go/pkg/mod
             meet-translator/server/vendor
-          key: ${{ runner.os }}-${{ runner.arch }}-deps-cpu-${{ hashFiles('meet-translator/server/Makefile', 'meet-translator/server/llama_bridge.cpp', 'meet-translator/server/llama_bridge.h', 'meet-translator/server/whisper_bridge.cpp', 'meet-translator/server/whisper_bridge.h') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-build-${{ matrix.gpu }}-${{ hashFiles('meet-translator/server/Makefile', 'meet-translator/server/llama_bridge.cpp', 'meet-translator/server/llama_bridge.h', 'meet-translator/server/whisper_bridge.cpp', 'meet-translator/server/whisper_bridge.h') }}
 
-      # whisper.cpp + llama.cpp のビルド (CGo ヘッダーが必要)
-      - name: Build native dependencies
+      - name: Build
         working-directory: meet-translator/server
-        run: make deps GPU=cpu
-
-      - name: Run tests
-        working-directory: meet-translator/server
-        run: make test GPU=cpu
-
-      - name: Check binary builds
-        working-directory: meet-translator/server
-        run: make build GPU=cpu
+        run: make build GPU=${{ matrix.gpu }}
