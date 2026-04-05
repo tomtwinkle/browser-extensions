@@ -215,7 +215,18 @@ return
 s.mux.ServeHTTP(w, r)
 }
 
-// logVerbose は --verbose / VERBOSE=1 のときのみ出力するデバッグロガー。
+// verboseEnabled はパッケージレベルの verbose フラグ。
+// main() で cfg.verbose が確定した後にセットされ、model_manager.go 等からも参照される。
+var verboseEnabled bool
+
+// logV はパッケージレベルの verbose ロガー。server 構造体が生成される前でも使える。
+func logV(format string, args ...any) {
+if verboseEnabled {
+log.Printf("[verbose] "+format, args...)
+}
+}
+
+// logVerbose は --verbose のときのみ出力するデバッグロガー（server メソッド版）。
 func (s *server) logVerbose(format string, args ...any) {
 if s.cfg.verbose {
 log.Printf("[verbose] "+format, args...)
@@ -361,27 +372,30 @@ originalWhisperSpec := cfg.whisperModel
 originalModelSpec := cfg.llamaModel
 runPreflight(&cfg)
 
+// verbose フラグをパッケージレベル変数に反映（model_manager.go 等で使用）
+verboseEnabled = cfg.verbose
+
 // llama バックエンド初期化
 initLlamaBackend()
 defer freeLlamaBackend()
 
 // whisper モデルをロード
-log.Printf("loading whisper model: %s", cfg.whisperModel)
+logV("loading whisper model: %s", cfg.whisperModel)
 whisperCtx, err := loadWhisperModel(cfg.whisperModel)
 if err != nil {
 log.Fatalf("%v", err)
 }
 defer C.whisper_bridge_free(whisperCtx)
-log.Printf("whisper model loaded")
+log.Printf("whisper ready: %s", originalWhisperSpec)
 
 // llama モデルをロード
-log.Printf("loading llama model: %s (GPU layers=%d)", cfg.llamaModel, cfg.llamaGPULayers)
+logV("loading llama model: %s (GPU layers=%d)", cfg.llamaModel, cfg.llamaGPULayers)
 llamaModel, err := loadLlamaModel(cfg.llamaModel, cfg.llamaGPULayers)
 if err != nil {
 log.Fatalf("%v", err)
 }
 defer C.llama_bridge_free_model(llamaModel)
-log.Printf("llama model loaded")
+log.Printf("llama ready: %s", originalModelSpec)
 
 httpSrv := &http.Server{
 Addr:    ":" + cfg.port,

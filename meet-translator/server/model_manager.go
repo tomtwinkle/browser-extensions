@@ -193,7 +193,7 @@ func resolveWhisperModel(spec string) (string, error) {
 
 	dest := filepath.Join(modelCacheDir(), "whisper", "ggml-"+spec+".bin")
 	if _, err := os.Stat(dest); err == nil {
-		fmt.Printf("[model] whisper/%s: using cache %s\n", spec, dest)
+		logV("whisper/%s: using cache %s", spec, dest)
 		return dest, nil
 	}
 
@@ -219,7 +219,7 @@ func resolveLlamaModel(spec string) (string, error) {
 
 	// Ollama キャッシュを優先確認
 	if path, ok := findInOllamaCache(spec); ok {
-		fmt.Printf("[model] llama/%s: using Ollama cache %s\n", spec, path)
+		logV("llama/%s: using Ollama cache %s", spec, path)
 		return path, nil
 	}
 
@@ -232,7 +232,7 @@ func resolveLlamaModel(spec string) (string, error) {
 	filename := parts[len(parts)-1]
 	dest := filepath.Join(modelCacheDir(), "llama", filename)
 	if _, err := os.Stat(dest); err == nil {
-		fmt.Printf("[model] llama/%s: using cache %s\n", spec, dest)
+		logV("llama/%s: using cache %s", spec, dest)
 		return dest, nil
 	}
 
