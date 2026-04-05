@@ -193,12 +193,15 @@ async function startCapture(tabId) {
       });
     });
 
-    // Forward the stream ID to the offscreen document
-    chrome.runtime.sendMessage({
+    // Forward the stream ID to the offscreen document and wait for ack
+    const ack = await chrome.runtime.sendMessage({
       type: 'OFFSCREEN_START_AUDIO',
       streamId,
       tabId,
+    }).catch((err) => {
+      throw new Error('offscreen document not ready: ' + (err?.message ?? String(err)));
     });
+    console.info('[background] OFFSCREEN_START_AUDIO ack=', ack);
     console.info('[background] startCapture: audio capture started, tabId=', tabId);
   } catch (err) {
     console.error('[background] startCapture failed:', err);

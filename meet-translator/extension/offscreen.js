@@ -11,6 +11,8 @@
 
 'use strict';
 
+console.info('[offscreen] script loaded');
+
 // How often (ms) a collected audio buffer is forwarded to the background
 const SEND_INTERVAL_MS = 5000;
 
@@ -168,11 +170,14 @@ function stopAudioProcessing() {
 // ---------------------------------------------------------------------------
 // Message router
 // ---------------------------------------------------------------------------
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   switch (message.type) {
 
     case 'OFFSCREEN_START_AUDIO': {
       console.info('[offscreen] OFFSCREEN_START_AUDIO received, streamId=', message.streamId);
+      // Acknowledge receipt synchronously so background.js knows the doc is ready
+      sendResponse({ ack: true });
+
       const constraints = {
         audio: {
           mandatory: {
@@ -192,7 +197,7 @@ chrome.runtime.onMessage.addListener((message) => {
         .catch((err) => {
           console.error('[offscreen] getUserMedia failed:', err.name, err.message);
         });
-      break;
+      return false; // sendResponse was already called synchronously
     }
 
     case 'OFFSCREEN_STOP_AUDIO':
