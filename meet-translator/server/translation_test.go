@@ -137,3 +137,58 @@ func assertNotContains(t *testing.T, haystack, needle string) {
 		t.Errorf("expected %q NOT to contain %q", haystack, needle)
 	}
 }
+
+// ─── stripLLMArtifacts ────────────────────────────────────────────────────────
+
+func TestStripLLMArtifacts(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "gemma end_of_turn",
+			input: "(スタッフ)<end_of_turn>",
+			want:  "(スタッフ)",
+		},
+		{
+			name:  "gemma full turn artifact",
+			input: "(スタッフ)<end_of_turn>\n<start_of_turn>model\n(スタッフ)<end_of_turn>",
+			want:  "(スタッフ)\n(スタッフ)",
+		},
+		{
+			name:  "qwen im tokens",
+			input: "こんにちは<|im_end|>",
+			want:  "こんにちは",
+		},
+		{
+			name:  "qwen im_start assistant",
+			input: "<|im_start|>assistant\nこんにちは<|im_end|>",
+			want:  "こんにちは",
+		},
+		{
+			name:  "llama inst tokens",
+			input: "[INST] hello [/INST] こんにちは",
+			want:  "hello\nこんにちは",
+		},
+		{
+			name:  "clean text unchanged",
+			input: "こんにちは、元気ですか？",
+			want:  "こんにちは、元気ですか？",
+		},
+		{
+			name:  "multiline clean",
+			input: "Hello\nWorld",
+			want:  "Hello\nWorld",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripLLMArtifacts(tt.input)
+			if got != tt.want {
+				t.Errorf("stripLLMArtifacts(%q)\n  got  %q\n  want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}

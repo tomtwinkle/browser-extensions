@@ -6,6 +6,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -87,4 +88,33 @@ func stripThinkingTokens(text string) string {
 		text = text[:start] + text[end+len("</think>"):]
 	}
 	return strings.TrimSpace(text)
+}
+
+// llmArtifactRe はモデルのチャットテンプレートトークンにマッチする。
+// LLM が出力に誤って混入させることがある特殊トークンを除去するために使う。
+var llmArtifactRe = regexp.MustCompile(
+	// Gemma: <start_of_turn>model / <start_of_turn>user / <end_of_turn>
+	`<start_of_turn>\w*|<end_of_turn>` +
+		// Qwen: <|im_start|>assistant など / <|im_end|>
+		`|<\|im_start\|>\w*|<\|im_end\|>` +
+		// Llama 2/3 instruct: [INST] [/INST] <<SYS>> <</SYS>>
+		`|\[/?INST\]|<</?SYS>>` +
+		// その他よくある EOS/BOS トークン表記
+		`|<\|eot_id\|>|<\|end_of_text\|>|<\|start_header_id\|>\w*<\|end_header_id\|>`,
+)
+
+// stripLLMArtifacts はモデルが出力に混入させたチャットテンプレートトークンを除去する。
+// stripThinkingTokens の後に呼び出すことを想定している。
+func stripLLMArtifacts(text string) string {
+	text = llmArtifactRe.ReplaceAllString(text, "")
+	// 除去後に連続する空行や先頭末尾の空白を整理する
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return strings.Join(out, "\n")
 }

@@ -83,6 +83,7 @@ s.logVerbose("llama raw output: %q", result)
 if opts.Thinking {
 result = stripThinkingTokens(result)
 }
+result = stripLLMArtifacts(result)
 s.logVerbose("translate output: %q", result)
 return result, nil
 }
