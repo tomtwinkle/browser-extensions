@@ -375,6 +375,8 @@ func TestHandleTranscribeAndTranslate_RepeatFiltered(t *testing.T) {
 func TestHandleTranscribeAndTranslate_HistoryPassedToTranslate(t *testing.T) {
 	var capturedHistory []contextEntry
 	s := newTestServer(t, mockFuncs{
+		// "good morning" is distinct from the pre-loaded "Hello" so repeat-filter won't trigger
+		transcribe: func([]byte, string) (string, error) { return "good morning", nil },
 		translate: func(_ string, _ string, _ string, _ ModelOptions, hist []contextEntry) (string, error) {
 			capturedHistory = hist
 			return "result", nil
