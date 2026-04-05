@@ -184,7 +184,8 @@ modelMu         sync.Mutex
 llamaModel      C.llama_bridge_model
 loadedModelSpec string // 現在ロード中のモデル名またはパス
 
-	// 直近の発話履歴 (Whisper initial_prompt + LLM few-shot context に使用)
+	// 直近の発話履歴 (LLM few-shot context に使用)
+	// ※ Whisper initial_prompt には使用しない（hallucination による翻訳連鎖防止）
 	contextBuf *contextBuffer
 
 	// 辞書 (goroutine セーフ)
@@ -194,7 +195,7 @@ loadedModelSpec string // 現在ロード中のモデル名またはパス
 	improver *GlossaryImprover
 
 	// テスト時にモック実装を注入できる関数フィールド
-	transcribeFn  func(audioData []byte, lang, initialPrompt string) (string, error)
+	transcribeFn  func(audioData []byte, lang string) (string, error)
 	translateFn   func(text, srcLang, tgtLang string, opts ModelOptions, history []contextEntry) (string, error)
 	swapModelFn   func(spec string) error
 	rawGenerateFn func(prompt string) (string, error)
@@ -327,12 +328,9 @@ s.logVerbose("request: audio=%d bytes, header=[% x], target_lang=%q, source_lang
 len(audioData), audioData[:hdrLen], targetLang, sourceLang, requestedModel, rawOpts)
 }
 
-// contextBuf 読み取りはロック外で行う (contextBuf 自身に内部ロックあり)
-initialPrompt := strings.Join(s.contextBuf.Transcriptions(), " ")
-
-// Whisper は非スレッドセーフ – whisperMu で直列化 (contextBuf アクセスを含めない)
+// Whisper は非スレッドセーフ – whisperMu で直列化
 s.whisperMu.Lock()
-transcription, transcribeErr := s.transcribeFn(audioData, sourceLang, initialPrompt)
+transcription, transcribeErr := s.transcribeFn(audioData, sourceLang)
 s.whisperMu.Unlock()
 
 if transcribeErr != nil {
@@ -347,6 +345,12 @@ return
 }
 if !isMeaningfulTranscription(transcription) {
 s.logVerbose("transcription filtered (noise): %q", transcription)
+writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
+return
+}
+// 直近の発話と実質同一なら Whisper hallucination とみなして破棄する
+if isRepeatTranscription(transcription, s.contextBuf.Entries()) {
+s.logVerbose("transcription filtered (repeat/hallucination): %q", transcription)
 writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
 return
 }
@@ -418,10 +422,9 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// contextBuf 読み取りはロック外で行う (contextBuf 自身に内部ロックあり)
-	initialPrompt := strings.Join(s.contextBuf.Transcriptions(), " ")
-	// Whisper は非スレッドセーフ – whisperMu で直列化 (contextBuf アクセスを含めない)
+	// Whisper は非スレッドセーフ – whisperMu で直列化
 	s.whisperMu.Lock()
-	transcription, err := s.transcribeFn(audioData, sourceLang, initialPrompt)
+	transcription, err := s.transcribeFn(audioData, sourceLang)
 	s.whisperMu.Unlock()
 	if err != nil {
 		log.Printf("[transcribe] %v", err)
@@ -431,6 +434,12 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 	transcription = strings.TrimSpace(transcription)
 	if !isMeaningfulTranscription(transcription) {
 		s.logVerbose("transcription filtered (noise): %q", transcription)
+		writeJSON(w, http.StatusOK, map[string]string{"transcription": ""})
+		return
+	}
+	// 直近の発話と実質同一なら Whisper hallucination とみなして破棄する
+	if isRepeatTranscription(transcription, s.contextBuf.Entries()) {
+		s.logVerbose("transcription filtered (repeat/hallucination): %q", transcription)
 		writeJSON(w, http.StatusOK, map[string]string{"transcription": ""})
 		return
 	}

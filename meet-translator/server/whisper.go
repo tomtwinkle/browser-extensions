@@ -33,9 +33,10 @@ func loadWhisperModel(modelPath string) (*C.whisper_context, error) {
 }
 
 // transcribeInternal は WAV バイト列を文字起こしして返す。
-// initialPrompt に直前の発話テキストを渡すと Whisper のコンテキストとして使われ、
-// 固有名詞や専門用語の認識精度が向上する。空文字列でコンテキストなし。
-func (s *server) transcribeInternal(audioData []byte, lang, initialPrompt string) (string, error) {
+// Whisper への initial_prompt にはグロッサリーヒントのみを渡す。
+// 過去の発話テキストを initial_prompt に含めると Whisper が無音時に
+// 前回発話を幻覚再生（hallucination）し翻訳連鎖を引き起こすため除外する。
+func (s *server) transcribeInternal(audioData []byte, lang string) (string, error) {
 	if s.whisperCtx == nil {
 		return "", fmt.Errorf("whisper context not initialized")
 	}
@@ -58,9 +59,9 @@ func (s *server) transcribeInternal(audioData []byte, lang, initialPrompt string
 	cLang := C.CString(lang)
 	defer C.free(unsafe.Pointer(cLang))
 
-	// 辞書ヒントと発話コンテキストを組み合わせて initial_prompt とする
-	glossaryHints := s.glossary.WhisperHints()
-	combinedPrompt := strings.TrimSpace(glossaryHints + " " + initialPrompt)
+	// グロッサリーヒントのみを initial_prompt として使用する。
+	// 過去の発話テキストは含めない（Whisper の無音時 hallucination を防ぐため）。
+	combinedPrompt := strings.TrimSpace(s.glossary.WhisperHints())
 	s.logVerbose("whisper initial_prompt: %q", combinedPrompt)
 	cPrompt := C.CString(combinedPrompt)
 	defer C.free(unsafe.Pointer(cPrompt))

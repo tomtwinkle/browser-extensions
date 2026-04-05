@@ -29,6 +29,33 @@ var noiseTokenRe = regexp.MustCompile(
 // 日本語は 1 文字で意味を持つケースもあるため、2 以上を基準とする。
 const minMeaningfulRunes = 2
 
+// normalizeForDedup はテキストを小文字化・句読点/空白除去して正規化する。
+// 発話重複検出の比較キーとして使用する。
+func normalizeForDedup(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// isRepeatTranscription は text が直近の発話履歴と実質同一かどうかを判定する。
+// Whisper が initial_prompt なしでも過去発話を幻覚再生した場合を検出する。
+func isRepeatTranscription(text string, history []contextEntry) bool {
+	norm := normalizeForDedup(text)
+	if norm == "" {
+		return false
+	}
+	for _, e := range history {
+		if normalizeForDedup(e.Transcription) == norm {
+			return true
+		}
+	}
+	return false
+}
+
 // isMeaningfulTranscription は文字起こしテキストが実際の発話かどうかを判定する。
 //
 // false を返す条件:
