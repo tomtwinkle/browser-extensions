@@ -52,6 +52,8 @@ return "", fmt.Errorf("llama model not initialized")
 
 template := templateFor(s.loadedModelSpec)
 prompt := buildTranslationPrompt(text, sourceLang, targetLang, template, opts)
+s.logVerbose("translate input: %q (model=%s, template=%s, thinking=%v)",
+text, s.loadedModelSpec, template, opts.Thinking)
 
 cPrompt := C.CString(prompt)
 defer C.free(unsafe.Pointer(cPrompt))
@@ -77,8 +79,10 @@ return "", fmt.Errorf("llama_bridge_generate failed (code=%d): %s", int(ret), C.
 }
 
 result := strings.TrimSpace(C.GoString(outBuf))
+s.logVerbose("llama raw output: %q", result)
 if opts.Thinking {
 result = stripThinkingTokens(result)
 }
+s.logVerbose("translate output: %q", result)
 return result, nil
 }

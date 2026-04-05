@@ -54,6 +54,7 @@ whisperModel      string
 llamaModel        string
 llamaGPULayers    int
 whisperGPULayers  int
+verbose           bool
 }
 
 func loadConfig() config {
@@ -85,6 +86,7 @@ cfg.whisperModel     = os.Getenv("WHISPER_MODEL")
 cfg.llamaModel       = os.Getenv("LLAMA_MODEL")
 cfg.llamaGPULayers   = envInt("LLAMA_GPU_LAYERS", cfg.llamaGPULayers)
 cfg.whisperGPULayers = envInt("WHISPER_GPU_LAYERS", cfg.whisperGPULayers)
+// verbose は CLI フラグ (--verbose) でのみ有効化する
 
 // ── Step 3: config ファイルで上書き ────────────────────────────────────────
 fileCfg, err := loadConfigFile()
@@ -108,6 +110,7 @@ fLlamaModel      := flag.String("llama-model",        "", "llama model name or p
 fLlamaGPU        := flag.Int("llama-gpu-layers",    -999, "llama GPU layers (-1=all, 0=CPU only)")
 fWhisperGPU      := flag.Int("whisper-gpu-layers",  -999, "whisper GPU layers")
 fModelCacheDir   := flag.String("model-cache-dir",    "", "model cache directory")
+fVerbose         := flag.Bool("verbose",            false, "enable verbose request/response logging")
 _                 = flag.String("config",             "", "config file path (overrides MEET_TRANSLATOR_CONFIG)")
 
 flag.Usage = func() {
@@ -129,6 +132,7 @@ if explicitFlags["whisper-model"]    { cfg.whisperModel = *fWhisperModel }
 if explicitFlags["llama-model"]      { cfg.llamaModel = *fLlamaModel }
 if explicitFlags["llama-gpu-layers"] { cfg.llamaGPULayers = *fLlamaGPU }
 if explicitFlags["whisper-gpu-layers"] { cfg.whisperGPULayers = *fWhisperGPU }
+if explicitFlags["verbose"]          { cfg.verbose = *fVerbose }
 if explicitFlags["model-cache-dir"]  {
 os.Setenv("MODEL_CACHE_DIR", *fModelCacheDir)
 }
@@ -207,6 +211,13 @@ return
 s.mux.ServeHTTP(w, r)
 }
 
+// logVerbose は --verbose / VERBOSE=1 のときのみ出力するデバッグロガー。
+func (s *server) logVerbose(format string, args ...any) {
+if s.cfg.verbose {
+log.Printf("[verbose] "+format, args...)
+}
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -256,6 +267,13 @@ targetLang = "ja"
 requestedModel := strings.TrimSpace(r.FormValue("llama_model"))
 rawOpts := r.FormValue("llama_options")
 
+if s.cfg.verbose {
+hdrLen := 12
+if len(audioData) < hdrLen { hdrLen = len(audioData) }
+s.logVerbose("request: audio=%d bytes, header=[% x], target_lang=%q, source_lang=%q, llama_model=%q, llama_options=%q",
+len(audioData), audioData[:hdrLen], targetLang, sourceLang, requestedModel, rawOpts)
+}
+
 // モデルのホットスワップと翻訳は排他制御
 s.modelMu.Lock()
 defer s.modelMu.Unlock()
@@ -281,6 +299,7 @@ if transcription == "" {
 writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
 return
 }
+s.logVerbose("transcription: %q", transcription)
 
 translation, err := s.translateFn(transcription, sourceLang, targetLang, opts)
 if err != nil {
@@ -288,6 +307,7 @@ log.Printf("[translate] %v", err)
 http.Error(w, "translation failed: "+err.Error(), http.StatusInternalServerError)
 return
 }
+s.logVerbose("translation: %q", strings.TrimSpace(translation))
 
 writeJSON(w, http.StatusOK, map[string]string{
 "transcription": transcription,
@@ -374,6 +394,9 @@ _ = httpSrv.Shutdown(ctx)
 }()
 
 log.Printf("meet-translator server listening on :%s", cfg.port)
+if cfg.verbose {
+log.Printf("[verbose] verbose logging enabled")
+}
 if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 log.Fatal(err)
 }
