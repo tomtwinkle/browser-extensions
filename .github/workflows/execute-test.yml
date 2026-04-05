@@ -195,8 +195,37 @@ jobs:
           print(f"Generated test_silence.wav: {os.path.getsize('test_silence.wav')} bytes")
           PYEOF
 
+      # ── llama モデルの事前ダウンロード ───────────────────────────────────
+      # 大きなモデル (例: bonsai-8b ~1.15GB) はダウンロードに時間がかかるため、
+      # サーバー起動前に明示的にダウンロードする。
+      # キャッシュがある場合はスキップ。タイムアウトは最大 20 分。
+      - name: Pre-download llama model
+        timeout-minutes: 20
+        run: |
+          # model_manager.go の resolveLlamaModel と同じパスにダウンロードする
+          # URL は registry の値と一致させる
+          case "${{ matrix.llama_model }}" in
+            bonsai-8b)
+              DEST="$MODEL_CACHE_DIR/llama/Bonsai-8B.gguf"
+              URL="https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B.gguf"
+              ;;
+            *)
+              # その他のモデルはサーバー起動時に自動ダウンロード
+              echo "Model '${{ matrix.llama_model }}' will be downloaded by server on startup"
+              exit 0
+              ;;
+          esac
+          if [ -f "$DEST" ]; then
+            echo "Cache hit: $DEST"
+          else
+            mkdir -p "$(dirname "$DEST")"
+            echo "Downloading ${{ matrix.llama_model }}..."
+            curl -L --retry 3 --retry-delay 5 --progress-bar -o "$DEST" "$URL"
+            echo "Download complete: $(du -sh "$DEST" | cut -f1)"
+          fi
+
       # ── サーバーを起動 ────────────────────────────────────────────────────
-      # 初回実行時はモデルをダウンロード; 2 回目以降はキャッシュを使用。
+      # モデルは事前ダウンロード済みのためキャッシュを使用。
       - name: Start server
         run: |
           ./server/${{ matrix.bin }} \
