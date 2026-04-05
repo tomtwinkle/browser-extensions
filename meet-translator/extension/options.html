@@ -140,6 +140,17 @@
     <p class="hint">server/ ディレクトリの FastAPI サーバーを起動してください。</p>
   </div>
 
+  <h2>音声ソース設定</h2>
+  <div class="field">
+    <label for="audio-source">キャプチャ対象</label>
+    <select id="audio-source">
+      <option value="mic-only" selected>自分のマイクのみ</option>
+      <option value="both">自分のマイク ＋ 画面の音声（全員）</option>
+      <option value="tab-only">画面の音声のみ（他の参加者）</option>
+    </select>
+    <p class="hint">Google Meet は自分の声をタブに返さないため、自分の発話も翻訳するには「マイク」を含む設定を選んでください。</p>
+  </div>
+
   <h2>言語設定</h2>
   <div class="field">
     <label for="source-lang">翻訳元言語</label>

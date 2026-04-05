@@ -81,6 +81,8 @@ var fakeWAV = []byte("RIFF\x00\x00\x00\x00WAVEfmt ")
 
 func TestHandleHealth_OK(t *testing.T) {
 	s := newTestServer(t, mockFuncs{})
+	s.whisperModelSpec = "base"
+	s.loadedModelSpec = "qwen3.5:4b-q4_k_m"
 	w := httptest.NewRecorder()
 	s.handleHealth(w, httptest.NewRequest(http.MethodGet, "/health", nil))
 
@@ -90,7 +92,13 @@ func TestHandleHealth_OK(t *testing.T) {
 	var body map[string]string
 	json.NewDecoder(w.Body).Decode(&body)
 	if body["status"] != "ok" {
-		t.Errorf("body=%v", body)
+		t.Errorf("body[status]=%q, want \"ok\"", body["status"])
+	}
+	if body["whisper_model"] != "base" {
+		t.Errorf("body[whisper_model]=%q, want \"base\"", body["whisper_model"])
+	}
+	if body["llama_model"] != "qwen3.5:4b-q4_k_m" {
+		t.Errorf("body[llama_model]=%q, want \"qwen3.5:4b-q4_k_m\"", body["llama_model"])
 	}
 }
 

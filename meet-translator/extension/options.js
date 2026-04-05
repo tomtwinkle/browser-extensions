@@ -7,14 +7,19 @@ const DEFAULTS = {
   whisperModel:  'base',
   llamaModel:    '',
   llamaThinking: true,
+  audioSource:   'mic-only', // 'both' | 'mic-only' | 'tab-only'
 };
 
 // モデル別オプション定義: どのモデルがどのオプションパネルを持つか
 const MODEL_OPTIONS_MAP = {
-  'qwen3:0.6b-q4_k_m': 'qwen3',
-  'qwen3:1.7b-q4_k_m': 'qwen3',
-  'qwen3:4b-q4_k_m':   'qwen3',
-  'qwen3:8b-q4_k_m':   'qwen3',
+  'qwen3:0.6b-q4_k_m':   'qwen3',
+  'qwen3:1.7b-q4_k_m':   'qwen3',
+  'qwen3:4b-q4_k_m':     'qwen3',
+  'qwen3:8b-q4_k_m':     'qwen3',
+  'qwen3.5:0.8b-q4_k_m': 'qwen3',
+  'qwen3.5:2b-q4_k_m':   'qwen3',
+  'qwen3.5:4b-q4_k_m':   'qwen3',
+  'qwen3.5:9b-q4_k_m':   'qwen3',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -30,6 +35,7 @@ chrome.storage.local.get(Object.keys(DEFAULTS), (stored) => {
   $('whisper-model').value = cfg.whisperModel;
   $('llama-model').value   = cfg.llamaModel;
   $('qwen3-thinking').checked = cfg.llamaThinking;
+  $('audio-source').value  = cfg.audioSource;
   updateModelOptions(cfg.llamaModel);
 });
 
@@ -64,6 +70,7 @@ $('save-btn').addEventListener('click', () => {
     whisperModel:  $('whisper-model').value,
     llamaModel:    $('llama-model').value,
     llamaThinking: $('qwen3-thinking').checked,
+    audioSource:   $('audio-source').value,
   };
   chrome.storage.local.set(cfg, () => {
     showStatus('保存しました ✓', 'ok');

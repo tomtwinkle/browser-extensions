@@ -9,6 +9,7 @@ package main
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -29,7 +30,7 @@ func parseWAV(r io.Reader) (*wavData, error) {
 		return nil, errors.New("WAV: failed to read RIFF header")
 	}
 	if string(riffID[:]) != "RIFF" {
-		return nil, errors.New("WAV: invalid RIFF signature")
+		return nil, fmt.Errorf("WAV: invalid RIFF signature (got: % x)", riffID[:])
 	}
 	var chunkSize uint32
 	if err := binary.Read(r, binary.LittleEndian, &chunkSize); err != nil {

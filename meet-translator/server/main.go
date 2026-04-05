@@ -54,6 +54,7 @@ whisperModel      string
 llamaModel        string
 llamaGPULayers    int
 whisperGPULayers  int
+verbose           bool
 }
 
 func loadConfig() config {
@@ -85,6 +86,7 @@ cfg.whisperModel     = os.Getenv("WHISPER_MODEL")
 cfg.llamaModel       = os.Getenv("LLAMA_MODEL")
 cfg.llamaGPULayers   = envInt("LLAMA_GPU_LAYERS", cfg.llamaGPULayers)
 cfg.whisperGPULayers = envInt("WHISPER_GPU_LAYERS", cfg.whisperGPULayers)
+// verbose は CLI フラグ (--verbose) でのみ有効化する
 
 // ── Step 3: config ファイルで上書き ────────────────────────────────────────
 fileCfg, err := loadConfigFile()
@@ -108,6 +110,7 @@ fLlamaModel      := flag.String("llama-model",        "", "llama model name or p
 fLlamaGPU        := flag.Int("llama-gpu-layers",    -999, "llama GPU layers (-1=all, 0=CPU only)")
 fWhisperGPU      := flag.Int("whisper-gpu-layers",  -999, "whisper GPU layers")
 fModelCacheDir   := flag.String("model-cache-dir",    "", "model cache directory")
+fVerbose         := flag.Bool("verbose",            false, "enable verbose request/response logging")
 _                 = flag.String("config",             "", "config file path (overrides MEET_TRANSLATOR_CONFIG)")
 
 flag.Usage = func() {
@@ -129,6 +132,7 @@ if explicitFlags["whisper-model"]    { cfg.whisperModel = *fWhisperModel }
 if explicitFlags["llama-model"]      { cfg.llamaModel = *fLlamaModel }
 if explicitFlags["llama-gpu-layers"] { cfg.llamaGPULayers = *fLlamaGPU }
 if explicitFlags["whisper-gpu-layers"] { cfg.whisperGPULayers = *fWhisperGPU }
+if explicitFlags["verbose"]          { cfg.verbose = *fVerbose }
 if explicitFlags["model-cache-dir"]  {
 os.Setenv("MODEL_CACHE_DIR", *fModelCacheDir)
 }
@@ -168,6 +172,9 @@ cfg        config
 mux        *http.ServeMux
 whisperCtx *C.whisper_context
 
+// 起動時に指定されたオリジナルのモデルスペック（パス解決前）
+whisperModelSpec string
+
 // llama モデル管理 (modelMu で保護)
 modelMu         sync.Mutex
 llamaModel      C.llama_bridge_model
@@ -179,13 +186,14 @@ translateFn  func(text, srcLang, tgtLang string, opts ModelOptions) (string, err
 swapModelFn  func(spec string) error
 }
 
-func newServer(cfg config, whisperCtx *C.whisper_context, llamaModel C.llama_bridge_model, modelSpec string) *server {
+func newServer(cfg config, whisperCtx *C.whisper_context, llamaModel C.llama_bridge_model, whisperSpec, llamaSpec string) *server {
 s := &server{
 cfg:             cfg,
 mux:             http.NewServeMux(),
 whisperCtx:      whisperCtx,
+whisperModelSpec: whisperSpec,
 llamaModel:      llamaModel,
-loadedModelSpec: modelSpec,
+loadedModelSpec: llamaSpec,
 }
 // デフォルトは CGo 実装を使用
 s.transcribeFn = s.transcribeInternal
@@ -207,6 +215,24 @@ return
 s.mux.ServeHTTP(w, r)
 }
 
+// verboseEnabled はパッケージレベルの verbose フラグ。
+// main() で cfg.verbose が確定した後にセットされ、model_manager.go 等からも参照される。
+var verboseEnabled bool
+
+// logV はパッケージレベルの verbose ロガー。server 構造体が生成される前でも使える。
+func logV(format string, args ...any) {
+if verboseEnabled {
+log.Printf("[verbose] "+format, args...)
+}
+}
+
+// logVerbose は --verbose のときのみ出力するデバッグロガー（server メソッド版）。
+func (s *server) logVerbose(format string, args ...any) {
+if s.cfg.verbose {
+log.Printf("[verbose] "+format, args...)
+}
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -218,7 +244,14 @@ _ = json.NewEncoder(w).Encode(v)
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+s.modelMu.Lock()
+llamaModel := s.loadedModelSpec
+s.modelMu.Unlock()
+writeJSON(w, http.StatusOK, map[string]string{
+"status":        "ok",
+"whisper_model": s.whisperModelSpec,
+"llama_model":   llamaModel,
+})
 }
 
 func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Request) {
@@ -249,6 +282,13 @@ targetLang = "ja"
 requestedModel := strings.TrimSpace(r.FormValue("llama_model"))
 rawOpts := r.FormValue("llama_options")
 
+if s.cfg.verbose {
+hdrLen := 12
+if len(audioData) < hdrLen { hdrLen = len(audioData) }
+s.logVerbose("request: audio=%d bytes, header=[% x], target_lang=%q, source_lang=%q, llama_model=%q, llama_options=%q",
+len(audioData), audioData[:hdrLen], targetLang, sourceLang, requestedModel, rawOpts)
+}
+
 // モデルのホットスワップと翻訳は排他制御
 s.modelMu.Lock()
 defer s.modelMu.Unlock()
@@ -274,6 +314,7 @@ if transcription == "" {
 writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
 return
 }
+s.logVerbose("transcription: %q", transcription)
 
 translation, err := s.translateFn(transcription, sourceLang, targetLang, opts)
 if err != nil {
@@ -281,6 +322,7 @@ log.Printf("[translate] %v", err)
 http.Error(w, "translation failed: "+err.Error(), http.StatusInternalServerError)
 return
 }
+s.logVerbose("translation: %q", strings.TrimSpace(translation))
 
 writeJSON(w, http.StatusOK, map[string]string{
 "transcription": transcription,
@@ -326,34 +368,38 @@ os.Exit(0)
 }
 
 // モデル名解決 (自動ダウンロード・Ollama キャッシュ共有)
+originalWhisperSpec := cfg.whisperModel
 originalModelSpec := cfg.llamaModel
 runPreflight(&cfg)
+
+// verbose フラグをパッケージレベル変数に反映（model_manager.go 等で使用）
+verboseEnabled = cfg.verbose
 
 // llama バックエンド初期化
 initLlamaBackend()
 defer freeLlamaBackend()
 
 // whisper モデルをロード
-log.Printf("loading whisper model: %s", cfg.whisperModel)
+logV("loading whisper model: %s", cfg.whisperModel)
 whisperCtx, err := loadWhisperModel(cfg.whisperModel)
 if err != nil {
 log.Fatalf("%v", err)
 }
 defer C.whisper_bridge_free(whisperCtx)
-log.Printf("whisper model loaded")
+log.Printf("whisper ready: %s", originalWhisperSpec)
 
 // llama モデルをロード
-log.Printf("loading llama model: %s (GPU layers=%d)", cfg.llamaModel, cfg.llamaGPULayers)
+logV("loading llama model: %s (GPU layers=%d)", cfg.llamaModel, cfg.llamaGPULayers)
 llamaModel, err := loadLlamaModel(cfg.llamaModel, cfg.llamaGPULayers)
 if err != nil {
 log.Fatalf("%v", err)
 }
 defer C.llama_bridge_free_model(llamaModel)
-log.Printf("llama model loaded")
+log.Printf("llama ready: %s", originalModelSpec)
 
 httpSrv := &http.Server{
 Addr:    ":" + cfg.port,
-Handler: newServer(cfg, whisperCtx, llamaModel, originalModelSpec),
+Handler: newServer(cfg, whisperCtx, llamaModel, originalWhisperSpec, originalModelSpec),
 }
 
 quit := make(chan os.Signal, 1)
@@ -367,6 +413,9 @@ _ = httpSrv.Shutdown(ctx)
 }()
 
 log.Printf("meet-translator server listening on :%s", cfg.port)
+if cfg.verbose {
+log.Printf("[verbose] verbose logging enabled")
+}
 if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 log.Fatal(err)
 }

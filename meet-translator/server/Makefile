@@ -11,8 +11,8 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 # pinned versions
-LLAMA_VERSION   := b5192
-WHISPER_VERSION := v1.7.4
+LLAMA_VERSION   := b8664
+WHISPER_VERSION := v1.8.4
 
 OS_NAME   := $(shell uname -s 2>/dev/null || echo Windows_NT)
 ARCH_NAME := $(shell uname -m 2>/dev/null || echo x86_64)
@@ -82,7 +82,8 @@ ifeq ($(OS_NAME),Windows_NT)
   CMAKE_BUILD_FLAGS :=
   BIN_EXT           := .exe
 else
-  CMAKE_BUILD_FLAGS := -j
+  # -j2: cap parallel compilation to avoid OOM on CI runners (arm64: 2-core/8GB)
+  CMAKE_BUILD_FLAGS := -j2
   CMAKE_GENERATOR   :=
   CMAKE_EXTRA_FLAGS :=
   BIN_EXT           :=

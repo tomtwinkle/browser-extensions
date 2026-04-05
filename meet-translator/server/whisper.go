@@ -43,6 +43,9 @@ wav, err := parseWAV(bytes.NewReader(audioData))
 if err != nil {
 return "", fmt.Errorf("failed to parse WAV: %w", err)
 }
+s.logVerbose("WAV: sampleRate=%d, channels=%d, samples=%d, duration=%.2fs",
+wav.sampleRate, wav.channels, len(wav.samples),
+float64(len(wav.samples))/float64(wav.sampleRate))
 samples := resampleTo16k(wav.samples, wav.sampleRate)
 if len(samples) == 0 {
 return "", nil
@@ -72,5 +75,7 @@ if ret != 0 {
 return "", fmt.Errorf("whisper_bridge_transcribe failed: %s", C.GoString(errBuf))
 }
 
-return strings.TrimSpace(C.GoString(outBuf)), nil
+result := strings.TrimSpace(C.GoString(outBuf))
+s.logVerbose("whisper raw output: %q", result)
+return result, nil
 }

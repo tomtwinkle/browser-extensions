@@ -18,6 +18,9 @@
 const state = {
   isActive: false,
   tabId: null,
+  lastError: null,
+  healthCheckTimer: null,
+  serverInfo: null, // { whisperModel, llamaModel } – populated from /health
 };
 
 // ---------------------------------------------------------------------------
@@ -33,12 +36,49 @@ async function getSettings() {
     whisperModel:  'base',
     llamaModel:    '',
     llamaThinking: true,
+    audioSource:   'mic-only', // 'both' | 'mic-only' | 'tab-only'
   };
   const stored = await chrome.storage.local.get(Object.keys(defaults));
   return { ...defaults, ...stored };
 }
 
-async function transcribeAndTranslate(wavBuffer) {
+/**
+ * GET /health を叩いてサーバーの疎通とロード済みモデルを確認する。
+ * AbortController + setTimeout を使い、AbortSignal.timeout が
+ * 利用できない環境でも動作するよう実装する。
+ * @returns {{ ok: boolean, whisperModel?: string, llamaModel?: string }}
+ */
+async function checkServerHealth() {
+  const cfg = await getSettings();
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(`${cfg.serverUrl}/health`, {
+      signal: controller.signal,
+    });
+    clearTimeout(tid);
+    if (!res.ok) {
+      console.warn('[background] health check: server returned', res.status);
+      return { ok: false };
+    }
+    const data = await res.json();
+    const result = {
+      ok: true,
+      whisperModel: data.whisper_model || '',
+      llamaModel:   data.llama_model   || '',
+    };
+    console.info('[background] health check ok – whisper:', result.whisperModel, 'llama:', result.llamaModel);
+    return result;
+  } catch (err) {
+    clearTimeout(tid);
+    console.warn('[background] health check failed:', err?.message ?? String(err));
+    return { ok: false };
+  }
+}
+
+async function transcribeAndTranslate(wavBytes) {
+  // Reconstruct ArrayBuffer from the plain Array<number> received via sendMessage
+  const wavBuffer = new Uint8Array(wavBytes).buffer;
   const cfg = await getSettings();
 
   const form = new FormData();
@@ -54,7 +94,10 @@ async function transcribeAndTranslate(wavBuffer) {
     form.append('llama_options', JSON.stringify(opts));
   }
 
-  const res = await fetch(`${cfg.serverUrl}/transcribe-and-translate`, {
+  const url = `${cfg.serverUrl}/transcribe-and-translate`;
+  console.info('[background] transcribeAndTranslate: POST', url, '– wav', wavBuffer.byteLength, 'bytes');
+
+  const res = await fetch(url, {
     method: 'POST',
     body: form,
   });
@@ -70,7 +113,7 @@ async function transcribeAndTranslate(wavBuffer) {
 
 /** モデル名に応じたオプションオブジェクトを組み立てる。 */
 function buildModelOptions(cfg) {
-  if (cfg.llamaModel.startsWith('qwen3:')) {
+  if (cfg.llamaModel.startsWith('qwen3:') || cfg.llamaModel.startsWith('qwen3.5:')) {
     return { thinking: cfg.llamaThinking };
   }
   return {};
@@ -112,38 +155,78 @@ async function closeOffscreenDocument() {
 async function startCapture(tabId) {
   if (state.isActive) return;
 
+  // サーバー疎通確認 – 接続できなければ開始を拒否
+  const health = await checkServerHealth();
+  if (!health.ok) {
+    throw new Error('サーバーに接続できません。サーバーが起動しているか確認してください。');
+  }
+
   state.isActive = true;
-  state.tabId = tabId;
+  state.tabId    = tabId;
+  state.lastError = null;
+  state.serverInfo = { whisperModel: health.whisperModel, llamaModel: health.llamaModel };
+
+  // 定期ヘルスチェック（30 秒ごと）- サーバーが落ちたら自動停止
+  state.healthCheckTimer = setInterval(async () => {
+    if (!state.isActive) return;
+    const h = await checkServerHealth();
+    if (!h.ok) {
+      console.warn('[background] server health check failed – stopping capture.');
+      state.lastError = 'サーバーへの接続が切断されました。';
+      await stopCapture();
+      chrome.runtime.sendMessage({ type: 'SERVER_UNREACHABLE' }).catch(() => {});
+      return;
+    }
+    state.serverInfo = { whisperModel: h.whisperModel, llamaModel: h.llamaModel };
+  }, 30_000);
 
   try {
     // Make sure the offscreen document is ready for audio processing
     await ensureOffscreenDocument();
 
-    // Obtain the tab capture stream ID.
-    // The offscreen document will call navigator.mediaDevices.getUserMedia()
-    // with this ID to get the actual MediaStream.
-    chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, async (streamId) => {
-      if (chrome.runtime.lastError || !streamId) {
-        console.error('[background] tabCapture error:', chrome.runtime.lastError?.message);
-        await stopCapture();
-        return;
-      }
+    const cfg = await getSettings();
+    const needsTabCapture = cfg.audioSource !== 'mic-only';
 
-      // Forward the stream ID to the offscreen document
-      chrome.runtime.sendMessage({
-        type: 'OFFSCREEN_START_AUDIO',
-        streamId,
-        tabId,
+    // tab 音声が必要な場合のみ getMediaStreamId を呼ぶ
+    let streamId = null;
+    if (needsTabCapture) {
+      streamId = await new Promise((resolve, reject) => {
+        chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
+          if (chrome.runtime.lastError || !id) {
+            reject(new Error(chrome.runtime.lastError?.message ?? 'tabCapture: failed to get stream ID'));
+          } else {
+            resolve(id);
+          }
+        });
       });
+    }
+
+    // Forward the stream ID (and audioSource) to the offscreen document and wait for ack
+    const ack = await chrome.runtime.sendMessage({
+      type: 'OFFSCREEN_START_AUDIO',
+      streamId,          // null if mic-only
+      audioSource: cfg.audioSource,
+      tabId,
+    }).catch((err) => {
+      throw new Error('offscreen document not ready: ' + (err?.message ?? String(err)));
     });
+    console.info('[background] OFFSCREEN_START_AUDIO ack=', ack, 'audioSource=', cfg.audioSource);
+    console.info('[background] startCapture: audio capture started, tabId=', tabId);
   } catch (err) {
     console.error('[background] startCapture failed:', err);
     await stopCapture();
+    throw err; // popup にエラーを伝える
   }
 }
 
 async function stopCapture() {
   if (!state.isActive) return;
+
+  // 定期ヘルスチェックを停止
+  if (state.healthCheckTimer) {
+    clearInterval(state.healthCheckTimer);
+    state.healthCheckTimer = null;
+  }
 
   state.isActive = false;
   const tabId = state.tabId;
@@ -184,17 +267,43 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return true;
 
     case 'GET_STATE':
-      sendResponse({ isActive: state.isActive });
+      sendResponse({ isActive: state.isActive, lastError: state.lastError, serverInfo: state.serverInfo });
       return false;
 
+    // ---- popup がサーバー情報を要求（キャプチャ中かどうかに関わらず） -------
+    case 'GET_SERVER_INFO':
+      (async () => {
+        const health = await checkServerHealth();
+        if (health.ok) {
+          state.serverInfo = { whisperModel: health.whisperModel, llamaModel: health.llamaModel };
+          sendResponse({ ok: true, whisperModel: health.whisperModel, llamaModel: health.llamaModel });
+        } else {
+          sendResponse({ ok: false });
+        }
+      })();
+      return true; // 非同期レスポンスのためチャネルを維持
+
+    // ---- Log bridge from offscreen document -----------------------------
+    case 'OFFSCREEN_LOG': {
+      const fn = console[message.level] ?? console.info;
+      fn('[offscreen→bg]', message.msg);
+      return false;
+    }
+
     // ---- Audio data from the offscreen document -------------------------
-    case 'AUDIO_DATA':
-      if (!state.isActive) return false;
+    case 'AUDIO_DATA': {
+      console.info('[background] AUDIO_DATA received, isActive=', state.isActive,
+        'bytes=', Array.isArray(message.wavBytes) ? message.wavBytes.length : '?');
+      if (!state.isActive) {
+        console.warn('[background] AUDIO_DATA dropped: capture is not active');
+        return false;
+      }
+      const tabId = state.tabId; // capture before async – state may change mid-await
       (async () => {
         try {
-          const translatedText = await transcribeAndTranslate(message.wavBuffer);
-          if (state.tabId && translatedText) {
-            await chrome.tabs.sendMessage(state.tabId, {
+          const translatedText = await transcribeAndTranslate(message.wavBytes);
+          if (tabId && translatedText) {
+            await chrome.tabs.sendMessage(tabId, {
               type: 'POST_TRANSLATION',
               text: translatedText,
             });
@@ -204,6 +313,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
       })();
       return false;
+    }
 
     default:
       return false;

@@ -48,6 +48,16 @@ jobs:
 
       # macOS: cmake は Xcode CLT で利用可能。追加インストール不要。
 
+      # llama.cpp b8664 は多数のモデルファイルを含み大量メモリを消費するため、
+      # Ubuntu ランナー (特に ARM 2-core/8GB) でスワップを追加して OOM を防ぐ。
+      - name: Add swap space (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo fallocate -l 4G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
       - name: Install build tools (Windows)
         if: matrix.os == 'windows-latest'
         run: |

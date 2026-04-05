@@ -11,6 +11,21 @@
 
 'use strict';
 
+// ---------------------------------------------------------------------------
+// Log bridge – forwards all offscreen logs to background.js service worker
+// so they appear in the service worker DevTools console.
+// ---------------------------------------------------------------------------
+function bgLog(level, ...args) {
+  const msg = args
+    .map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : typeof a === 'object' ? JSON.stringify(a) : String(a)))
+    .join(' ');
+  // eslint-disable-next-line no-console
+  console[level]('[offscreen]', msg);
+  chrome.runtime.sendMessage({ type: 'OFFSCREEN_LOG', level, msg }).catch(() => {});
+}
+
+bgLog('info', 'script loaded');
+
 // How often (ms) a collected audio buffer is forwarded to the background
 const SEND_INTERVAL_MS = 5000;
 
@@ -20,10 +35,12 @@ const SILENCE_RMS_THRESHOLD = 5e-4;
 // ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
-let audioContext = null;
-let sourceNode = null;
+let audioContext  = null;
+let sourceNode    = null;   // tab audio source
+let micSourceNode = null;   // microphone source (optional)
 let processorNode = null;
-let mediaStream = null;
+let mediaStream   = null;   // tab MediaStream
+let micStream     = null;   // microphone MediaStream
 let collectedSamples = []; // Array of Float32Array
 let sendTimer = null;
 
@@ -93,23 +110,38 @@ function calcRms(chunks) {
 // ---------------------------------------------------------------------------
 // Audio helpers
 // ---------------------------------------------------------------------------
-function startAudioProcessing(stream) {
+/** Start audio processing. tabStream and/or micMediaStream can be null. */
+function startAudioProcessing(tabStream, micMediaStream) {
   audioContext = new AudioContext();
-  mediaStream = stream;
+  bgLog('info', 'AudioContext created, state=' + audioContext.state + ' sampleRate=' + audioContext.sampleRate);
 
-  sourceNode = audioContext.createMediaStreamSource(stream);
+  // Resume in case AudioContext starts suspended (Chrome autoplay policy)
+  if (audioContext.state === 'suspended') {
+    audioContext.resume().then(() => bgLog('info', 'AudioContext resumed'));
+  }
 
-  // ScriptProcessorNode is deprecated but still universally supported.
-  // Replace with an AudioWorklet before production deployment.
   const bufferSize = 4096;
   processorNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
-
   processorNode.onaudioprocess = (event) => {
     const inputData = event.inputBuffer.getChannelData(0);
     collectedSamples.push(new Float32Array(inputData)); // copy the buffer
   };
 
-  sourceNode.connect(processorNode);
+  // Tab audio source (null when mic-only)
+  if (tabStream) {
+    mediaStream = tabStream;
+    sourceNode = audioContext.createMediaStreamSource(tabStream);
+    sourceNode.connect(processorNode);
+  }
+
+  // Microphone source – mixed into the same processor node (signals are summed)
+  if (micMediaStream) {
+    micStream = micMediaStream;
+    micSourceNode = audioContext.createMediaStreamSource(micMediaStream);
+    micSourceNode.connect(processorNode);
+    bgLog('info', 'microphone source connected');
+  }
+
   // Connect to destination so the graph stays alive
   processorNode.connect(audioContext.destination);
 
@@ -117,7 +149,10 @@ function startAudioProcessing(stream) {
 }
 
 function sendAudioBuffer() {
-  if (collectedSamples.length === 0) return;
+  if (collectedSamples.length === 0) {
+    bgLog('info', 'sendAudioBuffer: no samples collected yet');
+    return;
+  }
 
   const chunks = collectedSamples;
   collectedSamples = [];
@@ -125,20 +160,29 @@ function sendAudioBuffer() {
   // VAD: skip silent chunks
   const rms = calcRms(chunks);
   if (rms < SILENCE_RMS_THRESHOLD) {
+    bgLog('info', 'sendAudioBuffer: silent (RMS=' + rms.toFixed(6) + '), skipping');
     return;
   }
 
   const sampleRate = audioContext ? audioContext.sampleRate : 48000;
   const wavBuffer = encodeWav(chunks, sampleRate);
 
-  // Transfer the ArrayBuffer (zero-copy) to the background service worker
-  chrome.runtime.sendMessage({ type: 'AUDIO_DATA', wavBuffer }, [wavBuffer]);
+  bgLog('info', 'sendAudioBuffer: sending WAV ' + wavBuffer.byteLength + ' bytes, RMS=' + rms.toFixed(6));
+  // ArrayBuffer does not survive the offscreen→service-worker structured-clone boundary intact;
+  // convert to a plain Array<number> so it round-trips safely. Background reconstructs with
+  // new Uint8Array(wavBytes).buffer.
+  const wavBytes = Array.from(new Uint8Array(wavBuffer));
+  chrome.runtime.sendMessage({ type: 'AUDIO_DATA', wavBytes });
 }
 
 function stopAudioProcessing() {
   clearInterval(sendTimer);
   sendTimer = null;
 
+  if (micSourceNode) {
+    micSourceNode.disconnect();
+    micSourceNode = null;
+  }
   if (processorNode) {
     processorNode.disconnect();
     processorNode = null;
@@ -155,6 +199,10 @@ function stopAudioProcessing() {
     mediaStream.getTracks().forEach((t) => t.stop());
     mediaStream = null;
   }
+  if (micStream) {
+    micStream.getTracks().forEach((t) => t.stop());
+    micStream = null;
+  }
 
   collectedSamples = [];
 }
@@ -162,29 +210,53 @@ function stopAudioProcessing() {
 // ---------------------------------------------------------------------------
 // Message router
 // ---------------------------------------------------------------------------
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   switch (message.type) {
 
     case 'OFFSCREEN_START_AUDIO': {
-      const constraints = {
-        audio: {
-          mandatory: {
-            chromeMediaSource: 'tab',
-            chromeMediaSourceId: message.streamId,
-          },
-        },
-        video: false,
-      };
+      bgLog('info', 'OFFSCREEN_START_AUDIO received, audioSource=' + message.audioSource);
+      // Acknowledge receipt synchronously so background.js knows the doc is ready
+      sendResponse({ ack: true });
 
-      navigator.mediaDevices
-        .getUserMedia(constraints)
-        .then((stream) => {
-          startAudioProcessing(stream);
-        })
-        .catch((err) => {
-          console.error('[offscreen] getUserMedia failed:', err);
-        });
-      break;
+      const { streamId, audioSource } = message;
+      (async () => {
+        // --- Tab stream ---
+        let tabStream = null;
+        if (audioSource !== 'mic-only' && streamId) {
+          bgLog('info', 'calling getUserMedia (tab)...');
+          try {
+            tabStream = await navigator.mediaDevices.getUserMedia({
+              audio: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId } },
+              video: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId } },
+            });
+            const at = tabStream.getAudioTracks();
+            bgLog('info', 'tab stream ok, audio tracks=' + at.length + ' video tracks=' + tabStream.getVideoTracks().length);
+            at.forEach((t) => bgLog('info', 'tab audio: label=' + t.label + ' enabled=' + t.enabled + ' state=' + t.readyState));
+          } catch (err) {
+            bgLog('error', 'tab getUserMedia failed: ' + err.name + ' ' + err.message);
+          }
+        }
+
+        // --- Microphone stream ---
+        let micMediaStream = null;
+        if (audioSource !== 'tab-only') {
+          bgLog('info', 'calling getUserMedia (mic)...');
+          try {
+            micMediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            bgLog('info', 'mic stream ok, tracks=' + micMediaStream.getAudioTracks().length);
+          } catch (err) {
+            bgLog('warn', 'mic getUserMedia failed (continuing without mic): ' + err.name + ' ' + err.message);
+          }
+        }
+
+        if (!tabStream && !micMediaStream) {
+          bgLog('error', 'no audio source available – aborting');
+          return;
+        }
+
+        startAudioProcessing(tabStream, micMediaStream);
+      })();
+      return false; // sendResponse was already called synchronously
     }
 
     case 'OFFSCREEN_STOP_AUDIO':

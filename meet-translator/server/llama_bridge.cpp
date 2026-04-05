@@ -78,7 +78,7 @@ int llama_bridge_generate(
     llama_context_params cparams = llama_context_default_params();
     cparams.n_ctx     = 2048;
     cparams.n_threads = 4;
-    cparams.flash_attn = true; // FlashAttention: 高速化
+    cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED; // FlashAttention: 高速化
 
     llama_context* ctx = llama_init_from_model(handle->model, cparams);
     if (!ctx) {
