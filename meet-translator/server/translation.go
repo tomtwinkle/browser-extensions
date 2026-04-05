@@ -130,6 +130,8 @@ var llmArtifactRe = regexp.MustCompile(
 // stripLLMArtifacts はモデルが出力に混入させたチャットテンプレートトークンを除去する。
 // stripThinkingTokens の後に呼び出すことを想定している。
 func stripLLMArtifacts(text string) string {
+	// [/INST] は instruction と response の区切りとして改行に変換してから除去する
+	text = strings.ReplaceAll(text, "[/INST]", "\n")
 	text = llmArtifactRe.ReplaceAllString(text, "")
 	// 除去後に連続する空行や先頭末尾の空白を整理する
 	lines := strings.Split(text, "\n")
