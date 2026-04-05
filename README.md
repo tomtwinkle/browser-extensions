@@ -99,6 +99,28 @@ make GPU=cpu      # CPU のみ
 
 `make` は初回に whisper.cpp と llama.cpp を自動clone・cmake buildします。
 
+### リビルド
+
+コード変更後は状況に応じて以下を使い分けてください:
+
+| コマンド | 用途 |
+|---|---|
+| `make build` | Go ソースのみ変更した場合。cmake をスキップして `go build` のみ再実行 |
+| `make rebuild` | bridge C++ ファイル（`whisper_bridge.cpp` 等）を変更した後。cmake を再実行してから `go build`。vendor の clone はスキップ |
+| `make distclean && make` | `LLAMA_VERSION` / `WHISPER_VERSION` を変更した場合。vendor を含むすべてを削除して完全再構築 |
+
+```bash
+# 例: Go ソースを変更した場合（最速）
+make build
+
+# 例: git pull でブリッジ C++ が更新された場合
+make rebuild
+
+# 例: llama.cpp / whisper.cpp のバージョンを上げた場合
+make distclean
+make
+```
+
 ---
 
 ## serverの起動

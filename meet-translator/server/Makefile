@@ -6,6 +6,7 @@
 #   make GPU=cuda          force NVIDIA CUDA
 #   make GPU=metal         force Apple Metal
 #   make GPU=cpu           CPU only
+#   make rebuild           re-run cmake + go build (keep vendor clone)
 #   make clean             remove binary + cmake build
 #   make distclean         remove vendor as well
 # ──────────────────────────────────────────────────────────────────────────────
@@ -92,7 +93,7 @@ endif
 BIN := server$(BIN_EXT)
 
 # ── targets ───────────────────────────────────────────────────────────────────
-.PHONY: all build deps test clean distclean
+.PHONY: all build deps test clean rebuild distclean
 
 all: build
 
@@ -149,6 +150,12 @@ test: deps
 clean:
 	rm -f $(BIN)
 	rm -rf $(BUILD_DIR)
+
+## rebuild: force cmake rebuild + go build without re-cloning vendor
+##          use after: git pull changes bridge C++ files or cmake settings
+rebuild:
+	rm -f $(BUILD_DIR)/.built $(BIN)
+	$(MAKE) build
 
 ## distclean: remove everything including vendor
 distclean: clean
