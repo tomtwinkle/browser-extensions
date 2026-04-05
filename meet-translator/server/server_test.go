@@ -38,7 +38,9 @@ func newTestServer(t *testing.T, m mockFuncs) *server {
 	if m.translate != nil {
 		s.translateFn = m.translate
 	} else {
-		s.translateFn = func(string, string, string, ModelOptions, []contextEntry) (string, error) { return "こんにちは", nil }
+		s.translateFn = func(string, string, string, ModelOptions, []contextEntry) (string, error) {
+			return "こんにちは", nil
+		}
 	}
 	if m.swapModel != nil {
 		s.swapModelFn = m.swapModel
@@ -138,7 +140,9 @@ func TestHandleHealth_CORS_Preflight(t *testing.T) {
 func TestHandleTranscribeAndTranslate_Success(t *testing.T) {
 	s := newTestServer(t, mockFuncs{
 		transcribe: func([]byte, string) (string, error) { return "hello world", nil },
-		translate:  func(string, string, string, ModelOptions, []contextEntry) (string, error) { return "こんにちは世界", nil },
+		translate: func(string, string, string, ModelOptions, []contextEntry) (string, error) {
+			return "こんにちは世界", nil
+		},
 	})
 
 	req := buildAudioForm(t, map[string]string{"target_lang": "ja"}, fakeWAV)
@@ -203,7 +207,9 @@ func TestHandleTranscribeAndTranslate_TranscribeError(t *testing.T) {
 func TestHandleTranscribeAndTranslate_TranslateError(t *testing.T) {
 	s := newTestServer(t, mockFuncs{
 		transcribe: func([]byte, string) (string, error) { return "hello", nil },
-		translate:  func(string, string, string, ModelOptions, []contextEntry) (string, error) { return "", errors.New("llama error") },
+		translate: func(string, string, string, ModelOptions, []contextEntry) (string, error) {
+			return "", errors.New("llama error")
+		},
 	})
 	req := buildAudioForm(t, nil, fakeWAV)
 	w := httptest.NewRecorder()
