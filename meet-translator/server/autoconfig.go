@@ -46,7 +46,7 @@ type modelTier struct {
 var gpuTiers = []modelTier{
 	{64, "large-v3-turbo", "calm3:22b-q4_k_m"},
 	{32, "medium", "calm3:22b-q4_k_m"},
-	{4, "small", "bonsai-8b"},   // ~1.15GB VRAM, 8B quality
+	{4, "small", "bonsai-8b"}, // ~1.15GB VRAM, 8B quality
 	{0, "tiny", "gemma4:e2b-q4_k_m"},
 }
 
