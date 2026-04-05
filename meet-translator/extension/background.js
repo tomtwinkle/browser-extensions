@@ -273,6 +273,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     // ---- Audio data from the offscreen document -------------------------
     case 'AUDIO_DATA': {
+      console.info('[background] AUDIO_DATA received, isActive=', state.isActive,
+        'bufLen=', message.wavBuffer instanceof ArrayBuffer ? message.wavBuffer.byteLength : typeof message.wavBuffer);
       if (!state.isActive) {
         console.warn('[background] AUDIO_DATA dropped: capture is not active');
         return false;

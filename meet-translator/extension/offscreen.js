@@ -117,7 +117,10 @@ function startAudioProcessing(stream) {
 }
 
 function sendAudioBuffer() {
-  if (collectedSamples.length === 0) return;
+  if (collectedSamples.length === 0) {
+    console.info('[offscreen] sendAudioBuffer: no samples collected yet');
+    return;
+  }
 
   const chunks = collectedSamples;
   collectedSamples = [];
@@ -125,12 +128,14 @@ function sendAudioBuffer() {
   // VAD: skip silent chunks
   const rms = calcRms(chunks);
   if (rms < SILENCE_RMS_THRESHOLD) {
+    console.info('[offscreen] sendAudioBuffer: silent (RMS=' + rms.toFixed(6) + '), skipping');
     return;
   }
 
   const sampleRate = audioContext ? audioContext.sampleRate : 48000;
   const wavBuffer = encodeWav(chunks, sampleRate);
 
+  console.info('[offscreen] sendAudioBuffer: sending WAV', wavBuffer.byteLength, 'bytes, RMS=' + rms.toFixed(6));
   // Send the WAV buffer to the background service worker.
   // chrome.runtime.sendMessage serialises via structured clone — no transfer list needed.
   chrome.runtime.sendMessage({ type: 'AUDIO_DATA', wavBuffer });
@@ -167,6 +172,7 @@ chrome.runtime.onMessage.addListener((message) => {
   switch (message.type) {
 
     case 'OFFSCREEN_START_AUDIO': {
+      console.info('[offscreen] OFFSCREEN_START_AUDIO received, streamId=', message.streamId);
       const constraints = {
         audio: {
           mandatory: {
@@ -180,10 +186,11 @@ chrome.runtime.onMessage.addListener((message) => {
       navigator.mediaDevices
         .getUserMedia(constraints)
         .then((stream) => {
+          console.info('[offscreen] getUserMedia succeeded, tracks=', stream.getAudioTracks().length);
           startAudioProcessing(stream);
         })
         .catch((err) => {
-          console.error('[offscreen] getUserMedia failed:', err);
+          console.error('[offscreen] getUserMedia failed:', err.name, err.message);
         });
       break;
     }
