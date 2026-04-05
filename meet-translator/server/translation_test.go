@@ -8,7 +8,7 @@ import (
 // ─── buildTranslationPrompt ──────────────────────────────────────────────────
 
 func TestBuildQwenPrompt(t *testing.T) {
-	got := buildTranslationPrompt("Hello", "en", "ja", "qwen", ModelOptions{})
+	got := buildTranslationPrompt("Hello", "en", "ja", "qwen", ModelOptions{}, nil)
 	assertContains(t, got, "<|im_start|>system")
 	assertContains(t, got, "<|im_start|>user")
 	assertContains(t, got, "Translate from English to Japanese")
@@ -20,7 +20,7 @@ func TestBuildQwenPrompt(t *testing.T) {
 
 func TestBuildQwen3Prompt_ThinkingOn(t *testing.T) {
 	opts := ModelOptions{Thinking: true}
-	got := buildTranslationPrompt("Hello", "en", "ja", "qwen3", opts)
+	got := buildTranslationPrompt("Hello", "en", "ja", "qwen3", opts, nil)
 	assertContains(t, got, "<|im_start|>system")
 	assertContains(t, got, "Translate from English to Japanese")
 	assertNotContains(t, got, "/no-think")
@@ -28,13 +28,13 @@ func TestBuildQwen3Prompt_ThinkingOn(t *testing.T) {
 
 func TestBuildQwen3Prompt_ThinkingOff(t *testing.T) {
 	opts := ModelOptions{Thinking: false}
-	got := buildTranslationPrompt("Hello", "en", "ja", "qwen3", opts)
+	got := buildTranslationPrompt("Hello", "en", "ja", "qwen3", opts, nil)
 	assertContains(t, got, "/no-think")
 	assertContains(t, got, "Hello")
 }
 
 func TestBuildGemmaPrompt(t *testing.T) {
-	got := buildTranslationPrompt("Hello", "en", "ja", "gemma", ModelOptions{})
+	got := buildTranslationPrompt("Hello", "en", "ja", "gemma", ModelOptions{}, nil)
 	assertContains(t, got, "<start_of_turn>user")
 	assertContains(t, got, "<end_of_turn>")
 	assertContains(t, got, "<start_of_turn>model")
@@ -44,14 +44,39 @@ func TestBuildGemmaPrompt(t *testing.T) {
 }
 
 func TestBuildTranslationPrompt_UnknownTemplateUsesQwen(t *testing.T) {
-	got := buildTranslationPrompt("Hi", "en", "fr", "unknown-template", ModelOptions{})
+	got := buildTranslationPrompt("Hi", "en", "fr", "unknown-template", ModelOptions{}, nil)
 	assertContains(t, got, "<|im_start|>system")
 	assertContains(t, got, "French")
 }
 
 func TestBuildTranslationPrompt_EmptySourceLang(t *testing.T) {
-	got := buildTranslationPrompt("Hi", "", "ja", "qwen", ModelOptions{})
+	got := buildTranslationPrompt("Hi", "", "ja", "qwen", ModelOptions{}, nil)
 	assertContains(t, got, "the detected language")
+}
+
+func TestBuildTranslationPrompt_WithHistory(t *testing.T) {
+	history := []contextEntry{
+		{Transcription: "Good morning", Translation: "おはようございます"},
+	}
+	got := buildTranslationPrompt("Hello", "en", "ja", "qwen", ModelOptions{}, history)
+	assertContains(t, got, "Good morning")
+	assertContains(t, got, "おはようございます")
+	assertContains(t, got, "Hello")
+}
+
+func TestBuildGemmaPrompt_WithHistory(t *testing.T) {
+	history := []contextEntry{
+		{Transcription: "Good morning", Translation: "おはようございます"},
+	}
+	got := buildTranslationPrompt("Hello", "en", "ja", "gemma", ModelOptions{}, history)
+	assertContains(t, got, "Good morning")
+	assertContains(t, got, "おはようございます")
+	// history turns should appear before the current question
+	historyIdx := strings.Index(got, "Good morning")
+	currentIdx := strings.Index(got, "Hello")
+	if historyIdx >= currentIdx {
+		t.Errorf("history should appear before current text in prompt")
+	}
 }
 
 // ─── stripThinkingTokens ─────────────────────────────────────────────────────

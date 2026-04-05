@@ -21,9 +21,10 @@ void whisper_bridge_free(whisper_context* ctx);
 
 /*
  * whisper_bridge_transcribe
- *   samples: float32 モノラル 16kHz サンプル列
- *   n_samples: サンプル数
- *   language: "en"/"ja"/... または "" (自動検出)
+ *   samples:        float32 モノラル 16kHz サンプル列
+ *   n_samples:      サンプル数
+ *   language:       "en"/"ja"/... または "" (自動検出)
+ *   initial_prompt: 直前の文字起こしテキスト (コンテキスト用)。NULL または "" で無効。
  *   戻り値: 0=成功
  */
 int whisper_bridge_transcribe(
@@ -31,6 +32,7 @@ int whisper_bridge_transcribe(
     const float*     samples,
     int              n_samples,
     const char*      language,
+    const char*      initial_prompt,
     char*            output_buf,
     int              output_buf_size,
     char*            error_buf,

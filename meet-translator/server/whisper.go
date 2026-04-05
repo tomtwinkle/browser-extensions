@@ -14,68 +14,74 @@ package main
 import "C"
 
 import (
-"bytes"
-"fmt"
-"strings"
-"unsafe"
+	"bytes"
+	"fmt"
+	"strings"
+	"unsafe"
 )
 
 // loadWhisperModel は whisper.cpp コンテキストをロードして返す。
 func loadWhisperModel(modelPath string) (*C.whisper_context, error) {
-cpath := C.CString(modelPath)
-defer C.free(unsafe.Pointer(cpath))
+	cpath := C.CString(modelPath)
+	defer C.free(unsafe.Pointer(cpath))
 
-ctx := C.whisper_bridge_init(cpath)
-if ctx == nil {
-return nil, fmt.Errorf("failed to load whisper model: %s", modelPath)
-}
-return ctx, nil
+	ctx := C.whisper_bridge_init(cpath)
+	if ctx == nil {
+		return nil, fmt.Errorf("failed to load whisper model: %s", modelPath)
+	}
+	return ctx, nil
 }
 
 // transcribeInternal は WAV バイト列を文字起こしして返す。
-func (s *server) transcribeInternal(audioData []byte, lang string) (string, error) {
-if s.whisperCtx == nil {
-return "", fmt.Errorf("whisper context not initialized")
-}
+// initialPrompt に直前の発話テキストを渡すと Whisper のコンテキストとして使われ、
+// 固有名詞や専門用語の認識精度が向上する。空文字列でコンテキストなし。
+func (s *server) transcribeInternal(audioData []byte, lang, initialPrompt string) (string, error) {
+	if s.whisperCtx == nil {
+		return "", fmt.Errorf("whisper context not initialized")
+	}
 
-// WAV をパース → 16kHz float32 に変換
-wav, err := parseWAV(bytes.NewReader(audioData))
-if err != nil {
-return "", fmt.Errorf("failed to parse WAV: %w", err)
-}
-s.logVerbose("WAV: sampleRate=%d, channels=%d, samples=%d, duration=%.2fs",
-wav.sampleRate, wav.channels, len(wav.samples),
-float64(len(wav.samples))/float64(wav.sampleRate))
-samples := resampleTo16k(wav.samples, wav.sampleRate)
-if len(samples) == 0 {
-return "", nil
-}
+	// WAV をパース → 16kHz float32 に変換
+	wav, err := parseWAV(bytes.NewReader(audioData))
+	if err != nil {
+		return "", fmt.Errorf("failed to parse WAV: %w", err)
+	}
+	s.logVerbose("WAV: sampleRate=%d, channels=%d, samples=%d, duration=%.2fs",
+		wav.sampleRate, wav.channels, len(wav.samples),
+		float64(len(wav.samples))/float64(wav.sampleRate))
+	samples := resampleTo16k(wav.samples, wav.sampleRate)
+	if len(samples) == 0 {
+		return "", nil
+	}
 
-// C に渡す
-cSamples := (*C.float)(unsafe.Pointer(&samples[0]))
-cLang := C.CString(lang)
-defer C.free(unsafe.Pointer(cLang))
+	// C に渡す
+	cSamples := (*C.float)(unsafe.Pointer(&samples[0]))
+	cLang := C.CString(lang)
+	defer C.free(unsafe.Pointer(cLang))
 
-const outSize = 8192
-outBuf := (*C.char)(C.malloc(outSize))
-defer C.free(unsafe.Pointer(outBuf))
+	cPrompt := C.CString(initialPrompt)
+	defer C.free(unsafe.Pointer(cPrompt))
 
-const errSize = 512
-errBuf := (*C.char)(C.malloc(errSize))
-defer C.free(unsafe.Pointer(errBuf))
+	const outSize = 8192
+	outBuf := (*C.char)(C.malloc(outSize))
+	defer C.free(unsafe.Pointer(outBuf))
 
-ret := C.whisper_bridge_transcribe(
-s.whisperCtx,
-cSamples, C.int(len(samples)),
-cLang,
-outBuf, C.int(outSize),
-errBuf, C.int(errSize),
-)
-if ret != 0 {
-return "", fmt.Errorf("whisper_bridge_transcribe failed: %s", C.GoString(errBuf))
-}
+	const errSize = 512
+	errBuf := (*C.char)(C.malloc(errSize))
+	defer C.free(unsafe.Pointer(errBuf))
 
-result := strings.TrimSpace(C.GoString(outBuf))
-s.logVerbose("whisper raw output: %q", result)
-return result, nil
+	ret := C.whisper_bridge_transcribe(
+		s.whisperCtx,
+		cSamples, C.int(len(samples)),
+		cLang,
+		cPrompt,
+		outBuf, C.int(outSize),
+		errBuf, C.int(errSize),
+	)
+	if ret != 0 {
+		return "", fmt.Errorf("whisper_bridge_transcribe failed: %s", C.GoString(errBuf))
+	}
+
+	result := strings.TrimSpace(C.GoString(outBuf))
+	s.logVerbose("whisper raw output: %q", result)
+	return result, nil
 }

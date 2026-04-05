@@ -180,9 +180,12 @@ modelMu         sync.Mutex
 llamaModel      C.llama_bridge_model
 loadedModelSpec string // 現在ロード中のモデル名またはパス
 
+// 直近の発話履歴 (Whisper initial_prompt + LLM few-shot context に使用)
+contextBuf *contextBuffer
+
 // テスト時にモック実装を注入できる関数フィールド
-transcribeFn func(audioData []byte, lang string) (string, error)
-translateFn  func(text, srcLang, tgtLang string, opts ModelOptions) (string, error)
+transcribeFn func(audioData []byte, lang, initialPrompt string) (string, error)
+translateFn  func(text, srcLang, tgtLang string, opts ModelOptions, history []contextEntry) (string, error)
 swapModelFn  func(spec string) error
 }
 
@@ -194,6 +197,7 @@ whisperCtx:      whisperCtx,
 whisperModelSpec: whisperSpec,
 llamaModel:      llamaModel,
 loadedModelSpec: llamaSpec,
+contextBuf:      newContextBuffer(3),
 }
 // デフォルトは CGo 実装を使用
 s.transcribeFn = s.transcribeInternal
@@ -305,7 +309,9 @@ return
 
 opts := parseModelOptions(rawOpts, s.loadedModelSpec)
 
-transcription, err := s.transcribeFn(audioData, sourceLang)
+// 直前の発話テキストを Whisper の initial_prompt に使用
+initialPrompt := strings.Join(s.contextBuf.Transcriptions(), " ")
+transcription, err := s.transcribeFn(audioData, sourceLang, initialPrompt)
 if err != nil {
 log.Printf("[transcribe] %v", err)
 http.Error(w, "transcription failed: "+err.Error(), http.StatusInternalServerError)
@@ -323,17 +329,23 @@ return
 }
 s.logVerbose("transcription: %q", transcription)
 
-translation, err := s.translateFn(transcription, sourceLang, targetLang, opts)
+// 直前の発話ペアを LLM の few-shot context に使用
+history := s.contextBuf.Entries()
+translation, err := s.translateFn(transcription, sourceLang, targetLang, opts, history)
 if err != nil {
 log.Printf("[translate] %v", err)
 http.Error(w, "translation failed: "+err.Error(), http.StatusInternalServerError)
 return
 }
-s.logVerbose("translation: %q", strings.TrimSpace(translation))
+translation = strings.TrimSpace(translation)
+s.logVerbose("translation: %q", translation)
+
+// バッファに追加して次のリクエストで使用
+s.contextBuf.Add(contextEntry{Transcription: transcription, Translation: translation})
 
 writeJSON(w, http.StatusOK, map[string]string{
 "transcription": transcription,
-"translation":   strings.TrimSpace(translation),
+"translation":   translation,
 })
 }
 
@@ -367,7 +379,9 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 			len(audioData), audioData[:hdrLen], sourceLang)
 	}
 
-	transcription, err := s.transcribeFn(audioData, sourceLang)
+	// 直前の発話テキストを Whisper の initial_prompt に使用
+	initialPrompt := strings.Join(s.contextBuf.Transcriptions(), " ")
+	transcription, err := s.transcribeFn(audioData, sourceLang, initialPrompt)
 	if err != nil {
 		log.Printf("[transcribe] %v", err)
 		http.Error(w, "transcription failed: "+err.Error(), http.StatusInternalServerError)
@@ -424,7 +438,9 @@ func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 
 	opts := parseModelOptions(rawOpts, s.loadedModelSpec)
 
-	translation, err := s.translateFn(text, sourceLang, targetLang, opts)
+	// 直前の発話ペアを LLM の few-shot context に使用
+	history := s.contextBuf.Entries()
+	translation, err := s.translateFn(text, sourceLang, targetLang, opts, history)
 	if err != nil {
 		log.Printf("[translate] %v", err)
 		http.Error(w, "translation failed: "+err.Error(), http.StatusInternalServerError)
@@ -432,6 +448,9 @@ func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 	}
 	translation = strings.TrimSpace(translation)
 	s.logVerbose("translation: %q", translation)
+
+	// バッファに追加して次のリクエストで使用 (text = 直前の /transcribe の出力)
+	s.contextBuf.Add(contextEntry{Transcription: text, Translation: translation})
 
 	writeJSON(w, http.StatusOK, map[string]string{"translation": translation})
 }

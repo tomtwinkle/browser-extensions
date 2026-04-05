@@ -22,6 +22,7 @@ int whisper_bridge_transcribe(
     const float*     samples,
     int              n_samples,
     const char*      language,
+    const char*      initial_prompt,
     char*            output_buf,
     int              output_buf_size,
     char*            error_buf,
@@ -33,6 +34,7 @@ int whisper_bridge_transcribe(
     params.print_realtime   = false;
     params.print_timestamps = false;
     params.language         = (language && *language) ? language : "auto";
+    params.initial_prompt   = (initial_prompt && *initial_prompt) ? initial_prompt : nullptr;
 
     if (whisper_full(ctx, params, samples, n_samples) != 0) {
         snprintf(error_buf, error_buf_size, "whisper_full に失敗");

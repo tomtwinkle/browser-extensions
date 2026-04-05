@@ -28,53 +28,67 @@ func langLabel(code string) string {
 }
 
 // buildTranslationPrompt はモデルのチャットテンプレートに合わせたプロンプトを生成する。
-func buildTranslationPrompt(text, sourceLang, targetLang, template string, opts ModelOptions) string {
+// history に直前の発話ペアを渡すと few-shot context として組み込まれ、
+// 代名詞解決・専門用語の一貫性が向上する。
+func buildTranslationPrompt(text, sourceLang, targetLang, template string, opts ModelOptions, history []contextEntry) string {
 	src := langLabel(sourceLang)
 	tgt := langLabel(targetLang)
 	switch template {
 	case "qwen3":
-		return buildQwen3Prompt(text, src, tgt, opts)
+		return buildQwen3Prompt(text, src, tgt, opts, history)
 	case "gemma":
-		return buildGemmaPrompt(text, src, tgt)
+		return buildGemmaPrompt(text, src, tgt, history)
 	default: // "qwen" (Qwen2.5) およびその他
-		return buildQwenPrompt(text, src, tgt)
+		return buildQwenPrompt(text, src, tgt, history)
 	}
 }
 
 // buildQwenPrompt は Qwen2.5 用プロンプトを生成する。
-func buildQwenPrompt(text, src, tgt string) string {
-	return fmt.Sprintf(
-		"<|im_start|>system\nYou are a translator. Translate the given text accurately. Output only the translated text.<|im_end|>\n"+
-			"<|im_start|>user\nTranslate from %s to %s:\n%s<|im_end|>\n"+
-			"<|im_start|>assistant\n",
-		src, tgt, text,
-	)
+func buildQwenPrompt(text, src, tgt string, history []contextEntry) string {
+	var sb strings.Builder
+	sb.WriteString("<|im_start|>system\nYou are a translator. Translate the given text accurately. Output only the translated text.<|im_end|>\n")
+	for _, h := range history {
+		sb.WriteString(fmt.Sprintf("<|im_start|>user\nTranslate from %s to %s:\n%s<|im_end|>\n", src, tgt, h.Transcription))
+		sb.WriteString(fmt.Sprintf("<|im_start|>assistant\n%s<|im_end|>\n", h.Translation))
+	}
+	sb.WriteString(fmt.Sprintf("<|im_start|>user\nTranslate from %s to %s:\n%s<|im_end|>\n", src, tgt, text))
+	sb.WriteString("<|im_start|>assistant\n")
+	return sb.String()
 }
 
 // buildQwen3Prompt は Qwen3 用プロンプトを生成する。
 // opts.Thinking=false の場合は /no-think タグで思考を抑制する。
-func buildQwen3Prompt(text, src, tgt string, opts ModelOptions) string {
+func buildQwen3Prompt(text, src, tgt string, opts ModelOptions, history []contextEntry) string {
+	var sb strings.Builder
+	sb.WriteString("<|im_start|>system\nYou are a translator. Translate the given text accurately. Output only the translated text.<|im_end|>\n")
+	for _, h := range history {
+		sb.WriteString(fmt.Sprintf("<|im_start|>user\nTranslate from %s to %s:\n%s<|im_end|>\n", src, tgt, h.Transcription))
+		sb.WriteString(fmt.Sprintf("<|im_start|>assistant\n%s<|im_end|>\n", h.Translation))
+	}
 	userContent := fmt.Sprintf("Translate from %s to %s:\n%s", src, tgt, text)
 	if !opts.Thinking {
 		userContent = "/no-think\n" + userContent
 	}
-	return fmt.Sprintf(
-		"<|im_start|>system\nYou are a translator. Translate the given text accurately. Output only the translated text.<|im_end|>\n"+
-			"<|im_start|>user\n%s<|im_end|>\n"+
-			"<|im_start|>assistant\n",
-		userContent,
-	)
+	sb.WriteString(fmt.Sprintf("<|im_start|>user\n%s<|im_end|>\n", userContent))
+	sb.WriteString("<|im_start|>assistant\n")
+	return sb.String()
 }
 
 // buildGemmaPrompt は Gemma 3/4 用プロンプトを生成する。
-func buildGemmaPrompt(text, src, tgt string) string {
-	return fmt.Sprintf(
+func buildGemmaPrompt(text, src, tgt string, history []contextEntry) string {
+	var sb strings.Builder
+	for _, h := range history {
+		sb.WriteString(fmt.Sprintf("<start_of_turn>user\nTranslate from %s to %s:\n%s<end_of_turn>\n", src, tgt, h.Transcription))
+		sb.WriteString(fmt.Sprintf("<start_of_turn>model\n%s<end_of_turn>\n", h.Translation))
+	}
+	sb.WriteString(fmt.Sprintf(
 		"<start_of_turn>user\n"+
 			"You are a translator. Translate the given text accurately. Output only the translated text.\n"+
 			"Translate from %s to %s:\n%s<end_of_turn>\n"+
 			"<start_of_turn>model\n",
 		src, tgt, text,
-	)
+	))
+	return sb.String()
 }
 
 // stripThinkingTokens は Qwen3 thinking モードの <think>...</think> ブロックを除去する。
