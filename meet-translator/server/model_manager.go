@@ -118,7 +118,7 @@ var llamaRegistry = map[string]LlamaEntry{
 	// Q1_0_g128 形式: ~1.15 GB, 標準 llama.cpp では読み込み不可。
 	// PrismML fork (v0.0.2-prism 以降) が必要。
 	"bonsai-8b": {
-		URL:         "https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B-Q1_0_g128.gguf",
+		URL:         "https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B.gguf",
 		Template:    "qwen3",
 		HasThinking: true,
 	},
