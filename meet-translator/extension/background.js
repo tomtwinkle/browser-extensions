@@ -43,22 +43,34 @@ async function getSettings() {
 
 /**
  * GET /health を叩いてサーバーの疎通とロード済みモデルを確認する。
+ * AbortController + setTimeout を使い、AbortSignal.timeout が
+ * 利用できない環境でも動作するよう実装する。
  * @returns {{ ok: boolean, whisperModel?: string, llamaModel?: string }}
  */
 async function checkServerHealth() {
   const cfg = await getSettings();
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), 5000);
   try {
     const res = await fetch(`${cfg.serverUrl}/health`, {
-      signal: AbortSignal.timeout(5000),
+      signal: controller.signal,
     });
-    if (!res.ok) return { ok: false };
+    clearTimeout(tid);
+    if (!res.ok) {
+      console.warn('[background] health check: server returned', res.status);
+      return { ok: false };
+    }
     const data = await res.json();
-    return {
+    const result = {
       ok: true,
       whisperModel: data.whisper_model || '',
       llamaModel:   data.llama_model   || '',
     };
-  } catch {
+    console.info('[background] health check ok – whisper:', result.whisperModel, 'llama:', result.llamaModel);
+    return result;
+  } catch (err) {
+    clearTimeout(tid);
+    console.warn('[background] health check failed:', err?.message ?? String(err));
     return { ok: false };
   }
 }
@@ -79,7 +91,11 @@ async function transcribeAndTranslate(wavBuffer) {
     form.append('llama_options', JSON.stringify(opts));
   }
 
-  const res = await fetch(`${cfg.serverUrl}/transcribe-and-translate`, {
+  const url = `${cfg.serverUrl}/transcribe-and-translate`;
+  const bufLen = wavBuffer instanceof ArrayBuffer ? wavBuffer.byteLength : typeof wavBuffer;
+  console.info('[background] transcribeAndTranslate: POST', url, '– wav', bufLen, 'bytes');
+
+  const res = await fetch(url, {
     method: 'POST',
     body: form,
   });
@@ -166,26 +182,28 @@ async function startCapture(tabId) {
     // Make sure the offscreen document is ready for audio processing
     await ensureOffscreenDocument();
 
-    // Obtain the tab capture stream ID.
-    // The offscreen document will call navigator.mediaDevices.getUserMedia()
-    // with this ID to get the actual MediaStream.
-    chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, async (streamId) => {
-      if (chrome.runtime.lastError || !streamId) {
-        console.error('[background] tabCapture error:', chrome.runtime.lastError?.message);
-        await stopCapture();
-        return;
-      }
-
-      // Forward the stream ID to the offscreen document
-      chrome.runtime.sendMessage({
-        type: 'OFFSCREEN_START_AUDIO',
-        streamId,
-        tabId,
+    // getMediaStreamId をラップして失敗時にエラーを呼び出し元まで伝播させる
+    const streamId = await new Promise((resolve, reject) => {
+      chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
+        if (chrome.runtime.lastError || !id) {
+          reject(new Error(chrome.runtime.lastError?.message ?? 'tabCapture: failed to get stream ID'));
+        } else {
+          resolve(id);
+        }
       });
     });
+
+    // Forward the stream ID to the offscreen document
+    chrome.runtime.sendMessage({
+      type: 'OFFSCREEN_START_AUDIO',
+      streamId,
+      tabId,
+    });
+    console.info('[background] startCapture: audio capture started, tabId=', tabId);
   } catch (err) {
     console.error('[background] startCapture failed:', err);
     await stopCapture();
+    throw err; // popup にエラーを伝える
   }
 }
 
@@ -255,7 +273,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     // ---- Audio data from the offscreen document -------------------------
     case 'AUDIO_DATA': {
-      if (!state.isActive) return false;
+      if (!state.isActive) {
+        console.warn('[background] AUDIO_DATA dropped: capture is not active');
+        return false;
+      }
       const tabId = state.tabId; // capture before async – state may change mid-await
       (async () => {
         try {
