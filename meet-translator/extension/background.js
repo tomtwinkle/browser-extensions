@@ -143,6 +143,29 @@ function buildModelOptions(cfg) {
   return {};
 }
 
+/**
+ * content.js へメッセージを送る。
+ * 「Receiving end does not exist」の場合は content.js を動的注入してリトライする。
+ * 拡張機能の更新後に開いたままのタブでも確実に届くようにする。
+ */
+async function sendToContentScript(tabId, message) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch (err) {
+    if (!err.message?.includes('Receiving end does not exist')) throw err;
+
+    // content.js が未注入 → 動的注入してリトライ
+    console.info('[background] content.js not found, injecting into tab', tabId);
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+      return await chrome.tabs.sendMessage(tabId, message);
+    } catch (injectErr) {
+      console.warn('[background] content script injection failed:', injectErr.message);
+      return null;
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Offscreen document helpers (MV3: AudioContext must live in a document)
 // ---------------------------------------------------------------------------
@@ -266,7 +289,7 @@ async function stopCapture() {
   // Notify the content script that translation has stopped
   if (tabId) {
     try {
-      await chrome.tabs.sendMessage(tabId, { type: 'TRANSLATION_STOPPED' });
+      await sendToContentScript(tabId, { type: 'TRANSLATION_STOPPED' });
     } catch (_) {}
   }
 }
@@ -333,7 +356,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
           console.info('[background] transcription:', transcription.slice(0, 100));
           if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'translation') {
-            await chrome.tabs.sendMessage(tabId, {
+            await sendToContentScript(tabId, {
               type: 'POST_TRANSLATION',
               text: `[${langLabel(cfg.sourceLang)}]\n${transcription}`,
             });
@@ -346,7 +369,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
           console.info('[background] translation:', translation.slice(0, 100));
           if (tabId && cfg.chatEnabled) {
-            await chrome.tabs.sendMessage(tabId, {
+            await sendToContentScript(tabId, {
               type: 'POST_TRANSLATION',
               text: `[${langLabel(cfg.targetLang)}]\n${translation}`,
             });
