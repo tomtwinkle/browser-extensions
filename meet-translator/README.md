@@ -124,12 +124,31 @@ make
 
 ## serverの起動
 
-### 初回起動（modelを指定して記憶させる）
+### 初回起動（モデル自動選択）
+
+引数なしで起動すると、**マシンスペック（RAM・GPU）から最適なモデルを自動選択**して設定fileに保存します。
+
+```bash
+./meet-translator-server
+```
+
+自動選択されるモデル（GPU あり）:
+
+| RAM | whisper | llama |
+|---|---|---|
+| ≥ 64 GB | `large-v3-turbo` | `calm3:22b-q4_k_m` |
+| ≥ 32 GB | `medium` | `calm3:22b-q4_k_m` |
+| ≥  4 GB | `small` / `base` | `gemma4:e4b-q4_k_m` |
+| < 4 GB  | `tiny` | `gemma4:e2b-q4_k_m` |
+
+CPU のみの場合は `gemma4:e4b-q4_k_m`（4 GB以上）/ `gemma4:e2b-q4_k_m`（4 GB未満）を選択します。
+
+### モデルを手動指定する場合
 
 ```bash
 ./meet-translator-server \
   --whisper-model base \
-  --llama-model qwen3:8b-q4_k_m
+  --llama-model gemma4:e4b-q4_k_m
 ```
 
 modelがlocalに存在しない場合は **HuggingFace から自動download** します。  
@@ -195,7 +214,11 @@ model名を `--llama-model` に指定すると自動downloadします。
 
 | model名 | size | ライセンス | 備考 |
 |---|---|---|---|
-| `qwen3.5:4b-q4_k_m`   | ≈ 3.2 GB | Apache 2.0 | **推奨**、Thinking 対応 |
+| `gemma4:e4b-q4_k_m` | ≈ 2.6 GB | Apache 2.0 | **推奨**、高速・軽量 (Google Gemma 4) |
+| `gemma4:e2b-q4_k_m` | ≈ 1.3 GB | Apache 2.0 | 最軽量 (Google Gemma 4) |
+| `gemma4:26b-q4_k_m` | ≈ 16 GB | Apache 2.0 | Google Gemma 4 高精度 |
+| `calm3:22b-q4_k_m` | ≈ 13 GB | Apache 2.0 | 日英特化 (CyberAgent)、要 16GB VRAM |
+| `qwen3.5:4b-q4_k_m`   | ≈ 3.2 GB | Apache 2.0 | Thinking 対応 |
 | `qwen3.5:9b-q4_k_m`   | ≈ 5.3 GB | Apache 2.0 | 高精度、Thinking 対応 |
 | `qwen3.5:0.8b-q4_k_m` | ≈ 0.6 GB | Apache 2.0 | 最軽量、Thinking 対応 |
 | `qwen3.5:2b-q4_k_m`   | ≈ 1.4 GB | Apache 2.0 | Thinking 対応 |
@@ -205,10 +228,6 @@ model名を `--llama-model` に指定すると自動downloadします。
 | `qwen3:8b-q4_k_m`   | ≈ 5.2 GB | Apache 2.0 | Thinking 対応 |
 | `qwen2.5:7b-instruct-q4_k_m` | ≈ 4.7 GB | Apache 2.0 | 安定版 |
 | `qwen2.5:14b-instruct-q4_k_m` | ≈ 8.7 GB | Apache 2.0 | 高精度版 |
-| `calm3:22b-q4_k_m` | ≈ 13 GB | Apache 2.0 | 日英特化 (CyberAgent)、要 16GB VRAM |
-| `gemma4:e2b-q4_k_m` | ≈ 1.3 GB | Apache 2.0 | Google Gemma 4 |
-| `gemma4:e4b-q4_k_m` | ≈ 2.6 GB | Apache 2.0 | Google Gemma 4 |
-| `gemma4:26b-q4_k_m` | ≈ 16 GB | Apache 2.0 | Google Gemma 4 高精度 |
 
 file pathを直接指定することも可能です:
 

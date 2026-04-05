@@ -46,20 +46,19 @@ type modelTier struct {
 var gpuTiers = []modelTier{
 	{64, "large-v3-turbo", "calm3:22b-q4_k_m"},
 	{32, "medium", "calm3:22b-q4_k_m"},
-	{16, "small", "qwen3.5:9b-q4_k_m"},
-	{8, "small", "qwen3:4b-q4_k_m"},
-	{4, "base", "qwen3.5:2b-q4_k_m"},
-	{0, "tiny", "qwen3:0.6b-q4_k_m"},
+	{16, "small", "gemma4:e4b-q4_k_m"},
+	{8, "small", "gemma4:e4b-q4_k_m"},
+	{4, "base", "gemma4:e4b-q4_k_m"},
+	{0, "tiny", "gemma4:e2b-q4_k_m"},
 }
 
 // cpuTiers は CPU のみのモデル選択テーブル。
 // 推論速度を優先し、リアルタイム翻訳が成立する範囲で最大品質を選ぶ。
-// CPU では qwen3:4b 超はセグメントあたり 10 秒以上かかるため上限とする。
 var cpuTiers = []modelTier{
-	{16, "small", "qwen3:4b-q4_k_m"},
-	{8, "base", "qwen3.5:2b-q4_k_m"},
-	{4, "base", "qwen3.5:0.8b-q4_k_m"},
-	{0, "tiny", "qwen3:0.6b-q4_k_m"},
+	{16, "small", "gemma4:e4b-q4_k_m"},
+	{8, "base", "gemma4:e4b-q4_k_m"},
+	{4, "base", "gemma4:e2b-q4_k_m"},
+	{0, "tiny", "gemma4:e2b-q4_k_m"},
 }
 
 // AutoSelectModels は SystemInfo に基づいて最適な whisper / llama モデル名を返す。
@@ -75,7 +74,7 @@ func AutoSelectModels(info SystemInfo) (whisper, llama string) {
 		}
 	}
 	// 最小フォールバック (通常は到達しない)
-	return "tiny", "qwen3:0.6b-q4_k_m"
+	return "tiny", "gemma4:e2b-q4_k_m"
 }
 
 // applyAutoConfig は config ファイルが存在せず、かつ whisper/llama モデルが未指定の場合に
