@@ -26,11 +26,24 @@ function bgLog(level, ...args) {
 
 bgLog('info', 'script loaded');
 
-// How often (ms) a collected audio buffer is forwarded to the background
-const SEND_INTERVAL_MS = 5000;
+// ---------------------------------------------------------------------------
+// Voice Activity Detection (VAD) parameters
+// ---------------------------------------------------------------------------
 
-// RMS threshold below which a chunk is considered silent and not sent
+// RMS above this triggers SPEAKING state (speech start)
+const SPEECH_RMS_THRESHOLD = 1.5e-3;
+
+// RMS below this while SPEAKING counts as silence (hysteresis vs start threshold)
 const SILENCE_RMS_THRESHOLD = 5e-4;
+
+// How many milliseconds of continuous silence ends an utterance
+const SILENCE_AFTER_SPEECH_MS = 800;
+
+// Safety cap: force-flush an utterance that exceeds this duration
+const MAX_SPEECH_DURATION_MS = 15000;
+
+// Minimum speech duration (ms) worth sending to the server
+const MIN_SPEECH_DURATION_MS = 400;
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -41,8 +54,12 @@ let micSourceNode = null;   // microphone source (optional)
 let processorNode = null;
 let mediaStream   = null;   // tab MediaStream
 let micStream     = null;   // microphone MediaStream
-let collectedSamples = []; // Array of Float32Array
-let sendTimer = null;
+
+// VAD state machine
+let vadState = 'SILENCE';  // 'SILENCE' | 'SPEAKING'
+let speechSamples = [];    // Float32Array chunks for current utterance
+let silenceMs = 0;         // accumulated silence duration while SPEAKING
+let speechMs  = 0;         // accumulated speech duration for current utterance
 
 // ---------------------------------------------------------------------------
 // WAV encoder  (PCM 16-bit, mono)
@@ -97,14 +114,23 @@ function encodeWav(chunks, sampleRate) {
   return buffer;
 }
 
-/** Calculate RMS of collected Float32Array chunks. */
-function calcRms(chunks) {
+/** Calculate RMS of a single Float32Array chunk. */
+function calcRmsChunk(data) {
   let sumSq = 0;
-  let count = 0;
-  for (const chunk of chunks) {
-    for (const s of chunk) { sumSq += s * s; count++; }
-  }
-  return count > 0 ? Math.sqrt(sumSq / count) : 0;
+  for (const s of data) { sumSq += s * s; }
+  return data.length > 0 ? Math.sqrt(sumSq / data.length) : 0;
+}
+
+/** Encode and send the accumulated speech samples to the background worker. */
+function flushSpeech(chunks) {
+  if (chunks.length === 0) return;
+  const sampleRate = audioContext ? audioContext.sampleRate : 48000;
+  const wavBuffer = encodeWav(chunks, sampleRate);
+  bgLog('info', 'sendAudioBuffer: sending WAV ' + wavBuffer.byteLength + ' bytes (end-of-speech)');
+  // ArrayBuffer does not survive the offscreen→service-worker structured-clone boundary intact;
+  // convert to a plain Array<number> so it round-trips safely.
+  const wavBytes = Array.from(new Uint8Array(wavBuffer));
+  chrome.runtime.sendMessage({ type: 'AUDIO_DATA', wavBytes });
 }
 
 // ---------------------------------------------------------------------------
@@ -120,11 +146,63 @@ function startAudioProcessing(tabStream, micMediaStream) {
     audioContext.resume().then(() => bgLog('info', 'AudioContext resumed'));
   }
 
+  // Reset VAD state
+  vadState = 'SILENCE';
+  speechSamples = [];
+  silenceMs = 0;
+  speechMs  = 0;
+
   const bufferSize = 4096;
   processorNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
   processorNode.onaudioprocess = (event) => {
     const inputData = event.inputBuffer.getChannelData(0);
-    collectedSamples.push(new Float32Array(inputData)); // copy the buffer
+    const sampleRate = audioContext ? audioContext.sampleRate : 48000;
+    const chunkMs = (inputData.length / sampleRate) * 1000;
+    const rms = calcRmsChunk(inputData);
+
+    if (vadState === 'SILENCE') {
+      if (rms > SPEECH_RMS_THRESHOLD) {
+        // Speech detected – start accumulating
+        vadState = 'SPEAKING';
+        silenceMs = 0;
+        speechMs  = chunkMs;
+        speechSamples = [new Float32Array(inputData)];
+        bgLog('info', 'VAD: speech start (RMS=' + rms.toFixed(6) + ')');
+      }
+    } else { // SPEAKING
+      speechSamples.push(new Float32Array(inputData));
+      speechMs += chunkMs;
+
+      if (rms < SILENCE_RMS_THRESHOLD) {
+        silenceMs += chunkMs;
+        if (silenceMs >= SILENCE_AFTER_SPEECH_MS) {
+          // End of utterance detected
+          bgLog('info', 'VAD: speech end (speechMs=' + speechMs.toFixed(0) + ' silenceMs=' + silenceMs.toFixed(0) + ')');
+          if (speechMs >= MIN_SPEECH_DURATION_MS) {
+            flushSpeech(speechSamples);
+          } else {
+            bgLog('info', 'VAD: utterance too short, discarding');
+          }
+          vadState = 'SILENCE';
+          speechSamples = [];
+          silenceMs = 0;
+          speechMs  = 0;
+        }
+      } else {
+        // Still speaking – reset silence counter
+        silenceMs = 0;
+      }
+
+      // Safety cap: flush if utterance is too long
+      if (speechMs >= MAX_SPEECH_DURATION_MS) {
+        bgLog('info', 'VAD: max duration reached, flushing (' + speechMs.toFixed(0) + 'ms)');
+        flushSpeech(speechSamples);
+        vadState = 'SILENCE';
+        speechSamples = [];
+        silenceMs = 0;
+        speechMs  = 0;
+      }
+    }
   };
 
   // Tab audio source (null when mic-only)
@@ -144,40 +222,14 @@ function startAudioProcessing(tabStream, micMediaStream) {
 
   // Connect to destination so the graph stays alive
   processorNode.connect(audioContext.destination);
-
-  sendTimer = setInterval(sendAudioBuffer, SEND_INTERVAL_MS);
-}
-
-function sendAudioBuffer() {
-  if (collectedSamples.length === 0) {
-    bgLog('info', 'sendAudioBuffer: no samples collected yet');
-    return;
-  }
-
-  const chunks = collectedSamples;
-  collectedSamples = [];
-
-  // VAD: skip silent chunks
-  const rms = calcRms(chunks);
-  if (rms < SILENCE_RMS_THRESHOLD) {
-    bgLog('info', 'sendAudioBuffer: silent (RMS=' + rms.toFixed(6) + '), skipping');
-    return;
-  }
-
-  const sampleRate = audioContext ? audioContext.sampleRate : 48000;
-  const wavBuffer = encodeWav(chunks, sampleRate);
-
-  bgLog('info', 'sendAudioBuffer: sending WAV ' + wavBuffer.byteLength + ' bytes, RMS=' + rms.toFixed(6));
-  // ArrayBuffer does not survive the offscreen→service-worker structured-clone boundary intact;
-  // convert to a plain Array<number> so it round-trips safely. Background reconstructs with
-  // new Uint8Array(wavBytes).buffer.
-  const wavBytes = Array.from(new Uint8Array(wavBuffer));
-  chrome.runtime.sendMessage({ type: 'AUDIO_DATA', wavBytes });
 }
 
 function stopAudioProcessing() {
-  clearInterval(sendTimer);
-  sendTimer = null;
+  // Flush any in-progress utterance before tearing down
+  if (vadState === 'SPEAKING' && speechMs >= MIN_SPEECH_DURATION_MS) {
+    bgLog('info', 'VAD: flushing incomplete utterance on stop (' + speechMs.toFixed(0) + 'ms)');
+    flushSpeech(speechSamples);
+  }
 
   if (micSourceNode) {
     micSourceNode.disconnect();
@@ -204,7 +256,10 @@ function stopAudioProcessing() {
     micStream = null;
   }
 
-  collectedSamples = [];
+  vadState = 'SILENCE';
+  speechSamples = [];
+  silenceMs = 0;
+  speechMs  = 0;
 }
 
 // ---------------------------------------------------------------------------
