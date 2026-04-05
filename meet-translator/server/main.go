@@ -184,16 +184,23 @@ modelMu         sync.Mutex
 llamaModel      C.llama_bridge_model
 loadedModelSpec string // 現在ロード中のモデル名またはパス
 
-// 直近の発話履歴 (Whisper initial_prompt + LLM few-shot context に使用)
-contextBuf *contextBuffer
+	// 直近の発話履歴 (Whisper initial_prompt + LLM few-shot context に使用)
+	contextBuf *contextBuffer
 
-// テスト時にモック実装を注入できる関数フィールド
-transcribeFn func(audioData []byte, lang, initialPrompt string) (string, error)
-translateFn  func(text, srcLang, tgtLang string, opts ModelOptions, history []contextEntry) (string, error)
-swapModelFn  func(spec string) error
+	// 辞書 (goroutine セーフ)
+	glossary *Glossary
+
+	// バックグラウンド辞書改善ワーカー
+	improver *GlossaryImprover
+
+	// テスト時にモック実装を注入できる関数フィールド
+	transcribeFn  func(audioData []byte, lang, initialPrompt string) (string, error)
+	translateFn   func(text, srcLang, tgtLang string, opts ModelOptions, history []contextEntry) (string, error)
+	swapModelFn   func(spec string) error
+	rawGenerateFn func(prompt string) (string, error)
 }
 
-func newServer(cfg config, whisperCtx *C.whisper_context, llamaModel C.llama_bridge_model, whisperSpec, llamaSpec string) *server {
+func newServer(cfg config, whisperCtx *C.whisper_context, llamaModel C.llama_bridge_model, whisperSpec, llamaSpec string, glossary *Glossary) *server {
 s := &server{
 cfg:             cfg,
 mux:             http.NewServeMux(),
@@ -201,16 +208,36 @@ whisperCtx:      whisperCtx,
 whisperModelSpec: whisperSpec,
 llamaModel:      llamaModel,
 loadedModelSpec: llamaSpec,
-contextBuf:      newContextBuffer(3),
-}
-// デフォルトは CGo 実装を使用
-s.transcribeFn = s.transcribeInternal
-s.translateFn = s.translateInternal
-s.swapModelFn = s.swapModel
-s.mux.HandleFunc("GET /health", s.handleHealth)
-s.mux.HandleFunc("POST /transcribe-and-translate", s.handleTranscribeAndTranslate)
-s.mux.HandleFunc("POST /transcribe", s.handleTranscribe)
-s.mux.HandleFunc("POST /translate", s.handleTranslate)
+	contextBuf:      newContextBuffer(3),
+	glossary:        glossary,
+	}
+	// デフォルトは CGo 実装を使用
+	s.transcribeFn = s.transcribeInternal
+	s.translateFn = s.translateInternal
+	s.swapModelFn = s.swapModel
+	s.rawGenerateFn = s.generateRaw
+	// バックグラウンド辞書改善ワーカーを構築
+	s.improver = newGlossaryImprover(
+		glossary,
+		s.rawGenerateFn,
+		func() string {
+			s.modelMu.Lock()
+			spec := s.loadedModelSpec
+			s.modelMu.Unlock()
+			return templateFor(spec)
+		},
+	)
+	s.mux.HandleFunc("GET /health", s.handleHealth)
+	s.mux.HandleFunc("POST /transcribe-and-translate", s.handleTranscribeAndTranslate)
+	s.mux.HandleFunc("POST /transcribe", s.handleTranscribe)
+	s.mux.HandleFunc("POST /translate", s.handleTranslate)
+	// 辞書 CRUD
+	s.mux.HandleFunc("GET /glossary", s.handleGlossaryGet)
+	s.mux.HandleFunc("POST /glossary/corrections", s.handleGlossaryUpsertCorrection)
+	s.mux.HandleFunc("DELETE /glossary/corrections/{source}", s.handleGlossaryDeleteCorrection)
+	s.mux.HandleFunc("POST /glossary/terms", s.handleGlossaryUpsertTerm)
+	s.mux.HandleFunc("DELETE /glossary/terms/{source}", s.handleGlossaryDeleteTerm)
+	s.mux.HandleFunc("POST /glossary/learn", s.handleGlossaryLearn)
 return s
 }
 
@@ -538,26 +565,43 @@ log.Fatalf("%v", err)
 defer C.llama_bridge_free_model(llamaModel)
 log.Printf("llama ready: %s", originalModelSpec)
 
+// 辞書ロード
+glossary := loadGlossary()
+log.Printf("[glossary] loaded: %d corrections, %d terms  (path: %s)",
+	len(glossary.GetData().Corrections), len(glossary.GetData().Terms), glossaryFilePath())
+
+srv := newServer(cfg, whisperCtx, llamaModel, originalWhisperSpec, originalModelSpec, glossary)
+
+// サーバーのライフタイムと連動したコンテキスト
+srvCtx, srvCancel := context.WithCancel(context.Background())
+
+// 辞書ファイル変更を監視して自動リロード (30 秒ごと)
+glossary.StartWatcher(srvCtx, 30*time.Second)
+
+// バックグラウンド辞書改善ワーカーを起動
+srv.improver.Start(srvCtx)
+
 httpSrv := &http.Server{
-Addr:    ":" + cfg.port,
-Handler: newServer(cfg, whisperCtx, llamaModel, originalWhisperSpec, originalModelSpec),
+	Addr:    ":" + cfg.port,
+	Handler: srv,
 }
 
 quit := make(chan os.Signal, 1)
 signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 go func() {
-<-quit
-log.Println("shutting down...")
-ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-defer cancel()
-_ = httpSrv.Shutdown(ctx)
+	<-quit
+	log.Println("shutting down...")
+	srvCancel() // ホットリロードと improver を停止
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = httpSrv.Shutdown(ctx)
 }()
 
 log.Printf("meet-translator server listening on :%s", cfg.port)
 if cfg.verbose {
-log.Printf("[verbose] verbose logging enabled")
+	log.Printf("[verbose] verbose logging enabled")
 }
 if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-log.Fatal(err)
+	log.Fatal(err)
 }
 }

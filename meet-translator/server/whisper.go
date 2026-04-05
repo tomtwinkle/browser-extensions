@@ -58,7 +58,11 @@ func (s *server) transcribeInternal(audioData []byte, lang, initialPrompt string
 	cLang := C.CString(lang)
 	defer C.free(unsafe.Pointer(cLang))
 
-	cPrompt := C.CString(initialPrompt)
+	// 辞書ヒントと発話コンテキストを組み合わせて initial_prompt とする
+	glossaryHints := s.glossary.WhisperHints()
+	combinedPrompt := strings.TrimSpace(glossaryHints + " " + initialPrompt)
+	s.logVerbose("whisper initial_prompt: %q", combinedPrompt)
+	cPrompt := C.CString(combinedPrompt)
 	defer C.free(unsafe.Pointer(cPrompt))
 
 	const outSize = 8192
@@ -83,5 +87,7 @@ func (s *server) transcribeInternal(audioData []byte, lang, initialPrompt string
 
 	result := strings.TrimSpace(C.GoString(outBuf))
 	s.logVerbose("whisper raw output: %q", result)
+	// 辞書の修正テーブルを適用 (ASR 誤認識を既知のパターンで修正)
+	result = s.glossary.ApplyCorrections(result)
 	return result, nil
 }

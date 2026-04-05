@@ -9,7 +9,7 @@ release:
     name: browser-extensions
   draft: false
   prerelease: auto
-  name_template: "v{{ .Version }}"
+  name_template: "meet-translator/v{{ .Version }}"
   footer: |
     ## セットアップ
 
