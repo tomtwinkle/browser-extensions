@@ -114,9 +114,20 @@ func TestStripThinkingTokens_LeadingWhitespace(t *testing.T) {
 }
 
 func TestStripThinkingTokens_UnclosedTag(t *testing.T) {
+	// 閉じタグなし（max_tokens 途中切断）は <think> 以降を全除去する
 	in := "<think>unclosed"
-	if got := stripThinkingTokens(in); got != in {
-		t.Errorf("unclosed tag should not be stripped, got %q", got)
+	want := ""
+	if got := stripThinkingTokens(in); got != want {
+		t.Errorf("unclosed tag: got %q, want %q", got, want)
+	}
+}
+
+func TestStripThinkingTokens_UnclosedTagWithPrefix(t *testing.T) {
+	// 翻訳結果の後に unclosed think block が続く場合は翻訳部分を保持する
+	in := "translation result<think>unclosed reasoning"
+	want := "translation result"
+	if got := stripThinkingTokens(in); got != want {
+		t.Errorf("unclosed with prefix: got %q, want %q", got, want)
 	}
 }
 

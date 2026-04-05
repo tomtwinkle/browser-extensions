@@ -529,6 +529,10 @@ return nil
 func main() {
 cfg := loadConfig()
 
+// 初回起動時 (config ファイルが存在しない) かつモデル未指定の場合、
+// マシンスペックからベストなモデルを自動選択して config を保存する。
+applyAutoConfig(&cfg)
+
 // パラメーター未指定時はヘルプを表示して終了
 if cfg.whisperModel == "" && cfg.llamaModel == "" {
 printFullHelp()

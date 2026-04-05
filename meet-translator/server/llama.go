@@ -83,9 +83,9 @@ func (s *server) translateInternal(text, sourceLang, targetLang string, opts Mod
 
 	result := strings.TrimSpace(C.GoString(outBuf))
 	s.logVerbose("llama raw output: %q", result)
-	if opts.Thinking {
-		result = stripThinkingTokens(result)
-	}
+	// <think>...</think> ブロックは opts.Thinking に関わらず常に除去する。
+	// /no-think を指定しても一部モデルが thinking を出力する場合があるため。
+	result = stripThinkingTokens(result)
 	result = stripLLMArtifacts(result)
 	s.logVerbose("translate output: %q", result)
 	return result, nil

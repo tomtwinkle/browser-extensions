@@ -16,3 +16,6 @@ package main
 #cgo darwin LDFLAGS: -framework Accelerate -framework CoreGraphics
 */
 import "C"
+
+// gpuAvailable は Metal GPU が利用可能であることを示す。
+func gpuAvailable() bool { return true }
