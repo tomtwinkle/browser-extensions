@@ -92,8 +92,6 @@ var hallucinationExactPhrases = []string{
 	"see you in the next video",
 	"bye bye",
 	// ── 英語: 字幕・翻訳クレジット ──────────────────────────────────────
-	"subtitles by",
-	"closed captions by",
 	"translated by amara",
 	"translated by amara.org community",
 	"transcribed by amara.org community",
@@ -111,6 +109,9 @@ var hallucinationSubstrings = []string{
 	// 字幕制作・翻訳字幕クレジットはコンテンツ制作文脈のみ
 	"字幕制作",
 	"翻訳字幕",
+	// 字幕・翻訳クレジット ("Subtitles by Name" 等のバリアントも捕捉)
+	"subtitles by",
+	"closed captions by",
 	// Amara 字幕プラットフォームのドメイン
 	"amara.org",
 	// Touhou 固有ハルシネーション (openai/whisper#1873 で報告)

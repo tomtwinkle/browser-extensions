@@ -101,7 +101,7 @@ func TestIsKnownHallucination(t *testing.T) {
 		{"en exact: like and subscribe", "Like and subscribe!", true},
 		{"en exact: good night", "Good night.", true},
 		{"en exact: see you next time", "See you next time!", true},
-		{"en exact: subtitles by", "Subtitles by someone", true},
+		{"en_substring: subtitles_by", "Subtitles by someone", true},
 		{"en substring: amara.org", "Visit amara.org for more", true},
 		// ── 通過: 正常な発話 ──────────────────────────────────────────────
 		{"real: hello", "こんにちは", false},
