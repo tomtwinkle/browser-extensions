@@ -15,30 +15,30 @@ func TestAutoSelectModels(t *testing.T) {
 		// ── GPU あり (Metal / CUDA) ─────────────────────────────────────────────
 		{"GPU 64GB", 64 * GB, true, "large-v3-turbo", "calm3:22b-q4_k_m"},
 		{"GPU 32GB", 32 * GB, true, "medium", "calm3:22b-q4_k_m"},
-		{"GPU 16GB", 16 * GB, true, "small", "bonsai-8b"},
-		{"GPU 8GB", 8 * GB, true, "small", "bonsai-8b"},
-		{"GPU 4GB", 4 * GB, true, "small", "bonsai-8b"},
-		{"GPU <4GB (2GB)", 2 * GB, true, "tiny", "bonsai-8b"},
-		{"GPU 0B", 0, true, "tiny", "bonsai-8b"},
+		{"GPU 16GB", 16 * GB, true, "small", "qwen3:8b-q4_k_m"},
+		{"GPU 8GB", 8 * GB, true, "small", "qwen3:8b-q4_k_m"},
+		{"GPU 4GB", 4 * GB, true, "small", "qwen3:4b-q4_k_m"},
+		{"GPU <4GB (2GB)", 2 * GB, true, "base", "qwen3.5:0.8b-q4_k_m"},
+		{"GPU 0B", 0, true, "base", "qwen3.5:0.8b-q4_k_m"},
 
 		// 境界値: ちょうどしきい値
 		{"GPU exactly 64GB", 64 * GB, true, "large-v3-turbo", "calm3:22b-q4_k_m"},
 		{"GPU just below 64GB", 64*GB - 1, true, "medium", "calm3:22b-q4_k_m"},
-		{"GPU exactly 8GB", 8 * GB, true, "small", "bonsai-8b"},
-		{"GPU just below 8GB", 8*GB - 1, true, "small", "bonsai-8b"},
+		{"GPU exactly 8GB", 8 * GB, true, "small", "qwen3:8b-q4_k_m"},
+		{"GPU just below 8GB", 8*GB - 1, true, "small", "qwen3:4b-q4_k_m"},
 
 		// ── GPU なし (CPU のみ) ──────────────────────────────────────────────────
-		{"CPU 16GB", 16 * GB, false, "small", "bonsai-8b"},
-		{"CPU 8GB", 8 * GB, false, "base", "bonsai-8b"},
-		{"CPU 4GB", 4 * GB, false, "base", "bonsai-8b"},
-		{"CPU <4GB (2GB)", 2 * GB, false, "tiny", "gemma4:e2b-q4_k_m"},
-		{"CPU 0B", 0, false, "tiny", "gemma4:e2b-q4_k_m"},
+		{"CPU 16GB", 16 * GB, false, "base", "qwen3.5:0.8b-q4_k_m"},
+		{"CPU 8GB", 8 * GB, false, "base", "qwen3.5:0.8b-q4_k_m"},
+		{"CPU 4GB", 4 * GB, false, "base", "qwen3.5:0.8b-q4_k_m"},
+		{"CPU <4GB (2GB)", 2 * GB, false, "tiny", "bonsai-8b"},
+		{"CPU 0B", 0, false, "tiny", "bonsai-8b"},
 
 		// 境界値: CPU しきい値
-		{"CPU exactly 16GB", 16 * GB, false, "small", "bonsai-8b"},
-		{"CPU just below 16GB", 16*GB - 1, false, "base", "bonsai-8b"},
-		{"CPU exactly 4GB", 4 * GB, false, "base", "bonsai-8b"},
-		{"CPU just below 4GB", 4*GB - 1, false, "tiny", "gemma4:e2b-q4_k_m"},
+		{"CPU exactly 16GB", 16 * GB, false, "base", "qwen3.5:0.8b-q4_k_m"},
+		{"CPU just below 16GB", 16*GB - 1, false, "base", "qwen3.5:0.8b-q4_k_m"},
+		{"CPU exactly 4GB", 4 * GB, false, "base", "qwen3.5:0.8b-q4_k_m"},
+		{"CPU just below 4GB", 4*GB - 1, false, "tiny", "bonsai-8b"},
 	}
 
 	for _, tt := range tests {
