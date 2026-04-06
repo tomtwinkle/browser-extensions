@@ -375,21 +375,24 @@ go run ./cmd/benchmark/ --compare results/
 ### 比較出力例 (macOS Apple M1 Max, GPU Metal, 2026-04)
 
 ```
-=== Benchmark Comparison (4 models) ===
+=== Benchmark Comparison (5 models) ===
 
 Rank Model                          Quality   Latency     Score
 ────────────────────────────────────────────────────────────────────
    1 qwen3.5:0.8b-q4_k_m              0.636     230ms     0.608
    2 qwen3:4b-q4_k_m                  0.814     730ms     0.605
    3 qwen3:8b-q4_k_m                  0.833    1360ms     0.572
-   4 gemma4:e4b-q4_k_m                0.256   11707ms     0.163
+   4 bonsai-8b                        0.454    7168ms     0.288
+   5 gemma4:e4b-q4_k_m                0.256   11707ms     0.163
 
 Score = quality×0.6 + speed×0.4  (speed = 1/(1 + latency/300ms))
 ```
 
-> **Note**: `gemma4:e4b` は EN↔JA 翻訳タスクにおいて品質スコアが低く (0.256)、
-> 翻訳用途には推奨しません。autoconfig は `qwen3` 系を優先します。
-> 実際の数値は実行環境・GPU の有無によって異なります。
+> **Note:**
+> - `bonsai-8b` はGPUベンチマークで thinking mode のタイムアウトが多発しスコアが低め。
+>   CPU/低VRAM（<4GB）環境向けの 1-bit 圧縮モデル（~1.15GB）として有用。
+> - `gemma4:e4b` は EN↔JA 翻訳タスクに不適（quality 0.256）。autoconfig 対象外。
+> - 実際の数値は実行環境・GPU の有無によって異なります。
 
 ---
 
