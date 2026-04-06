@@ -39,18 +39,32 @@ const SEL = {
   ].join(', '),
 
   // Message composition input – covers both UI modes.
-  // NOTE: In embedded Google Chat, contenteditable may be "" (empty string),
-  //       not "true", so we use [contenteditable] (attribute presence) here.
+  //
+  // Mode B actual DOM (observed 2025):
+  //   <div jsname="yrriRe" g_editable="true" contenteditable="true"
+  //        aria-label="履歴がオンになっています" role="textbox" …>
+  //
+  // aria-label reflects the chat history setting, NOT a "send message" label.
+  // jsname="yrriRe" and g_editable="true" are the reliable identifiers.
   messageInput: [
     // Mode A – Classic Meet (stable internal attribute)
     '[jsname="r4nke"]',
-    // Mode A – Classic Meet with aria-label (en / ja)
+    // Mode B – Embedded Google Chat (stable internal attribute, observed 2025)
+    '[jsname="yrriRe"]',
+    // Mode B – Google Chat editable marker (g_editable is set on all GChat inputs)
+    'div[g_editable="true"][contenteditable="true"]',
+    // Mode B – aria-label reflects history state (ja)
+    'div[contenteditable="true"][aria-label*="履歴がオンになっています"]',
+    'div[contenteditable="true"][aria-label*="履歴がオフになっています"]',
+    // Mode B – aria-label reflects history state (en)
+    'div[contenteditable="true"][aria-label*="History is on"]',
+    'div[contenteditable="true"][aria-label*="History is off"]',
+    // Mode A – Classic Meet with message aria-label (en / ja)
     'div[contenteditable="true"][aria-label*="message"]',
     'div[contenteditable="true"][aria-label*="メッセージ"]',
-    // Mode B – Embedded Google Chat, send-message aria-label (ja)
+    // Mode B – send-message aria-label variants (ja / en)
     'div[contenteditable][aria-label*="メッセージを送信"]',
     'div[contenteditable][aria-label*="全員にメッセージ"]',
-    // Mode B – Embedded Google Chat, send-message aria-label (en)
     'div[contenteditable][aria-label*="Send a message"]',
     'div[contenteditable][aria-label*="Message everyone"]',
     // Mode A – Plain textarea fallback
@@ -102,6 +116,12 @@ function findMessageInput() {
       if (label.includes('検索') || label.includes('search')) continue;
       return el;
     }
+  }
+
+  // Last resort: any visible Google Chat editable div (g_editable is set on
+  // all Google Chat message inputs regardless of UI mode or aria-label)
+  for (const el of document.querySelectorAll('div[g_editable="true"][contenteditable]')) {
+    if (isElementVisible(el)) return el;
   }
 
   return null;
