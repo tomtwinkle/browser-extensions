@@ -389,6 +389,31 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         console.warn('[background] chat error from content.js:', message.error);
         return false;
       }
+      // content.js から DOM フラグメントを受け取り、LLM でセレクタを探す
+      if (message.type === 'FIND_CHAT_INPUT') {
+        (async () => {
+          try {
+            const cfg = await getSettings();
+            const res = await fetch(`${cfg.serverUrl}/find-chat-input`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ html: message.html }),
+            });
+            if (!res.ok) {
+              const detail = await res.text().catch(() => '');
+              sendResponse({ selector: '', error: `server ${res.status}: ${detail}` });
+              return;
+            }
+            const { selector } = await res.json();
+            console.info('[background] find-chat-input result:', selector || '(not found)');
+            sendResponse({ selector: selector || '' });
+          } catch (err) {
+            console.warn('[background] find-chat-input error:', err.message);
+            sendResponse({ selector: '', error: err.message });
+          }
+        })();
+        return true; // 非同期レスポンスのためチャネルを維持
+      }
       return false;
   }
 });

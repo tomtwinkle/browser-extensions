@@ -254,6 +254,8 @@ func newServer(cfg config, whisperCtx *C.whisper_context, llamaModel C.llama_bri
 	s.mux.HandleFunc("POST /transcribe-and-translate", s.handleTranscribeAndTranslate)
 	s.mux.HandleFunc("POST /transcribe", s.handleTranscribe)
 	s.mux.HandleFunc("POST /translate", s.handleTranslate)
+	// DOM セレクタ検索（チャット入力欄を LLM で動的に特定する）
+	s.mux.HandleFunc("POST /find-chat-input", s.handleFindChatInput)
 	// 辞書 CRUD
 	s.mux.HandleFunc("GET /glossary", s.handleGlossaryGet)
 	s.mux.HandleFunc("POST /glossary/corrections", s.handleGlossaryUpsertCorrection)
