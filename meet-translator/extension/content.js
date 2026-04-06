@@ -93,15 +93,23 @@ async function ensureChatPanelOpen() {
 
   const chatBtn = document.querySelector(SEL.chatPanelButton);
   if (!chatBtn) {
-    reportChatError('チャットパネルボタンが見つかりません: ' + SEL.chatPanelButton);
+    // Diagnostic: list all toolbar buttons with aria-label so we can find the right one
+    const allBtns = [...document.querySelectorAll('button[aria-label]')]
+      .map(b => `"${b.getAttribute('aria-label')}"`)
+      .slice(0, 20);
+    reportChatError('チャットパネルボタンが見つかりません。ツールバーボタン: [' + allBtns.join(', ') + ']');
     return;
   }
 
-  // Check whether the panel is already open to avoid accidentally toggling it closed.
-  // Google Meet uses aria-expanded or aria-pressed on toolbar buttons.
-  const isExpanded =
-    chatBtn.getAttribute('aria-expanded') === 'true' ||
-    chatBtn.getAttribute('aria-pressed') === 'true';
+  const btnLabel = chatBtn.getAttribute('aria-label') || '';
+  const btnExpanded = chatBtn.getAttribute('aria-expanded');
+  const btnPressed = chatBtn.getAttribute('aria-pressed');
+
+  // Only check aria-expanded (not aria-pressed) to detect panel state.
+  // aria-pressed can be true for keyboard navigation focus, not panel open state.
+  const isExpanded = btnExpanded === 'true';
+  reportChatError(`DEBUG ensureChatPanelOpen: btn="${btnLabel}" aria-expanded="${btnExpanded}" aria-pressed="${btnPressed}" isExpanded=${isExpanded}`);
+
   if (!isExpanded) {
     chatBtn.click();
     await waitForElement(SEL.messageInput, 3000);
