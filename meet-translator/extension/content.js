@@ -152,19 +152,65 @@ async function ensureChatPanelOpen() {
   const btnExpanded = chatBtn.getAttribute('aria-expanded');
   const btnPressed = chatBtn.getAttribute('aria-pressed');
 
-  // If matched button has no aria-label it's likely a wrong match – list all buttons
   if (!btnLabel) {
     reportChatError('チャットパネルボタンのaria-labelが空（誤マッチの可能性）。ツールバーボタン: [' + allBtnLabels() + ']');
     return;
   }
 
-  // Only check aria-expanded (not aria-pressed) to detect panel state.
   const isExpanded = btnExpanded === 'true';
   reportChatError(`DEBUG ensureChatPanelOpen: btn="${btnLabel}" aria-expanded="${btnExpanded}" aria-pressed="${btnPressed}" isExpanded=${isExpanded}`);
 
   if (!isExpanded) {
     chatBtn.click();
+    await waitForElement(SEL.messageInput, 2000);
+  }
+
+  // In the new Meet UI, clicking the chat panel button opens a chat LIST view
+  // (with a "Chat を検索…" search box) rather than directly opening the message input.
+  // We need to find and click the "group chat with everyone in this call" item.
+  if (!document.querySelector(SEL.messageInput) && !deepQueryAll(SEL.messageInput)[0]) {
+    await openGroupChatConversation();
+  }
+}
+
+// Find and click the "everyone in this call" conversation item in the chat list.
+async function openGroupChatConversation() {
+  // Keywords that identify the group/meeting chat entry
+  const groupKeywords = ['全員', 'everyone', 'group', 'meeting', 'call', '通話'];
+
+  // Candidate selectors for conversation list items / buttons
+  const CONV_SEL = [
+    '[role="listitem"]',
+    '[role="option"]',
+    '[role="row"]',
+    'li',
+    'button',
+    '[data-room-type]',
+    '[data-conversation-id]',
+    '[data-group-id]',
+  ].join(', ');
+
+  const allItems = deepQueryAll(CONV_SEL).filter(isVisible);
+  const groupItem = allItems.find(el => {
+    const label = (el.getAttribute('aria-label') || '').toLowerCase();
+    const text = (el.textContent || '').trim().toLowerCase().slice(0, 80);
+    // Exclude the search input itself
+    if (el.tagName === 'INPUT') return false;
+    // Exclude the toolbar buttons we already know about
+    if (el === document.querySelector(SEL.chatPanelButton)) return false;
+    return groupKeywords.some(kw => label.includes(kw) || text.includes(kw));
+  });
+
+  if (groupItem) {
+    reportChatError(`DEBUG openGroupChatConversation: clicking "${groupItem.getAttribute('aria-label') || groupItem.textContent.trim().slice(0, 40)}"`);
+    groupItem.click();
     await waitForElement(SEL.messageInput, 3000);
+  } else {
+    // Diagnostic: list visible items in the chat panel to find the right selector
+    const panelItems = allItems.slice(0, 15).map(el =>
+      `<${el.tagName.toLowerCase()} role="${el.getAttribute('role')||''}" aria-label="${el.getAttribute('aria-label')||''}" text="${(el.textContent||'').trim().slice(0,30)}">`
+    );
+    reportChatError('DEBUG openGroupChatConversation: no group item found. panel items: ' + panelItems.join(' | '));
   }
 }
 
