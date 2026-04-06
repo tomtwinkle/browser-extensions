@@ -28,14 +28,26 @@ const SEL = {
     'button[aria-label*="チャット"]',
     'button[aria-label*="In-call messages"]',
     'button[aria-label*="通話内のメッセージ"]',
+    'button[aria-label*="通話内メッセージ"]',
     'button[aria-label*="messages" i]',
     '[data-panel-id="2"]',
   ].join(', '),
 
+  // Chat panel container – used to scope the input search as a fallback.
+  chatPanelContainer: [
+    '[data-panel-id="chat"]',
+    '[jsname="xct4fd"]',
+    'section[aria-label*="chat" i]',
+    'section[aria-label*="チャット"]',
+    'aside[aria-label*="chat" i]',
+    'aside[aria-label*="チャット"]',
+  ].join(', '),
+
   // The contenteditable div / textarea used for message composition.
-  // jsname="r4nke" was stable across many older Meet versions.
+  // In the current Meet UI (2025+), the input is role="textbox" contenteditable.
   messageInput: [
-    '[jsname="r4nke"]',
+    '[role="textbox"][contenteditable="true"]',  // new Meet UI (primary)
+    '[jsname="r4nke"]',                          // older Meet UI
     'div[contenteditable="true"][aria-label*="message" i]',
     'div[contenteditable="true"][aria-label*="メッセージ" i]',
     'div[contenteditable="true"][aria-label*="chat" i]',
@@ -127,10 +139,35 @@ async function postToChat(text) {
   // 1. Make sure the chat panel is open
   await ensureChatPanelOpen();
 
-  // 2. Locate the message input
-  const input = document.querySelector(SEL.messageInput);
+  // 2. Locate the message input (specific selectors first)
+  let input = document.querySelector(SEL.messageInput);
+
+  // 3. Fallback: scan inside the chat panel container
   if (!input) {
-    const msg = 'チャット入力欄が見つかりません。チャットパネルを開いてください。セレクタ: ' + SEL.messageInput;
+    const panel = document.querySelector(SEL.chatPanelContainer);
+    if (panel) {
+      input = panel.querySelector(
+        '[role="textbox"], [contenteditable="true"], textarea'
+      );
+    }
+  }
+
+  if (!input) {
+    // Diagnostic: report ALL visible contenteditable / textbox elements
+    const candidates = [
+      ...document.querySelectorAll('[role="textbox"], [contenteditable="true"], textarea'),
+    ].filter((el) => {
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0; // visible elements only
+    }).map((el) =>
+      `<${el.tagName.toLowerCase()} role="${el.getAttribute('role') || ''}" ` +
+      `contenteditable="${el.contentEditable}" ` +
+      `aria-label="${el.getAttribute('aria-label') || ''}" ` +
+      `placeholder="${el.getAttribute('placeholder') || ''}" ` +
+      `jsname="${el.getAttribute('jsname') || ''}"/>`
+    );
+    const msg = 'チャット入力欄が見つかりません。visible candidates: ' +
+      (candidates.length ? candidates.join(' | ') : 'none');
     console.warn('[Meet Translator]', msg);
     reportChatError(msg);
     return;
