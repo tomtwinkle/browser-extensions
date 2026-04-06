@@ -4,7 +4,11 @@
 server/meet-translator-server
 server/meet-translator-server.exe
 server/vendor/
+server/benchmark
 dist/
+
+# Benchmark results (local runs, not committed by default)
+meet-translator/server/results/
 
 # Images
 images/avatars/
