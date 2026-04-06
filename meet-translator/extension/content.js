@@ -30,7 +30,7 @@ const SEL = {
     'button[aria-label*="通話内のメッセージ"]',
     'button[aria-label*="通話内メッセージ"]',
     'button[aria-label*="messages" i]',
-    '[data-panel-id="2"]',
+    // NOTE: '[data-panel-id="2"]' removed – matched wrong element in current Meet UI
   ].join(', '),
 
   // Chat panel container – used to scope the input search as a fallback.
@@ -92,12 +92,13 @@ async function ensureChatPanelOpen() {
   if (document.querySelector(SEL.messageInput)) return;
 
   const chatBtn = document.querySelector(SEL.chatPanelButton);
-  if (!chatBtn) {
-    // Diagnostic: list all toolbar buttons with aria-label so we can find the right one
-    const allBtns = [...document.querySelectorAll('button[aria-label]')]
+  const allBtnLabels = () =>
+    [...document.querySelectorAll('button[aria-label]')]
       .map(b => `"${b.getAttribute('aria-label')}"`)
-      .slice(0, 20);
-    reportChatError('チャットパネルボタンが見つかりません。ツールバーボタン: [' + allBtns.join(', ') + ']');
+      .slice(0, 20).join(', ');
+
+  if (!chatBtn) {
+    reportChatError('チャットパネルボタンが見つかりません。ツールバーボタン: [' + allBtnLabels() + ']');
     return;
   }
 
@@ -105,8 +106,13 @@ async function ensureChatPanelOpen() {
   const btnExpanded = chatBtn.getAttribute('aria-expanded');
   const btnPressed = chatBtn.getAttribute('aria-pressed');
 
+  // If matched button has no aria-label it's likely a wrong match – list all buttons
+  if (!btnLabel) {
+    reportChatError('チャットパネルボタンのaria-labelが空（誤マッチの可能性）。ツールバーボタン: [' + allBtnLabels() + ']');
+    return;
+  }
+
   // Only check aria-expanded (not aria-pressed) to detect panel state.
-  // aria-pressed can be true for keyboard navigation focus, not panel open state.
   const isExpanded = btnExpanded === 'true';
   reportChatError(`DEBUG ensureChatPanelOpen: btn="${btnLabel}" aria-expanded="${btnExpanded}" aria-pressed="${btnPressed}" isExpanded=${isExpanded}`);
 
