@@ -144,6 +144,36 @@ function findMessageInput() {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: React-compatible text insertion for Google Chat embedded component
+// ---------------------------------------------------------------------------
+function insertTextToReactInput(el, text) {
+  el.focus();
+
+  // Strategy 1: clipboard paste simulation (most reliable for React contenteditable)
+  try {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', text);
+    const pasted = el.dispatchEvent(
+      new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt })
+    );
+    // If the paste event was not cancelled and content changed, assume success
+    if (el.textContent.includes(text)) return true;
+  } catch (_) { /* ClipboardEvent not supported */ }
+
+  // Strategy 2: execCommand insertText (works in most browsers)
+  el.focus();
+  // Clear existing content first
+  document.execCommand('selectAll', false, null);
+  if (document.execCommand('insertText', false, text)) return true;
+
+  // Strategy 3: textContent + input/change events (last resort)
+  el.textContent = text;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Core: post translated text to the Meet chat
 // ---------------------------------------------------------------------------
 async function postToChat(text) {
@@ -155,12 +185,9 @@ async function postToChat(text) {
     return;
   }
 
-  // Fill the input
-  input.focus();
   const ce = input.getAttribute('contenteditable');
   if (ce === 'true' || ce === 'plaintext-only') {
-    document.execCommand('selectAll', false, null);
-    document.execCommand('insertText', false, text);
+    insertTextToReactInput(input, text);
   } else if (input.tagName === 'TEXTAREA') {
     const nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
     nativeSetter.call(input, text);
@@ -173,12 +200,12 @@ async function postToChat(text) {
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  // Wait for the UI to process the input event
-  await new Promise((r) => setTimeout(r, 150));
+  // Wait for React to process the input and enable the send button
+  await new Promise((r) => setTimeout(r, 200));
 
-  // Send: click the send button or press Enter
+  // Send: click the send button, or press Enter as fallback
   const sendBtn = document.querySelector(SEL.sendButton) ||
-    deepQueryAll(SEL.sendButton).find(isVisible);
+    deepQueryAll(SEL.sendButton).find(b => !b.disabled);
   if (sendBtn && !sendBtn.disabled) {
     sendBtn.click();
   } else {
