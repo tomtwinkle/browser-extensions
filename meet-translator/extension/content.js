@@ -113,6 +113,9 @@ function findMessageInput() {
   // Fast path: CSS selectors
   for (const el of document.querySelectorAll(SEL.messageInput)) {
     if (isElementVisible(el)) return el;
+    console.debug('[Meet Translator] findMessageInput: CSS candidate hidden –',
+      el.tagName, el.jsname || '', el.getAttribute('aria-label') || '',
+      'rect:', JSON.stringify(el.getBoundingClientRect()));
   }
 
   // Fallback: search inside Google Chat's d-view panel component
@@ -130,7 +133,21 @@ function findMessageInput() {
   // all Google Chat message inputs regardless of UI mode or aria-label)
   for (const el of document.querySelectorAll('div[g_editable="true"][contenteditable]')) {
     if (isElementVisible(el)) return el;
+    console.debug('[Meet Translator] findMessageInput: g_editable candidate hidden –',
+      el.getAttribute('aria-label') || '', 'rect:', JSON.stringify(el.getBoundingClientRect()));
   }
+
+  // Nothing found – log all contenteditable candidates for debugging
+  const all = document.querySelectorAll('[contenteditable]:not([contenteditable="false"])');
+  console.warn('[Meet Translator] findMessageInput: no input found.',
+    `Scanned ${all.length} contenteditable element(s):`,
+    [...all].map(e => `[${e.hidden ? 'hidden' : 'visible'}] <${e.tagName.toLowerCase()}`
+      + (e.getAttribute('jsname') ? ` jsname="${e.getAttribute('jsname')}"` : '')
+      + (e.getAttribute('aria-label') ? ` aria-label="${e.getAttribute('aria-label')}"` : '')
+      + (e.getAttribute('g_editable') ? ` g_editable="${e.getAttribute('g_editable')}"` : '')
+      + ` rect=${JSON.stringify(e.getBoundingClientRect())}>`
+    ).join(', ')
+  );
 
   return null;
 }
