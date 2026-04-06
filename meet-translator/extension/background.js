@@ -37,7 +37,7 @@ const state = {
 /** Load settings from chrome.storage.local with defaults. */
 async function getSettings() {
   const defaults = {
-    serverUrl:     'http://localhost:7070',
+    serverUrl:     'http://localhost:17070',
     sourceLang:    '',
     targetLang:    'ja',
     whisperModel:  'base',
