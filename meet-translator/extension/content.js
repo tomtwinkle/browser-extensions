@@ -102,20 +102,24 @@ function isElementVisible(el) {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: find the message input element
+// Helper: detect embedded Google Chat mode
 //
-// Strategy:
-//   1. Try CSS selectors (fast path).  Filter out hidden results.
-//   2. Fallback: walk d-view subtrees and pick the first visible
-//      div[contenteditable] that is NOT a search/history-header element.
+// When Meet uses the embedded Google Chat ("履歴がオンになっています" / "History is on"),
+// the chat UI is loaded in a cross-origin iframe from chat.google.com.
+// The content script cannot reach it from the meet.google.com frame –
+// instead, the content script running INSIDE that iframe handles posting.
+// ---------------------------------------------------------------------------
+function isEmbeddedChatMode() {
+  return !!document.querySelector('iframe[src*="chat.google.com"]');
+}
+
+// ---------------------------------------------------------------------------
+// Helper: find the message input in the CURRENT document
 // ---------------------------------------------------------------------------
 function findMessageInput() {
   // Fast path: CSS selectors
   for (const el of document.querySelectorAll(SEL.messageInput)) {
     if (isElementVisible(el)) return el;
-    console.debug('[Meet Translator] findMessageInput: CSS candidate hidden –',
-      el.tagName, el.jsname || '', el.getAttribute('aria-label') || '',
-      'rect:', JSON.stringify(el.getBoundingClientRect()));
   }
 
   // Fallback: search inside Google Chat's d-view panel component
@@ -129,25 +133,10 @@ function findMessageInput() {
     }
   }
 
-  // Last resort: any visible Google Chat editable div (g_editable is set on
-  // all Google Chat message inputs regardless of UI mode or aria-label)
+  // Last resort: any visible Google Chat editable div
   for (const el of document.querySelectorAll('div[g_editable="true"][contenteditable]')) {
     if (isElementVisible(el)) return el;
-    console.debug('[Meet Translator] findMessageInput: g_editable candidate hidden –',
-      el.getAttribute('aria-label') || '', 'rect:', JSON.stringify(el.getBoundingClientRect()));
   }
-
-  // Nothing found – log all contenteditable candidates for debugging
-  const all = document.querySelectorAll('[contenteditable]:not([contenteditable="false"])');
-  console.warn('[Meet Translator] findMessageInput: no input found.',
-    `Scanned ${all.length} contenteditable element(s):`,
-    [...all].map(e => `[${e.hidden ? 'hidden' : 'visible'}] <${e.tagName.toLowerCase()}`
-      + (e.getAttribute('jsname') ? ` jsname="${e.getAttribute('jsname')}"` : '')
-      + (e.getAttribute('aria-label') ? ` aria-label="${e.getAttribute('aria-label')}"` : '')
-      + (e.getAttribute('g_editable') ? ` g_editable="${e.getAttribute('g_editable')}"` : '')
-      + ` rect=${JSON.stringify(e.getBoundingClientRect())}>`
-    ).join(', ')
-  );
 
   return null;
 }
@@ -192,30 +181,6 @@ async function ensureChatPanelOpen() {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: wait for a DOM element to appear (used for generic selectors)
-// ---------------------------------------------------------------------------
-function waitForElement(selector, timeoutMs = 3000) {
-  return new Promise((resolve) => {
-    const existing = document.querySelector(selector);
-    if (existing) { resolve(existing); return; }
-
-    const observer = new MutationObserver(() => {
-      const el = document.querySelector(selector);
-      if (el) {
-        observer.disconnect();
-        resolve(el);
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-
-    setTimeout(() => {
-      observer.disconnect();
-      resolve(null);
-    }, timeoutMs);
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Core: post translated text to the Meet chat
 // ---------------------------------------------------------------------------
 async function postToChat(text) {
@@ -225,8 +190,7 @@ async function postToChat(text) {
   // 2. Locate the message input (handles both classic Meet and embedded Chat)
   const input = findMessageInput();
   if (!input) {
-    console.warn('[Meet Translator] チャット入力欄が見つかりませんでした。チャットパネルを開いてください。');
-    return;
+    throw new Error('チャット入力欄が見つかりませんでした。チャットパネルを開いてください。');
   }
 
   // 3. Focus and fill the input
@@ -235,12 +199,12 @@ async function postToChat(text) {
   // isContentEditable is true for both contenteditable="true" and contenteditable=""
   if (input.isContentEditable) {
     // contenteditable div (Google Meet classic / embedded Google Chat)
-    // execCommand('insertText') triggers React synthetic events correctly.
+    // execCommand('insertText') triggers both native and Closure Library events.
     input.focus();
     document.execCommand('selectAll', false, null);
     document.execCommand('insertText', false, text);
   } else {
-    // Plain <textarea>
+    // Plain <textarea> (Google Chat history-off pattern: jsname="YPqjbf")
     const nativeSetter = Object.getOwnPropertyDescriptor(
       HTMLTextAreaElement.prototype,
       'value'
@@ -257,7 +221,7 @@ async function postToChat(text) {
   if (sendBtn && !sendBtn.disabled) {
     sendBtn.click();
   } else {
-    // Fallback: simulate Enter key (also works in embedded Google Chat)
+    // Fallback: simulate Enter key (works in both classic Meet and embedded Google Chat)
     const opts = { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true };
     input.dispatchEvent(new KeyboardEvent('keydown', opts));
     input.dispatchEvent(new KeyboardEvent('keypress', opts));
@@ -270,7 +234,22 @@ async function postToChat(text) {
 // ---------------------------------------------------------------------------
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   switch (message.type) {
-    case 'POST_TRANSLATION':
+    case 'POST_TRANSLATION': {
+      // With all_frames:true, this script runs in both the meet.google.com
+      // main frame AND the chat.google.com iframe.
+      //
+      // Embedded Chat mode: the input lives in the chat.google.com iframe.
+      //   • meet.google.com frame  → isEmbeddedChatMode()=true, no input here
+      //                              → return false (let iframe handle it)
+      //   • chat.google.com iframe → location.hostname='chat.google.com'
+      //                              → handle it here
+      //
+      // Classic Meet mode: input is in the meet.google.com frame itself.
+      //   • isEmbeddedChatMode()=false → handle it here
+      if (location.hostname !== 'chat.google.com' && isEmbeddedChatMode()) {
+        // Embedded Chat mode and we're in the main Meet frame – delegate to iframe
+        return false;
+      }
       postToChat(message.text)
         .then(() => sendResponse({ success: true }))
         .catch((err) => {
@@ -278,6 +257,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           sendResponse({ success: false, error: err.message });
         });
       return true; // keep channel open for async response
+    }
 
     case 'TRANSLATION_STOPPED':
       console.log('[Meet Translator] 自動翻訳チャットを停止しました。');
