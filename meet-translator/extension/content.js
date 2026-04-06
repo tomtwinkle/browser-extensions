@@ -38,36 +38,44 @@ const SEL = {
     '[data-panel-id="2"]',
   ].join(', '),
 
-  // Message composition input – covers both UI modes.
+  // Message composition input – two patterns observed in 2025:
   //
-  // Mode B actual DOM (observed 2025):
+  // Pattern 1 – History OFF (textarea):
+  //   <textarea jsname="YPqjbf" aria-label="メッセージを送信" placeholder="メッセージを送信">
+  //
+  // Pattern 2 – History ON (contenteditable div):
   //   <div jsname="yrriRe" g_editable="true" contenteditable="true"
-  //        aria-label="履歴がオンになっています" role="textbox" …>
+  //        aria-label="履歴がオンになっています" role="textbox">
   //
-  // aria-label reflects the chat history setting, NOT a "send message" label.
-  // jsname="yrriRe" and g_editable="true" are the reliable identifiers.
+  // Note: in Pattern 2, aria-label reflects the history SETTING, not the
+  //       action ("send message"), so selectors like aria-label*="メッセージを送信"
+  //       do NOT match it.  jsname and g_editable are the reliable identifiers.
   messageInput: [
-    // Mode A – Classic Meet (stable internal attribute)
+    // Classic Meet (old UI, stable internal attribute)
     '[jsname="r4nke"]',
-    // Mode B – Embedded Google Chat (stable internal attribute, observed 2025)
+    // Pattern 1 – Google Chat history OFF / textarea (stable internal attribute)
+    '[jsname="YPqjbf"]',
+    // Pattern 2 – Google Chat history ON / contenteditable div (stable internal attribute)
     '[jsname="yrriRe"]',
-    // Mode B – Google Chat editable marker (g_editable is set on all GChat inputs)
+    // Pattern 2 – Google Chat editable marker (g_editable on all GChat message inputs)
     'div[g_editable="true"][contenteditable="true"]',
-    // Mode B – aria-label reflects history state (ja)
+    // Pattern 2 – aria-label reflects history state (ja)
     'div[contenteditable="true"][aria-label*="履歴がオンになっています"]',
     'div[contenteditable="true"][aria-label*="履歴がオフになっています"]',
-    // Mode B – aria-label reflects history state (en)
+    // Pattern 2 – aria-label reflects history state (en)
     'div[contenteditable="true"][aria-label*="History is on"]',
     'div[contenteditable="true"][aria-label*="History is off"]',
-    // Mode A – Classic Meet with message aria-label (en / ja)
+    // Classic Meet / generic contenteditable with message aria-label (en / ja)
     'div[contenteditable="true"][aria-label*="message"]',
     'div[contenteditable="true"][aria-label*="メッセージ"]',
-    // Mode B – send-message aria-label variants (ja / en)
+    // Embedded Google Chat – send-message aria-label variants (ja / en)
     'div[contenteditable][aria-label*="メッセージを送信"]',
     'div[contenteditable][aria-label*="全員にメッセージ"]',
     'div[contenteditable][aria-label*="Send a message"]',
     'div[contenteditable][aria-label*="Message everyone"]',
-    // Mode A – Plain textarea fallback
+    // Pattern 1 – textarea with send-message aria-label (ja / en)
+    'textarea[aria-label*="メッセージを送信"]',
+    'textarea[aria-label*="Send a message"]',
     'textarea[aria-label*="message"]',
     'textarea[aria-label*="メッセージ"]',
   ].join(', '),
