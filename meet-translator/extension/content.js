@@ -44,12 +44,15 @@ const SEL = {
   ].join(', '),
 
   // The contenteditable div / textarea used for message composition.
-  // In the current Meet UI (2025+), the input is role="textbox" contenteditable.
+  // Google Meet 2025+ may use contenteditable="plaintext-only" instead of "true".
   messageInput: [
-    '[role="textbox"][contenteditable="true"]',  // new Meet UI (primary)
+    '[role="textbox"][contenteditable="true"]',
+    '[role="textbox"][contenteditable="plaintext-only"]',
     '[jsname="r4nke"]',                          // older Meet UI
     'div[contenteditable="true"][aria-label*="message" i]',
+    'div[contenteditable="plaintext-only"][aria-label*="message" i]',
     'div[contenteditable="true"][aria-label*="メッセージ" i]',
+    'div[contenteditable="plaintext-only"][aria-label*="メッセージ" i]',
     'div[contenteditable="true"][aria-label*="chat" i]',
     'div[contenteditable="true"][aria-label*="チャット" i]',
     'textarea[aria-label*="message" i]',
@@ -70,7 +73,20 @@ const SEL = {
 
 // ---------------------------------------------------------------------------
 // Helper: deep querySelectorAll that pierces shadow DOMs and same-origin iframes
+// Supports both open shadow roots (el.shadowRoot) and closed shadow roots
+// via chrome.dom.openOrClosedShadowRoot (available in MV3 content scripts).
 // ---------------------------------------------------------------------------
+function getShadowRoot(el) {
+  if (el.shadowRoot) return el.shadowRoot;
+  try {
+    // chrome.dom.openOrClosedShadowRoot pierces closed shadow roots
+    if (typeof chrome !== 'undefined' && chrome.dom && chrome.dom.openOrClosedShadowRoot) {
+      return chrome.dom.openOrClosedShadowRoot(el);
+    }
+  } catch (_) { /* not available */ }
+  return null;
+}
+
 function deepQueryAll(selector, root = document) {
   const results = [];
   const seen = new WeakSet();
@@ -80,7 +96,8 @@ function deepQueryAll(selector, root = document) {
     try {
       results.push(...node.querySelectorAll(selector));
       node.querySelectorAll('*').forEach(el => {
-        if (el.shadowRoot) search(el.shadowRoot);
+        const shadow = getShadowRoot(el);
+        if (shadow) search(shadow);
       });
       node.querySelectorAll('iframe').forEach(frame => {
         try { if (frame.contentDocument) search(frame.contentDocument); }
@@ -184,7 +201,19 @@ async function postToChat(text) {
 
   const INPUT_SEL = [
     SEL.messageInput,
+    // Also catch contenteditable="plaintext-only" without role or aria-label
+    '[contenteditable="plaintext-only"]',
+    // Broad contenteditable (exclude explicitly non-editable)
+    '[contenteditable]:not([contenteditable="false"])',
     'input[type="text"]',
+    'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])',
+  ].join(', ');
+
+  // Selector for broad diagnostics (all input-like elements including hidden)
+  const DIAG_SEL = [
+    '[role="textbox"]',
+    '[contenteditable]:not([contenteditable="false"])',
+    'textarea',
     'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])',
   ].join(', ');
 
@@ -201,21 +230,32 @@ async function postToChat(text) {
 
   // 4. Deep fallback: pierce shadow DOM and same-origin iframes
   if (!input) {
-    const found = deepQueryAll(INPUT_SEL).filter(isVisible);
-    if (found.length > 0) {
-      input = found[0];
+    const chatSearchPlaceholders = ['chat を検索', 'search chat', 'search people'];
+    const found = deepQueryAll(INPUT_SEL).filter(el => {
+      // Exclude the chat search box
+      const ph = (el.getAttribute('placeholder') || '').toLowerCase();
+      const lb = (el.getAttribute('aria-label') || '').toLowerCase();
+      return !chatSearchPlaceholders.some(s => ph.includes(s) || lb.includes(s));
+    });
+    // Prefer visible, fall back to any
+    const visible = found.filter(isVisible);
+    const candidate = visible[0] || found[0];
+    if (candidate) {
+      input = candidate;
       console.info('[Meet Translator] Found input via deep search:', input.tagName,
-        input.getAttribute('aria-label'), input.getAttribute('role'));
+        input.getAttribute('aria-label'), input.getAttribute('role'),
+        'contenteditable=' + input.getAttribute('contenteditable'));
     }
   }
 
   if (!input) {
     // Diagnostic: check ALL input-like elements (visible and hidden) via deep search
-    const ALL = '[role="textbox"], [contenteditable="true"], textarea, input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])';
-    const allFound = deepQueryAll(ALL).map(el => {
+    // Exclude the chat search box (placeholder "Chat を検索") from count
+    const allFound = deepQueryAll(DIAG_SEL).map(el => {
       const vis = isVisible(el) ? 'VISIBLE' : 'hidden';
+      const ce = el.getAttribute('contenteditable') || '';
       return `[${vis}] <${el.tagName.toLowerCase()} role="${el.getAttribute('role')||''}" ` +
-        `contenteditable="${el.contentEditable}" aria-label="${el.getAttribute('aria-label')||''}" ` +
+        `contenteditable="${ce}" aria-label="${el.getAttribute('aria-label')||''}" ` +
         `type="${el.getAttribute('type')||''}" placeholder="${el.getAttribute('placeholder')||''}" ` +
         `jsname="${el.getAttribute('jsname')||''}">`;
     });
@@ -229,8 +269,9 @@ async function postToChat(text) {
   // 5. Focus and fill the input
   input.focus();
 
-  if (input.contentEditable === 'true') {
-    // contenteditable div (Google Meet / React)
+  const ce = input.getAttribute('contenteditable');
+  if (ce === 'true' || ce === 'plaintext-only') {
+    // contenteditable div / React rich text editor
     input.focus();
     document.execCommand('selectAll', false, null);
     document.execCommand('insertText', false, text);
