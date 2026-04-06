@@ -13,6 +13,14 @@
 //   - 速度スコア: 1 / (1 + latency_ms/300)  ← 300ms を基準値とする
 //   - 総合スコア: quality×0.6 + speed×0.4
 //
+// # macOS Apple M1 Max 計測結果 (GPU Metal, Q4_K_M, 2026-04)
+//
+//	Rank  Model                    Quality  Latency  Combined
+//	   1  qwen3.5:0.8b-q4_k_m      0.636    230ms    0.608
+//	   2  qwen3:4b-q4_k_m          0.814    730ms    0.605
+//	   3  qwen3:8b-q4_k_m          0.833   1360ms    0.572
+//	   4  gemma4:e4b-q4_k_m        0.256  11707ms    0.163  ← 翻訳タスク不適
+//
 // ベンチマークの実行方法:
 //
 //	./server --llama-model <model> &
@@ -61,20 +69,23 @@ type modelTier struct {
 
 // gpuTiers は GPU あり (Metal / CUDA) 時のモデル選択テーブル。
 // 品質を優先し、GPU による高速推論を前提とした大きめのモデルを選ぶ。
+// ベンチマーク結果: qwen3:4b(combined=0.605) > qwen3:8b(0.572) > qwen3.5:0.8b(speed=0.608)
+// gemma4:e4b は翻訳品質が低い(0.256)ため除外。
 var gpuTiers = []modelTier{
-	{64, "large-v3-turbo", "calm3:22b-q4_k_m"},
-	{32, "medium", "calm3:22b-q4_k_m"},
-	{4, "small", "bonsai-8b"}, // ~1.15GB VRAM, 8B quality
-	{0, "tiny", "bonsai-8b"},  // <4GB: bonsai-8b is smaller than gemma4:e2b (1.3GB)
+	{64, "large-v3-turbo", "calm3:22b-q4_k_m"},      // 22B 高品質 (日本語特化)
+	{32, "medium", "calm3:22b-q4_k_m"},               // 同上
+	{8, "small", "qwen3:8b-q4_k_m"},                  // 品質最高 (0.833, ~5GB VRAM)
+	{4, "small", "qwen3:4b-q4_k_m"},                  // 総合最良 (0.605, ~2.5GB VRAM)
+	{0, "base", "qwen3.5:0.8b-q4_k_m"},               // 速度優先 (0.608, ~0.5GB VRAM)
 }
 
 // cpuTiers は CPU のみのモデル選択テーブル。
 // 推論速度を優先し、リアルタイム翻訳が成立する範囲で最大品質を選ぶ。
+// CPU では qwen3.5:0.8b が唯一許容できる速度で動作する。
 var cpuTiers = []modelTier{
-	{16, "small", "bonsai-8b"}, // ~1.15GB RAM, 8B quality
-	{8, "base", "bonsai-8b"},
-	{4, "base", "bonsai-8b"},         // was gemma4:e4b (2.6GB); bonsai-8b fits in 4GB RAM
-	{0, "tiny", "gemma4:e2b-q4_k_m"}, // <4GB RAM: 軽量フォールバック
+	{8, "base", "qwen3.5:0.8b-q4_k_m"},  // 速度優先 (0.608), CPU でも実用的
+	{4, "base", "qwen3.5:0.8b-q4_k_m"},  // 同上 (~0.5GB RAM)
+	{0, "tiny", "bonsai-8b"},             // <4GB RAM: 超圧縮フォールバック (~1.15GB)
 }
 
 // AutoSelectModels は SystemInfo に基づいて最適な whisper / llama モデル名を返す。
@@ -90,7 +101,7 @@ func AutoSelectModels(info SystemInfo) (whisper, llama string) {
 		}
 	}
 	// 最小フォールバック (通常は到達しない)
-	return "tiny", "gemma4:e2b-q4_k_m"
+	return "tiny", "bonsai-8b"
 }
 
 // applyAutoConfig は config ファイルが存在せず、かつ whisper/llama モデルが未指定の場合に

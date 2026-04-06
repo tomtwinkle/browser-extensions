@@ -138,10 +138,11 @@ make
 |---|---|---|
 | ≥ 64 GB | `large-v3-turbo` | `calm3:22b-q4_k_m` |
 | ≥ 32 GB | `medium` | `calm3:22b-q4_k_m` |
-| ≥  4 GB | `small` | `bonsai-8b` |
-| < 4 GB  | `tiny` | `bonsai-8b` |
+| ≥  8 GB | `small` | `qwen3:8b-q4_k_m` (品質最高: 0.833) |
+| ≥  4 GB | `small` | `qwen3:4b-q4_k_m` (総合最良: combined 0.605) |
+| < 4 GB  | `base`  | `qwen3.5:0.8b-q4_k_m` (速度優先: combined 0.608) |
 
-CPU のみの場合は `bonsai-8b`（4 GB以上）/ `gemma4:e2b-q4_k_m`（4 GB未満）を選択します。
+CPU のみの場合は `qwen3.5:0.8b-q4_k_m`（4 GB以上）/ `bonsai-8b`（4 GB未満）を選択します。
 
 ### モデルを手動指定する場合
 
@@ -371,23 +372,24 @@ go run ./cmd/benchmark/ --compare results/
 --verbose       各テストケースの入出力を詳細表示
 ```
 
-### 比較出力例
+### 比較出力例 (macOS Apple M1 Max, GPU Metal, 2026-04)
 
 ```
 === Benchmark Comparison (4 models) ===
 
-Rank Model                         Quality   Latency     Score
+Rank Model                          Quality   Latency     Score
 ────────────────────────────────────────────────────────────────────
-   1 calm3:22b-q4_k_m              0.851     890ms     0.643
-   2 qwen3:8b-q4_k_m               0.823     312ms     0.766
-   3 bonsai-8b                     0.800     238ms     0.768
-   4 qwen3:4b-q4_k_m               0.791     198ms     0.763
+   1 qwen3.5:0.8b-q4_k_m              0.636     230ms     0.608
+   2 qwen3:4b-q4_k_m                  0.814     730ms     0.605
+   3 qwen3:8b-q4_k_m                  0.833    1360ms     0.572
+   4 gemma4:e4b-q4_k_m                0.256   11707ms     0.163
 
 Score = quality×0.6 + speed×0.4  (speed = 1/(1 + latency/300ms))
 ```
 
-> **Note**: 上記はサンプル値です。実際の数値は実行環境・GPU の有無によって異なります。
-> 結果を `results/` に保存してコミットすることでチームで共有できます。
+> **Note**: `gemma4:e4b` は EN↔JA 翻訳タスクにおいて品質スコアが低く (0.256)、
+> 翻訳用途には推奨しません。autoconfig は `qwen3` 系を優先します。
+> 実際の数値は実行環境・GPU の有無によって異なります。
 
 ---
 
