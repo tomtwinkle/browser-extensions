@@ -175,30 +175,28 @@ async function ensureChatPanelOpen() {
 
 // Find and click the "everyone in this call" conversation item in the chat list.
 async function openGroupChatConversation() {
-  // Keywords that identify the group/meeting chat entry
-  const groupKeywords = ['全員', 'everyone', 'group', 'meeting', 'call', '通話'];
+  // Only search within the chat panel (not the whole page) to avoid toolbar buttons
+  const panelRoot = deepQueryAll(SEL.chatPanelContainer)[0] ||
+    deepQueryAll('[aria-label*="チャット"], [aria-label*="chat" i], [aria-label*="メッセージ"]').find(isVisible);
 
-  // Candidate selectors for conversation list items / buttons
+  if (!panelRoot) {
+    reportChatError('DEBUG openGroupChatConversation: chat panel container not found');
+    return;
+  }
+
+  // Only '全員' and 'everyone' – avoid broad keywords like 'call' that match toolbar buttons
+  const groupKeywords = ['全員', 'everyone'];
+
   const CONV_SEL = [
-    '[role="listitem"]',
-    '[role="option"]',
-    '[role="row"]',
-    'li',
-    'button',
-    '[data-room-type]',
-    '[data-conversation-id]',
-    '[data-group-id]',
+    '[role="listitem"]', '[role="option"]', '[role="row"]', '[role="treeitem"]', 'li',
+    '[data-room-type]', '[data-conversation-id]', '[data-group-id]',
   ].join(', ');
 
-  const allItems = deepQueryAll(CONV_SEL).filter(isVisible);
+  const allItems = [...panelRoot.querySelectorAll(CONV_SEL)].filter(isVisible);
   const groupItem = allItems.find(el => {
     const label = (el.getAttribute('aria-label') || '').toLowerCase();
-    const text = (el.textContent || '').trim().toLowerCase().slice(0, 80);
-    // Exclude the search input itself
-    if (el.tagName === 'INPUT') return false;
-    // Exclude the toolbar buttons we already know about
-    if (el === document.querySelector(SEL.chatPanelButton)) return false;
-    return groupKeywords.some(kw => label.includes(kw) || text.includes(kw));
+    const text = (el.textContent || '').trim().toLowerCase().slice(0, 60);
+    return groupKeywords.some(kw => label.includes(kw) || text.startsWith(kw));
   });
 
   if (groupItem) {
@@ -206,11 +204,11 @@ async function openGroupChatConversation() {
     groupItem.click();
     await waitForElement(SEL.messageInput, 3000);
   } else {
-    // Diagnostic: list visible items in the chat panel to find the right selector
+    // Diagnostic: list visible items in the panel for selector identification
     const panelItems = allItems.slice(0, 15).map(el =>
       `<${el.tagName.toLowerCase()} role="${el.getAttribute('role')||''}" aria-label="${el.getAttribute('aria-label')||''}" text="${(el.textContent||'').trim().slice(0,30)}">`
     );
-    reportChatError('DEBUG openGroupChatConversation: no group item found. panel items: ' + panelItems.join(' | '));
+    reportChatError('DEBUG openGroupChatConversation: no group item. panel items: ' + (panelItems.join(' | ') || 'none'));
   }
 }
 
@@ -276,14 +274,16 @@ async function postToChat(text) {
 
   // 4. Deep fallback: pierce shadow DOM and same-origin iframes
   if (!input) {
-    const chatSearchPlaceholders = ['chat を検索', 'search chat', 'search people'];
-    const found = deepQueryAll(INPUT_SEL).filter(el => {
-      // Exclude the chat search box
+    const isSearchInput = (el) => {
       const ph = (el.getAttribute('placeholder') || '').toLowerCase();
       const lb = (el.getAttribute('aria-label') || '').toLowerCase();
-      return !chatSearchPlaceholders.some(s => ph.includes(s) || lb.includes(s));
-    });
-    // Prefer visible, fall back to any
+      const ty = (el.getAttribute('type') || '').toLowerCase();
+      // Exclude any search-style input
+      return ty === 'search' || ph.includes('検索') || ph.includes('search') ||
+             lb.includes('検索') || lb.includes('search');
+    };
+    const found = deepQueryAll(INPUT_SEL).filter(el => !isSearchInput(el));
+    // Prefer visible, fall back to any non-search input
     const visible = found.filter(isVisible);
     const candidate = visible[0] || found[0];
     if (candidate) {
