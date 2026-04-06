@@ -13,6 +13,7 @@
   ],
   "host_permissions": [
     "https://meet.google.com/*",
+    "https://chat.google.com/*",
     "http://localhost:17070/*"
   ],
   "background": {
@@ -31,9 +32,13 @@
   "options_page": "options.html",
   "content_scripts": [
     {
-      "matches": ["https://meet.google.com/*"],
+      "matches": [
+        "https://meet.google.com/*",
+        "https://chat.google.com/*"
+      ],
       "js": ["content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "icons": {

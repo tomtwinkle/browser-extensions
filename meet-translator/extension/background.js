@@ -157,7 +157,7 @@ async function sendToContentScript(tabId, message) {
     // content.js が未注入 → 動的注入してリトライ
     console.info('[background] content.js not found, injecting into tab', tabId);
     try {
-      await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+      await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['content.js'] });
       return await chrome.tabs.sendMessage(tabId, message);
     } catch (injectErr) {
       console.warn('[background] content script injection failed:', injectErr.message);
