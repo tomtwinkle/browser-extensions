@@ -109,12 +109,28 @@ function enqueueChat(fn) {
 // ---------------------------------------------------------------------------
 // Helper: find the visible message input (returns null if panel is closed)
 // ---------------------------------------------------------------------------
-function findMessageInput() {
-  // Fast path: specific selectors
-  const quick = document.querySelector(SEL.messageInput);
-  if (quick && isVisible(quick) && !isSearchInput(quick)) return quick;
 
-  // Deep search: shadow DOM + iframes
+// XPath to the Google Meet/Chat message input div (2025+ embedded UI).
+// Derived from DevTools inspection; update if Meet changes its structure.
+const CHAT_INPUT_XPATH = '/html/body/c-wiz[1]/div/div/div/div/div[1]/div[2]/div/div[4]/div/d-view/div/div/div[7]/div[4]/div/c-wiz/div[4]/div[2]/div[4]/div/div[2]/div/div[2]/div';
+
+function findMessageInput() {
+  // 1. XPath – most specific, targets the exact Google Chat input div
+  try {
+    const xpResult = document.evaluate(
+      CHAT_INPUT_XPATH, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null
+    );
+    const xpEl = xpResult.singleNodeValue;
+    if (xpEl && !isSearchInput(xpEl)) return xpEl;
+  } catch (_) { /* XPath not found */ }
+
+  // 2. CSS fast path: specific selectors
+  const quick = document.querySelector(SEL.messageInput);
+  if (quick && !isSearchInput(quick)) return quick;
+
+  // 3. Deep search: shadow DOM + iframes
+  //    Prefer visible elements but fall back to any non-search input
+  //    (empty contenteditable divs may have 0 height → isVisible returns false)
   const BROAD = [
     SEL.messageInput,
     '[contenteditable="plaintext-only"]',
@@ -122,9 +138,9 @@ function findMessageInput() {
     'input[type="text"]',
   ].join(', ');
 
-  const found = deepQueryAll(BROAD)
-    .filter(el => isVisible(el) && !isSearchInput(el));
-  return found[0] || null;
+  const all = deepQueryAll(BROAD).filter(el => !isSearchInput(el));
+  const visible = all.filter(isVisible);
+  return visible[0] || all[0] || null;
 }
 
 // ---------------------------------------------------------------------------
