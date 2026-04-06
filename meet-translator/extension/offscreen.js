@@ -216,9 +216,13 @@ function startAudioProcessing(tabStream, micMediaStream) {
     mediaStream = tabStream;
     sourceNode = audioContext.createMediaStreamSource(tabStream);
     sourceNode.connect(processorNode);
+    // Tab capture mutes the original tab audio; route it back to the speakers
+    // so the user can still hear the other participants.
+    sourceNode.connect(audioContext.destination);
   }
 
-  // Microphone source – mixed into the same processor node (signals are summed)
+  // Microphone source – mixed into the same processor node (signals are summed).
+  // Mic is NOT routed to destination to avoid feedback.
   if (micMediaStream) {
     micStream = micMediaStream;
     micSourceNode = audioContext.createMediaStreamSource(micMediaStream);
@@ -226,7 +230,7 @@ function startAudioProcessing(tabStream, micMediaStream) {
     bgLog('info', 'microphone source connected');
   }
 
-  // Connect to destination so the graph stays alive
+  // Keep the processor node alive in the graph (its output is silence, used for VAD only)
   processorNode.connect(audioContext.destination);
 }
 
