@@ -23,21 +23,27 @@
 // ---------------------------------------------------------------------------
 const SEL = {
   // Toolbar button that opens the in-call chat panel.
-  // aria-label contains 「チャット」 (ja) or "Chat with everyone" (en).
   chatPanelButton: [
     'button[aria-label*="Chat with everyone"]',
     'button[aria-label*="チャット"]',
+    'button[aria-label*="In-call messages"]',
+    'button[aria-label*="通話内のメッセージ"]',
+    'button[aria-label*="messages" i]',
     '[data-panel-id="2"]',
   ].join(', '),
 
-  // The contenteditable div used for message composition.
-  // jsname="r4nke" is stable across many Meet versions.
+  // The contenteditable div / textarea used for message composition.
+  // jsname="r4nke" was stable across many older Meet versions.
   messageInput: [
     '[jsname="r4nke"]',
-    'div[contenteditable="true"][aria-label*="message"]',
-    'div[contenteditable="true"][aria-label*="メッセージ"]',
-    'textarea[aria-label*="message"]',
-    'textarea[aria-label*="メッセージ"]',
+    'div[contenteditable="true"][aria-label*="message" i]',
+    'div[contenteditable="true"][aria-label*="メッセージ" i]',
+    'div[contenteditable="true"][aria-label*="chat" i]',
+    'div[contenteditable="true"][aria-label*="チャット" i]',
+    'textarea[aria-label*="message" i]',
+    'textarea[aria-label*="メッセージ" i]',
+    'textarea[placeholder*="message" i]',
+    'textarea[placeholder*="メッセージ" i]',
   ].join(', '),
 
   // Send button adjacent to the message input.
@@ -45,8 +51,26 @@ const SEL = {
     'button[jsname="c6xSqd"]',
     'button[aria-label*="Send message"]',
     'button[aria-label*="メッセージを送信"]',
+    'button[aria-label*="Send" i]',
+    'button[aria-label*="送信" i]',
   ].join(', '),
 };
+
+// ---------------------------------------------------------------------------
+// Serialization queue – prevent concurrent postToChat calls from racing
+// ---------------------------------------------------------------------------
+let _chatQueue = Promise.resolve();
+function enqueueChat(fn) {
+  _chatQueue = _chatQueue.then(fn).catch(() => {});
+  return _chatQueue;
+}
+
+// ---------------------------------------------------------------------------
+// Helper: report error back to background service worker
+// ---------------------------------------------------------------------------
+function reportChatError(msg) {
+  chrome.runtime.sendMessage({ type: 'CHAT_ERROR', error: msg }).catch(() => {});
+}
 
 // ---------------------------------------------------------------------------
 // Helper: ensure the chat panel is visible
@@ -56,9 +80,18 @@ async function ensureChatPanelOpen() {
   if (document.querySelector(SEL.messageInput)) return;
 
   const chatBtn = document.querySelector(SEL.chatPanelButton);
-  if (chatBtn) {
+  if (!chatBtn) {
+    reportChatError('チャットパネルボタンが見つかりません: ' + SEL.chatPanelButton);
+    return;
+  }
+
+  // Check whether the panel is already open to avoid accidentally toggling it closed.
+  // Google Meet uses aria-expanded or aria-pressed on toolbar buttons.
+  const isExpanded =
+    chatBtn.getAttribute('aria-expanded') === 'true' ||
+    chatBtn.getAttribute('aria-pressed') === 'true';
+  if (!isExpanded) {
     chatBtn.click();
-    // Wait for the panel to render
     await waitForElement(SEL.messageInput, 3000);
   }
 }
@@ -97,7 +130,9 @@ async function postToChat(text) {
   // 2. Locate the message input
   const input = document.querySelector(SEL.messageInput);
   if (!input) {
-    console.warn('[Meet Translator] チャット入力欄が見つかりませんでした。チャットパネルを開いてください。');
+    const msg = 'チャット入力欄が見つかりません。チャットパネルを開いてください。セレクタ: ' + SEL.messageInput;
+    console.warn('[Meet Translator]', msg);
+    reportChatError(msg);
     return;
   }
 
@@ -106,19 +141,19 @@ async function postToChat(text) {
 
   if (input.contentEditable === 'true') {
     // contenteditable div (Google Meet / React)
-    // execCommand('insertText') は \n を <br> として扱い、
-    // React のイベントデリゲーションも正しく発火する。
+    // execCommand('insertText') fires React's synthetic input event.
     input.focus();
     document.execCommand('selectAll', false, null);
     document.execCommand('insertText', false, text);
   } else {
-    // Plain <textarea>
+    // Plain <textarea> – use native value setter to bypass React batching
     const nativeSetter = Object.getOwnPropertyDescriptor(
       HTMLTextAreaElement.prototype,
       'value'
     ).set;
     nativeSetter.call(input, text);
     input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   // 4. Small delay so the UI can process the input event
@@ -143,12 +178,15 @@ async function postToChat(text) {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   switch (message.type) {
     case 'POST_TRANSLATION':
-      postToChat(message.text)
-        .then(() => sendResponse({ success: true }))
-        .catch((err) => {
-          console.error('[Meet Translator] チャット投稿エラー:', err);
-          sendResponse({ success: false, error: err.message });
-        });
+      // Serialize via queue to prevent concurrent DOM manipulation
+      enqueueChat(() =>
+        postToChat(message.text)
+          .then(() => sendResponse({ success: true }))
+          .catch((err) => {
+            reportChatError(err.message);
+            sendResponse({ success: false, error: err.message });
+          })
+      );
       return true; // keep channel open for async response
 
     case 'TRANSLATION_STOPPED':

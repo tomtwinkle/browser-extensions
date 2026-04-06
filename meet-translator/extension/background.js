@@ -356,10 +356,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
           console.info('[background] transcription:', transcription.slice(0, 100));
           if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'translation') {
-            await sendToContentScript(tabId, {
+            const res = await sendToContentScript(tabId, {
               type: 'POST_TRANSLATION',
               text: `[${langLabel(cfg.sourceLang)}]\n${transcription}`,
             });
+            if (res && !res.success) console.warn('[background] chat post failed (transcription):', res.error);
           }
 
           // Step 2: LLM 翻訳 → チャット投稿
@@ -369,10 +370,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
           console.info('[background] translation:', translation.slice(0, 100));
           if (tabId && cfg.chatEnabled) {
-            await sendToContentScript(tabId, {
+            const res = await sendToContentScript(tabId, {
               type: 'POST_TRANSLATION',
               text: `[${langLabel(cfg.targetLang)}]\n${translation}`,
             });
+            if (res && !res.success) console.warn('[background] chat post failed (translation):', res.error);
           }
         } catch (err) {
           console.error('[background] audio processing error:', err);
@@ -382,6 +384,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
 
     default:
+      // content.js から報告されるチャット投稿エラー
+      if (message.type === 'CHAT_ERROR') {
+        console.warn('[background] chat error from content.js:', message.error);
+        return false;
+      }
       return false;
   }
 });
