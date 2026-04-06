@@ -176,10 +176,13 @@ jobs:
 
       # ── モデルキャッシュ ──────────────────────────────────────────────────
       # キーにモデル名を固定する。モデル URL が変わった場合は v番号を上げる。
+      # restore のみ行い、post-step での再保存を避ける。
+      # (actions/cache の post-step は exact hit 時も保存を試みて Windows で失敗するため)
       - name: Set model cache path
         run: echo "MODEL_CACHE_DIR=$GITHUB_WORKSPACE/model-cache" >> $GITHUB_ENV
 
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: model-cache
         with:
           path: ${{ github.workspace }}/model-cache
           key: models-v1-${{ runner.os }}-${{ runner.arch }}-whisper-${{ matrix.whisper_model }}-${{ matrix.llama_model }}
@@ -230,6 +233,14 @@ jobs:
             curl -L --retry 3 --retry-delay 5 --progress-bar -o "$DEST" "$URL"
             echo "Download complete: $(du -sh "$DEST" | cut -f1)"
           fi
+
+      # キャッシュミス時のみ保存する（exact hit 時は再保存をスキップして Windows エラーを防ぐ）
+      - name: Save model cache
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ github.workspace }}/model-cache
+          key: models-v1-${{ runner.os }}-${{ runner.arch }}-whisper-${{ matrix.whisper_model }}-${{ matrix.llama_model }}
 
       # ── サーバーを起動 ────────────────────────────────────────────────────
       # モデルは事前ダウンロード済みのためキャッシュを使用。
