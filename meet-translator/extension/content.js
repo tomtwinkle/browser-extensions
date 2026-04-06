@@ -165,50 +165,19 @@ async function ensureChatPanelOpen() {
     await waitForElement(SEL.messageInput, 2000);
   }
 
-  // In the new Meet UI, clicking the chat panel button opens a chat LIST view
-  // (with a "Chat を検索…" search box) rather than directly opening the message input.
-  // We need to find and click the "group chat with everyone in this call" item.
+  // Diagnostic: report the chat panel structure to identify the message input selector.
+  // Auto-navigation is disabled to prevent accidental clicks on destructive buttons.
   if (!document.querySelector(SEL.messageInput) && !deepQueryAll(SEL.messageInput)[0]) {
-    await openGroupChatConversation();
-  }
-}
-
-// Find and click the "everyone in this call" conversation item in the chat list.
-async function openGroupChatConversation() {
-  // Only search within the chat panel (not the whole page) to avoid toolbar buttons
-  const panelRoot = deepQueryAll(SEL.chatPanelContainer)[0] ||
-    deepQueryAll('[aria-label*="チャット"], [aria-label*="chat" i], [aria-label*="メッセージ"]').find(isVisible);
-
-  if (!panelRoot) {
-    reportChatError('DEBUG openGroupChatConversation: chat panel container not found');
-    return;
-  }
-
-  // Only '全員' and 'everyone' – avoid broad keywords like 'call' that match toolbar buttons
-  const groupKeywords = ['全員', 'everyone'];
-
-  const CONV_SEL = [
-    '[role="listitem"]', '[role="option"]', '[role="row"]', '[role="treeitem"]', 'li',
-    '[data-room-type]', '[data-conversation-id]', '[data-group-id]',
-  ].join(', ');
-
-  const allItems = [...panelRoot.querySelectorAll(CONV_SEL)].filter(isVisible);
-  const groupItem = allItems.find(el => {
-    const label = (el.getAttribute('aria-label') || '').toLowerCase();
-    const text = (el.textContent || '').trim().toLowerCase().slice(0, 60);
-    return groupKeywords.some(kw => label.includes(kw) || text.startsWith(kw));
-  });
-
-  if (groupItem) {
-    reportChatError(`DEBUG openGroupChatConversation: clicking "${groupItem.getAttribute('aria-label') || groupItem.textContent.trim().slice(0, 40)}"`);
-    groupItem.click();
-    await waitForElement(SEL.messageInput, 3000);
-  } else {
-    // Diagnostic: list visible items in the panel for selector identification
-    const panelItems = allItems.slice(0, 15).map(el =>
-      `<${el.tagName.toLowerCase()} role="${el.getAttribute('role')||''}" aria-label="${el.getAttribute('aria-label')||''}" text="${(el.textContent||'').trim().slice(0,30)}">`
-    );
-    reportChatError('DEBUG openGroupChatConversation: no group item. panel items: ' + (panelItems.join(' | ') || 'none'));
+    const panelRoot = deepQueryAll(SEL.chatPanelContainer)[0];
+    if (panelRoot) {
+      const items = [...panelRoot.querySelectorAll('[role],[aria-label],[contenteditable]')]
+        .filter(isVisible).slice(0, 12).map(el =>
+          `<${el.tagName.toLowerCase()} role="${el.getAttribute('role')||''}" aria-label="${el.getAttribute('aria-label')||''}" contenteditable="${el.getAttribute('contenteditable')||''}" text="${(el.textContent||'').trim().slice(0,20)}">`
+        );
+      reportChatError('DEBUG panel structure: ' + (items.join(' | ') || 'empty'));
+    } else {
+      reportChatError('DEBUG panel container not found via SEL.chatPanelContainer');
+    }
   }
 }
 
