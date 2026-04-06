@@ -69,6 +69,35 @@ const SEL = {
 };
 
 // ---------------------------------------------------------------------------
+// Helper: deep querySelectorAll that pierces shadow DOMs and same-origin iframes
+// ---------------------------------------------------------------------------
+function deepQueryAll(selector, root = document) {
+  const results = [];
+  const seen = new WeakSet();
+  const search = (node) => {
+    if (!node || seen.has(node)) return;
+    seen.add(node);
+    try {
+      results.push(...node.querySelectorAll(selector));
+      node.querySelectorAll('*').forEach(el => {
+        if (el.shadowRoot) search(el.shadowRoot);
+      });
+      node.querySelectorAll('iframe').forEach(frame => {
+        try { if (frame.contentDocument) search(frame.contentDocument); }
+        catch (_) { /* cross-origin */ }
+      });
+    } catch (_) { /* ignore */ }
+  };
+  search(root);
+  return results;
+}
+
+function isVisible(el) {
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0;
+}
+
+// ---------------------------------------------------------------------------
 // Serialization queue – prevent concurrent postToChat calls from racing
 // ---------------------------------------------------------------------------
 let _chatQueue = Promise.resolve();
@@ -153,69 +182,80 @@ async function postToChat(text) {
   // 1. Make sure the chat panel is open
   await ensureChatPanelOpen();
 
-  // 2. Locate the message input (specific selectors first)
+  const INPUT_SEL = [
+    SEL.messageInput,
+    'input[type="text"]',
+    'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])',
+  ].join(', ');
+
+  // 2. Regular querySelector (fast path)
   let input = document.querySelector(SEL.messageInput);
 
   // 3. Fallback: scan inside the chat panel container
   if (!input) {
     const panel = document.querySelector(SEL.chatPanelContainer);
     if (panel) {
-      input = panel.querySelector(
-        '[role="textbox"], [contenteditable="true"], textarea'
-      );
+      input = panel.querySelector(INPUT_SEL) || null;
+    }
+  }
+
+  // 4. Deep fallback: pierce shadow DOM and same-origin iframes
+  if (!input) {
+    const found = deepQueryAll(INPUT_SEL).filter(isVisible);
+    if (found.length > 0) {
+      input = found[0];
+      console.info('[Meet Translator] Found input via deep search:', input.tagName,
+        input.getAttribute('aria-label'), input.getAttribute('role'));
     }
   }
 
   if (!input) {
-    // Diagnostic: report ALL visible contenteditable / textbox elements
-    const candidates = [
-      ...document.querySelectorAll('[role="textbox"], [contenteditable="true"], textarea'),
-    ].filter((el) => {
-      const r = el.getBoundingClientRect();
-      return r.width > 0 && r.height > 0; // visible elements only
-    }).map((el) =>
-      `<${el.tagName.toLowerCase()} role="${el.getAttribute('role') || ''}" ` +
-      `contenteditable="${el.contentEditable}" ` +
-      `aria-label="${el.getAttribute('aria-label') || ''}" ` +
-      `placeholder="${el.getAttribute('placeholder') || ''}" ` +
-      `jsname="${el.getAttribute('jsname') || ''}"/>`
-    );
-    const msg = 'チャット入力欄が見つかりません。visible candidates: ' +
-      (candidates.length ? candidates.join(' | ') : 'none');
+    // Diagnostic: check ALL input-like elements (visible and hidden) via deep search
+    const ALL = '[role="textbox"], [contenteditable="true"], textarea, input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])';
+    const allFound = deepQueryAll(ALL).map(el => {
+      const vis = isVisible(el) ? 'VISIBLE' : 'hidden';
+      return `[${vis}] <${el.tagName.toLowerCase()} role="${el.getAttribute('role')||''}" ` +
+        `contenteditable="${el.contentEditable}" aria-label="${el.getAttribute('aria-label')||''}" ` +
+        `type="${el.getAttribute('type')||''}" placeholder="${el.getAttribute('placeholder')||''}" ` +
+        `jsname="${el.getAttribute('jsname')||''}">`;
+    });
+    const msg = 'チャット入力欄が見つかりません。all candidates: ' +
+      (allFound.length ? allFound.slice(0, 10).join(' | ') : 'none');
     console.warn('[Meet Translator]', msg);
     reportChatError(msg);
     return;
   }
 
-  // 3. Focus and fill the input
+  // 5. Focus and fill the input
   input.focus();
 
   if (input.contentEditable === 'true') {
     // contenteditable div (Google Meet / React)
-    // execCommand('insertText') fires React's synthetic input event.
     input.focus();
     document.execCommand('selectAll', false, null);
     document.execCommand('insertText', false, text);
-  } else {
+  } else if (input.tagName === 'TEXTAREA') {
     // Plain <textarea> – use native value setter to bypass React batching
-    const nativeSetter = Object.getOwnPropertyDescriptor(
-      HTMLTextAreaElement.prototype,
-      'value'
-    ).set;
+    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+    nativeSetter.call(input, text);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  } else {
+    // <input type="text"> or similar
+    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
     nativeSetter.call(input, text);
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  // 4. Small delay so the UI can process the input event
+  // 6. Small delay so the UI can process the input event
   await new Promise((r) => setTimeout(r, 150));
 
-  // 5. Click the send button (preferred) or press Enter
-  const sendBtn = document.querySelector(SEL.sendButton);
+  // 7. Click the send button (preferred) or press Enter
+  const sendBtn = document.querySelector(SEL.sendButton) || deepQueryAll(SEL.sendButton).find(isVisible);
   if (sendBtn && !sendBtn.disabled) {
     sendBtn.click();
   } else {
-    // Fallback: simulate Enter key
     const opts = { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true };
     input.dispatchEvent(new KeyboardEvent('keydown', opts));
     input.dispatchEvent(new KeyboardEvent('keypress', opts));
