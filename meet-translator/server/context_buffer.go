@@ -35,7 +35,12 @@ func (b *contextBuffer) Add(e contextEntry) {
 	defer b.mu.Unlock()
 	b.entries = append(b.entries, e)
 	if len(b.entries) > b.maxSize {
-		b.entries = b.entries[len(b.entries)-b.maxSize:]
+		// 新しいスライスにコピーして元の backing array を解放する。
+		// 単純な再スライス (b.entries = b.entries[n:]) では元配列への参照が残り続け、
+		// 古いエントリが GC されないメモリリークになる。
+		newEntries := make([]contextEntry, b.maxSize)
+		copy(newEntries, b.entries[len(b.entries)-b.maxSize:])
+		b.entries = newEntries
 	}
 }
 

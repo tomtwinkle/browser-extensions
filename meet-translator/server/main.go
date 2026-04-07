@@ -615,7 +615,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
-	defer C.llama_bridge_free_model(llamaModel)
+	// モデル解放は srv 生成後に defer で行う（swapModel との double-free を防ぐため）。
+	// ※ defer C.llama_bridge_free_model(llamaModel) はここでは登録しない。
 	log.Printf("llama ready: %s", originalModelSpec)
 
 	// 辞書ロード
@@ -624,6 +625,21 @@ func main() {
 		len(glossary.GetData().Corrections), len(glossary.GetData().Terms), glossaryFilePath())
 
 	srv := newServer(cfg, whisperCtx, llamaModel, originalWhisperSpec, originalModelSpec, glossary)
+
+	// llamaModel の解放責任を server に委譲する。
+	// swapModel() が呼ばれると元のポインタは既に解放されるため、
+	// main() 起動時のポインタを defer で解放すると double-free になる。
+	// srv.llamaModel は常に「現在有効なモデル」を指すので、
+	// ここで defer することで正しく最新モデルを解放できる。
+	defer func() {
+		srv.modelMu.Lock()
+		m := srv.llamaModel
+		srv.llamaModel = nil
+		srv.modelMu.Unlock()
+		if m != nil {
+			C.llama_bridge_free_model(m)
+		}
+	}()
 
 	// サーバーのライフタイムと連動したコンテキスト
 	srvCtx, srvCancel := context.WithCancel(context.Background())
@@ -641,13 +657,31 @@ func main() {
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	// done はシャットダウンシーケンス（HTTP drain → improver 完了）が
+	// 終わったことを main goroutine に伝えるチャネル。
+	// ListenAndServe() が戻った直後に <-done でブロックすることで、
+	// バックグラウンドの CGo 呼び出しが完了する前に defer がモデルを解放する
+	// race condition を防ぐ。
+	done := make(chan struct{})
 	go func() {
 		<-quit
 		log.Println("shutting down...")
-		srvCancel() // ホットリロードと improver を停止
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = httpSrv.Shutdown(ctx)
+
+		// 1. 進行中の HTTP リクエストをすべて完了させる
+		shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutCancel()
+		_ = httpSrv.Shutdown(shutCtx)
+
+		// 2. バックグラウンドワーカー（辞書監視・improver）を停止
+		srvCancel()
+
+		// 3. improver が進行中の CGo 呼び出し (llama_bridge_generate) を完了するまで待つ。
+		//    この Wait() が終わるまで main goroutine の defer はブロックされるため、
+		//    モデルポインタは安全に解放できる。
+		srv.improver.Wait()
+
+		close(done)
 	}()
 
 	log.Printf("meet-translator server listening on :%s", cfg.port)
@@ -657,4 +691,7 @@ func main() {
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+	// シャットダウンシーケンスが完全に終わるまで待ってから defer を実行する。
+	// これにより improver の CGo 呼び出し完了前にモデルが解放される race を防ぐ。
+	<-done
 }
