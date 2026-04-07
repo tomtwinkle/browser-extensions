@@ -1,12 +1,14 @@
 # browser-extensions
 
-Chrome / Edge 拡張機能のモノレポです。
+A monorepo of Chrome / Edge browser extensions.
+
+[日本語版 README](README.ja.md)
 
 ## Extensions
 
-| 拡張機能 | 概要 | README |
+| Extension | Description | README |
 |---|---|---|
-| [meet-translator](meet-translator/) | Google Meet 自動翻訳chat – 音声をリアルタイムで文字起こし・翻訳し Meet チャットに投稿 | [README](meet-translator/README.md) |
+| [meet-translator](meet-translator/) | Google Meet Auto-Translate Chat – real-time speech transcription & translation posted to Meet chat | [README](meet-translator/README.md) |
 
 ## Third-Party Licenses
 
