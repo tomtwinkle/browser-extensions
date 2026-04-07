@@ -19,6 +19,19 @@ const LANG_LABELS = {
 };
 const langLabel = (code) => LANG_LABELS[code] || code || '原文';
 
+/**
+ * テキストの言語を簡易判定する（ja / en のみ対応）。
+ * ひらがな・カタカナ・漢字の割合が 20% を超えれば 'ja'、それ以外は 'en'。
+ * @param {string} text
+ * @returns {'ja'|'en'|null} 空文字・空白のみの場合は null
+ */
+function detectTextLang(text) {
+  const stripped = text.replace(/\s+/g, '');
+  if (!stripped) return null;
+  const jpChars = (stripped.match(/[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]/g) || []).length;
+  return jpChars / stripped.length > 0.2 ? 'ja' : 'en';
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -46,6 +59,7 @@ async function getSettings() {
     overlayEnabled: true,        // Meet 画面オーバーレイ表示（デフォルト有効）
     overlayFormat:  'both',      // 'both' | 'translation' | 'transcription'
     overlayScroll:  false,       // true=ニコニコ風スクロール / false=固定字幕
+    bidirectional:  false,       // 双方向翻訳（発話言語を検出して翻訳方向を動的に決定）
   };
   const stored = await chrome.storage.local.get(Object.keys(defaults));
   return { ...defaults, ...stored };
@@ -109,13 +123,15 @@ async function transcribeOnly(wavBytes, cfg) {
 
 /**
  * POST /translate – テキストを LLM で翻訳して返す。
- * @param {string}  text - 翻訳元テキスト
- * @param {object}  cfg  - getSettings() の結果
+ * @param {string}  text       - 翻訳元テキスト
+ * @param {string}  sourceLang - 翻訳元言語コード（空文字で自動）
+ * @param {string}  targetLang - 翻訳先言語コード
+ * @param {object}  cfg        - getSettings() の結果（serverUrl 取得用）
  * @returns {Promise<string|null>}
  */
-async function translateOnly(text, cfg) {
-  const params = new URLSearchParams({ text, target_lang: cfg.targetLang });
-  if (cfg.sourceLang) params.set('source_lang', cfg.sourceLang);
+async function translateOnly(text, sourceLang, targetLang, cfg) {
+  const params = new URLSearchParams({ text, target_lang: targetLang });
+  if (sourceLang) params.set('source_lang', sourceLang);
 
   console.info('[background] translateOnly: POST', `${cfg.serverUrl}/translate`);
   const res = await fetch(`${cfg.serverUrl}/translate`, {
@@ -385,11 +401,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
           console.info('[background] transcription:', transcription.slice(0, 100));
 
+          // 双方向翻訳: 発話言語を検出して翻訳方向を決定
+          let translSourceLang = cfg.sourceLang;
+          let translTargetLang = cfg.targetLang;
+          if (cfg.bidirectional && cfg.sourceLang && cfg.targetLang) {
+            const detected = detectTextLang(transcription);
+            if (detected && detected === cfg.targetLang) {
+              // 翻訳先言語で発話 → 逆方向に翻訳
+              translSourceLang = cfg.targetLang;
+              translTargetLang = cfg.sourceLang;
+              console.info('[background] bidirectional: detected', detected, '→ translating to', translTargetLang);
+            }
+          }
+
           // チャット: 原文投稿
           if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'translation') {
             await sendToContentScript(tabId, {
               type: 'POST_TRANSLATION',
-              text: `[${langLabel(cfg.sourceLang)}]\n${transcription}`,
+              text: `[${langLabel(translSourceLang || cfg.sourceLang)}]\n${transcription}`,
             });
           }
 
@@ -415,7 +444,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           }
 
           // Step 2: LLM 翻訳
-          const translation = await translateOnly(textToTranslate, cfg);
+          const translation = await translateOnly(textToTranslate, translSourceLang, translTargetLang, cfg);
           if (!translation) return;
 
           console.info('[background] translation:', translation.slice(0, 100));
@@ -424,7 +453,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'transcription') {
             await sendToContentScript(tabId, {
               type: 'POST_TRANSLATION',
-              text: `[${langLabel(cfg.targetLang)}]\n${translation}`,
+              text: `[${langLabel(translTargetLang)}]\n${translation}`,
             });
           }
 
