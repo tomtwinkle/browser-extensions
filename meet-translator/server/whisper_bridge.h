@@ -25,6 +25,8 @@ void whisper_bridge_free(whisper_context* ctx);
  *   n_samples:      サンプル数
  *   language:       "en"/"ja"/... または "" (自動検出)
  *   initial_prompt: 直前の文字起こしテキスト (コンテキスト用)。NULL または "" で無効。
+ *   lang_out_buf:   Whisper が検出した言語コードの出力先 (e.g. "ja", "en", "vi")
+ *   lang_out_size:  lang_out_buf のバイト数
  *   戻り値: 0=成功
  */
 int whisper_bridge_transcribe(
@@ -35,6 +37,8 @@ int whisper_bridge_transcribe(
     const char*      initial_prompt,
     char*            output_buf,
     int              output_buf_size,
+    char*            lang_out_buf,
+    int              lang_out_size,
     char*            error_buf,
     int              error_buf_size
 );

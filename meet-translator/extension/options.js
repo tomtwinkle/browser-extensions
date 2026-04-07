@@ -10,6 +10,7 @@ const DEFAULTS = {
   overlayEnabled: true,         // Meet 画面オーバーレイ表示（デフォルト有効）
   overlayFormat:  'both',       // 'both' | 'translation' | 'transcription'
   overlayScroll:  false,        // true=ニコニコ風スクロール / false=固定字幕（デフォルト）
+  bidirectional:  false,        // 双方向翻訳（発話言語を検出して翻訳方向を動的に決定）
 };
 
 let msgs = getMessages('');
@@ -30,6 +31,7 @@ chrome.storage.local.get(Object.keys(DEFAULTS), (stored) => {
   $('overlay-enabled').checked = cfg.overlayEnabled;
   $('overlay-format').value    = cfg.overlayFormat;
   $('overlay-scroll').checked  = cfg.overlayScroll;
+  $('bidirectional').checked   = cfg.bidirectional;
   updateChatFormatField(cfg.chatEnabled);
   updateOverlayOptionsField(cfg.overlayEnabled);
 
@@ -74,6 +76,7 @@ $('save-btn').addEventListener('click', () => {
     overlayEnabled: $('overlay-enabled').checked,
     overlayFormat:  $('overlay-format').value,
     overlayScroll:  $('overlay-scroll').checked,
+    bidirectional:  $('bidirectional').checked,
   };
   chrome.storage.local.set(cfg, () => {
     showStatus(msgs.msgSaved, 'ok');

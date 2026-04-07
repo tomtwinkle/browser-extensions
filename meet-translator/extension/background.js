@@ -16,8 +16,42 @@
 const LANG_LABELS = {
   en: 'English', ja: '日本語', zh: '中文', ko: '한국어',
   fr: 'Français', de: 'Deutsch', es: 'Español', pt: 'Português',
+  vi: 'Tiếng Việt',
 };
 const langLabel = (code) => LANG_LABELS[code] || code || '原文';
+
+/**
+ * テキストの言語を簡易判定する。
+ * 文字の種類・割合から ja / ko / zh / vi / en (Latin fallback) を返す。
+ * @param {string} text
+ * @returns {'ja'|'ko'|'zh'|'vi'|'en'|null} 空テキストは null
+ */
+function detectTextLang(text) {
+  const s = text.replace(/\s+/g, '');
+  if (!s) return null;
+  const n = s.length;
+  const count = (re) => (s.match(re) || []).length;
+
+  // 日本語: ひらがな・カタカナ（読点・句点含む）
+  const kana = count(/[\u3040-\u309f\u30a0-\u30ff\u3000-\u303f]/g);
+  const cjk  = count(/[\u4e00-\u9fff\u3400-\u4dbf]/g);
+  if (kana / n > 0.1 || (kana > 0 && cjk > 0)) return 'ja';
+
+  // 韓国語: ハングル
+  const ko = count(/[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]/g);
+  if (ko / n > 0.1) return 'ko';
+
+  // 中国語: CJK（かな・ハングルを除外した後）
+  if (cjk / n > 0.2) return 'zh';
+
+  // ベトナム語: ơ/Ơ ư/Ư đ/Đ + 声調付き文字 (U+1EA0–U+1EF9)
+  // これらは他の Latin 系言語にはほぼ現れない固有文字
+  const vi = count(/[\u0110\u0111\u01a0\u01a1\u01af\u01b0\u1ea0-\u1ef9]/g);
+  if (vi > 0 && vi / n > 0.03) return 'vi';
+
+  // フォールバック: Latin 系（英語・フランス語・ドイツ語・スペイン語等）
+  return 'en';
+}
 
 // ---------------------------------------------------------------------------
 // State
@@ -46,6 +80,7 @@ async function getSettings() {
     overlayEnabled: true,        // Meet 画面オーバーレイ表示（デフォルト有効）
     overlayFormat:  'both',      // 'both' | 'translation' | 'transcription'
     overlayScroll:  false,       // true=ニコニコ風スクロール / false=固定字幕
+    bidirectional:  false,       // 双方向翻訳（発話言語を検出して翻訳方向を動的に決定）
   };
   const stored = await chrome.storage.local.get(Object.keys(defaults));
   return { ...defaults, ...stored };
@@ -103,19 +138,21 @@ async function transcribeOnly(wavBytes, cfg) {
     const detail = await res.text().catch(() => '');
     throw new Error(`server error ${res.status}: ${detail}`);
   }
-  const { transcription } = await res.json();
-  return transcription || null;
+  const { transcription, detected_language } = await res.json();
+  return { transcription: transcription || null, detectedLang: detected_language || null };
 }
 
 /**
  * POST /translate – テキストを LLM で翻訳して返す。
- * @param {string}  text - 翻訳元テキスト
- * @param {object}  cfg  - getSettings() の結果
+ * @param {string}  text       - 翻訳元テキスト
+ * @param {string}  sourceLang - 翻訳元言語コード（空文字で自動）
+ * @param {string}  targetLang - 翻訳先言語コード
+ * @param {object}  cfg        - getSettings() の結果（serverUrl 取得用）
  * @returns {Promise<string|null>}
  */
-async function translateOnly(text, cfg) {
-  const params = new URLSearchParams({ text, target_lang: cfg.targetLang });
-  if (cfg.sourceLang) params.set('source_lang', cfg.sourceLang);
+async function translateOnly(text, sourceLang, targetLang, cfg) {
+  const params = new URLSearchParams({ text, target_lang: targetLang });
+  if (sourceLang) params.set('source_lang', sourceLang);
 
   console.info('[background] translateOnly: POST', `${cfg.serverUrl}/translate`);
   const res = await fetch(`${cfg.serverUrl}/translate`, {
@@ -375,7 +412,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           const cfg = await getSettings();
 
           // Step 1: Whisper 文字起こし → チャット投稿 / オーバーレイ（原文）
-          const transcription = await transcribeOnly(message.wavBytes, cfg);
+          const { transcription, detectedLang } = await transcribeOnly(message.wavBytes, cfg);
           if (!transcription) return;
 
           if (isFillerOnly(transcription)) {
@@ -385,11 +422,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
           console.info('[background] transcription:', transcription.slice(0, 100));
 
+          // 双方向翻訳: Whisper 検出言語を優先し、未取得時は文字種フォールバック
+          let translSourceLang = cfg.sourceLang;
+          let translTargetLang = cfg.targetLang;
+          if (cfg.bidirectional && cfg.sourceLang && cfg.targetLang) {
+            const detected = detectedLang || detectTextLang(transcription);
+            if (detected && detected === cfg.targetLang) {
+              // 翻訳先言語で発話 → 逆方向に翻訳
+              translSourceLang = cfg.targetLang;
+              translTargetLang = cfg.sourceLang;
+              console.info('[background] bidirectional: detected', detected, '→ translating to', translTargetLang);
+            }
+          }
+
           // チャット: 原文投稿
           if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'translation') {
             await sendToContentScript(tabId, {
               type: 'POST_TRANSLATION',
-              text: `[${langLabel(cfg.sourceLang)}]\n${transcription}`,
+              text: `[${langLabel(translSourceLang || cfg.sourceLang)}]\n${transcription}`,
             });
           }
 
@@ -415,7 +465,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           }
 
           // Step 2: LLM 翻訳
-          const translation = await translateOnly(textToTranslate, cfg);
+          const translation = await translateOnly(textToTranslate, translSourceLang, translTargetLang, cfg);
           if (!translation) return;
 
           console.info('[background] translation:', translation.slice(0, 100));
@@ -424,7 +474,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'transcription') {
             await sendToContentScript(tabId, {
               type: 'POST_TRANSLATION',
-              text: `[${langLabel(cfg.targetLang)}]\n${translation}`,
+              text: `[${langLabel(translTargetLang)}]\n${translation}`,
             });
           }
 

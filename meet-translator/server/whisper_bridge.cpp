@@ -25,6 +25,8 @@ int whisper_bridge_transcribe(
     const char*      initial_prompt,
     char*            output_buf,
     int              output_buf_size,
+    char*            lang_out_buf,
+    int              lang_out_size,
     char*            error_buf,
     int              error_buf_size
 ) {
@@ -39,6 +41,14 @@ int whisper_bridge_transcribe(
     if (whisper_full(ctx, params, samples, n_samples) != 0) {
         snprintf(error_buf, error_buf_size, "whisper_full に失敗");
         return -1;
+    }
+
+    // Whisper が検出した言語を取得
+    if (lang_out_buf && lang_out_size > 0) {
+        int lang_id = whisper_full_lang_id(ctx);
+        const char* lang_str = whisper_lang_str(lang_id);
+        strncpy(lang_out_buf, lang_str ? lang_str : "", lang_out_size - 1);
+        lang_out_buf[lang_out_size - 1] = '\0';
     }
 
     std::string result;
