@@ -93,23 +93,12 @@ let smoothedRms = 0;       // exponential moving average of RMS
 
 /** Encode collected Float32Array chunks into a WAV ArrayBuffer. */
 function encodeWav(chunks, sampleRate) {
-  // Flatten all chunks into a single Float32Array
   const totalLength = chunks.reduce((s, c) => s + c.length, 0);
-  const pcmFloat = new Float32Array(totalLength);
-  let offset = 0;
-  for (const chunk of chunks) {
-    pcmFloat.set(chunk, offset);
-    offset += chunk.length;
-  }
+  const dataBytes = totalLength * 2; // 16-bit = 2 bytes per sample
 
-  // Convert float32 [-1, 1] to int16 [-32768, 32767]
-  const pcm16 = new Int16Array(totalLength);
-  for (let i = 0; i < totalLength; i++) {
-    const s = Math.max(-1, Math.min(1, pcmFloat[i]));
-    pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-  }
-
-  const dataBytes = pcm16.buffer.byteLength;
+  // Allocate the final buffer once and write PCM data directly into it,
+  // avoiding the intermediate Float32Array and Int16Array allocations that
+  // would otherwise triple the peak memory usage during encoding.
   const buffer = new ArrayBuffer(44 + dataBytes);
   const view = new DataView(buffer);
 
@@ -124,18 +113,27 @@ function encodeWav(chunks, sampleRate) {
 
   // fmt  chunk (PCM = 1, mono = 1, 16-bit)
   writeStr(12, 'fmt ');
-  view.setUint32(16, 16, true);         // chunk size
-  view.setUint16(20, 1, true);          // PCM
-  view.setUint16(22, 1, true);          // channels: mono
-  view.setUint32(24, sampleRate, true); // sample rate
+  view.setUint32(16, 16, true);             // chunk size
+  view.setUint16(20, 1, true);              // PCM
+  view.setUint16(22, 1, true);              // channels: mono
+  view.setUint32(24, sampleRate, true);     // sample rate
   view.setUint32(28, sampleRate * 2, true); // byte rate (sampleRate * 1ch * 2bytes)
-  view.setUint16(32, 2, true);          // block align
-  view.setUint16(34, 16, true);         // bits per sample
+  view.setUint16(32, 2, true);              // block align
+  view.setUint16(34, 16, true);             // bits per sample
 
   // data chunk
   writeStr(36, 'data');
   view.setUint32(40, dataBytes, true);
-  new Int16Array(buffer, 44).set(pcm16);
+
+  // Convert float32 [-1, 1] → int16 and write directly into the buffer
+  const pcm16 = new Int16Array(buffer, 44);
+  let offset = 0;
+  for (const chunk of chunks) {
+    for (let i = 0; i < chunk.length; i++) {
+      const s = Math.max(-1, Math.min(1, chunk[i]));
+      pcm16[offset++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+  }
 
   return buffer;
 }
@@ -153,10 +151,10 @@ function flushSpeech(chunks) {
   const sampleRate = audioContext ? audioContext.sampleRate : 48000;
   const wavBuffer = encodeWav(chunks, sampleRate);
   bgLog('info', 'sendAudioBuffer: sending WAV ' + wavBuffer.byteLength + ' bytes (end-of-speech)');
-  // ArrayBuffer does not survive the offscreen→service-worker structured-clone boundary intact;
-  // convert to a plain Array<number> so it round-trips safely.
-  const wavBytes = Array.from(new Uint8Array(wavBuffer));
-  chrome.runtime.sendMessage({ type: 'AUDIO_DATA', wavBytes });
+  // Send as Uint8Array – structured clone preserves TypedArrays across the
+  // offscreen→service-worker boundary efficiently (no per-element boxing overhead
+  // that Array<number> would incur, which can be 4–8× larger in the JS heap).
+  chrome.runtime.sendMessage({ type: 'AUDIO_DATA', wavBytes: new Uint8Array(wavBuffer) });
 }
 
 // ---------------------------------------------------------------------------
@@ -350,8 +348,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
               audio: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId } },
               video: { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId } },
             });
+            // Chrome requires the video constraint for tab capture, but we only
+            // need audio. Stop the video tracks immediately to free the frame
+            // buffers, which can otherwise consume tens of MB throughout the session.
+            tabStream.getVideoTracks().forEach((t) => t.stop());
             const at = tabStream.getAudioTracks();
-            bgLog('info', 'tab stream ok, audio tracks=' + at.length + ' video tracks=' + tabStream.getVideoTracks().length);
+            bgLog('info', 'tab stream ok, audio tracks=' + at.length + ' (video tracks stopped)');
             at.forEach((t) => bgLog('info', 'tab audio: label=' + t.label + ' enabled=' + t.enabled + ' state=' + t.readyState));
           } catch (err) {
             bgLog('error', 'tab getUserMedia failed: ' + err.name + ' ' + err.message);
