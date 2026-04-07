@@ -8,7 +8,7 @@ const DEFAULTS = {
   llamaModel:    '',
   llamaThinking: true,
   audioSource:   'mic-only',  // 'both' | 'mic-only' | 'tab-only'
-  chatEnabled:   true,        // チャットへの自動投稿
+  chatEnabled:   true,
   chatFormat:    'both',      // 'both' | 'translation' | 'transcription'
 };
 
@@ -23,6 +23,8 @@ const MODEL_OPTIONS_MAP = {
   'qwen3.5:4b-q4_k_m':   'qwen3',
   'qwen3.5:9b-q4_k_m':   'qwen3',
 };
+
+let msgs = getMessages('');
 
 const $ = (id) => document.getElementById(id);
 
@@ -42,6 +44,18 @@ chrome.storage.local.get(Object.keys(DEFAULTS), (stored) => {
   $('chat-format').value    = cfg.chatFormat;
   updateChatFormatField(cfg.chatEnabled);
   updateModelOptions(cfg.llamaModel);
+
+  // Apply i18n based on the saved source language.
+  msgs = getMessages(cfg.sourceLang);
+  applyI18n(msgs);
+});
+
+// ---------------------------------------------------------------------------
+// Re-apply i18n when source language changes
+// ---------------------------------------------------------------------------
+$('source-lang').addEventListener('change', () => {
+  msgs = getMessages($('source-lang').value);
+  applyI18n(msgs);
 });
 
 // ---------------------------------------------------------------------------
@@ -61,11 +75,9 @@ function updateChatFormatField(enabled) {
 
 function updateModelOptions(modelName) {
   const group = MODEL_OPTIONS_MAP[modelName] || null;
-  // すべてのオプションパネルを非表示
   document.querySelectorAll('.model-options').forEach(el => {
     el.style.display = 'none';
   });
-  // 対応するパネルのみ表示
   if (group) {
     const panel = $(`model-options-${group}`);
     if (panel) panel.style.display = 'block';
@@ -88,7 +100,7 @@ $('save-btn').addEventListener('click', () => {
     chatFormat:    $('chat-format').value,
   };
   chrome.storage.local.set(cfg, () => {
-    showStatus('保存しました ✓', 'ok');
+    showStatus(msgs.msgSaved, 'ok');
   });
 });
 
@@ -97,16 +109,16 @@ $('save-btn').addEventListener('click', () => {
 // ---------------------------------------------------------------------------
 $('health-btn').addEventListener('click', async () => {
   const url = $('server-url').value.trim().replace(/\/$/, '');
-  showStatus('確認中…', '');
+  showStatus(msgs.msgChecking, '');
   try {
     const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(5000) });
     if (res.ok) {
-      showStatus('サーバー接続 OK ✓', 'ok');
+      showStatus(msgs.msgServerOk, 'ok');
     } else {
-      showStatus(`エラー: HTTP ${res.status}`, 'err');
+      showStatus(`${msgs.msgServerError}${res.status}`, 'err');
     }
   } catch (err) {
-    showStatus(`接続失敗: ${err.message}`, 'err');
+    showStatus(`${msgs.msgServerFailed}${err.message}`, 'err');
   }
 });
 
