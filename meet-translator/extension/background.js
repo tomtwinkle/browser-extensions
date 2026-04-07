@@ -37,12 +37,15 @@ const state = {
 /** Load settings from chrome.storage.local with defaults. */
 async function getSettings() {
   const defaults = {
-    serverUrl:     'http://localhost:17070',
-    sourceLang:    '',
-    targetLang:    'ja',
-    audioSource:   'mic-only', // 'both' | 'mic-only' | 'tab-only'
-    chatEnabled:   true,
-    chatFormat:    'both',     // 'both' | 'translation' | 'transcription'
+    serverUrl:      'http://localhost:17070',
+    sourceLang:     '',
+    targetLang:     'ja',
+    audioSource:    'mic-only',  // 'both' | 'mic-only' | 'tab-only'
+    chatEnabled:    false,       // チャットへの自動投稿（デフォルト無効）
+    chatFormat:     'both',      // 'both' | 'translation' | 'transcription'
+    overlayEnabled: true,        // Meet 画面オーバーレイ表示（デフォルト有効）
+    overlayFormat:  'both',      // 'both' | 'translation' | 'transcription'
+    overlayScroll:  false,       // true=ニコニコ風スクロール / false=固定字幕
   };
   const stored = await chrome.storage.local.get(Object.keys(defaults));
   return { ...defaults, ...stored };
@@ -371,7 +374,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         try {
           const cfg = await getSettings();
 
-          // Step 1: Whisper 文字起こし → 即チャット投稿
+          // Step 1: Whisper 文字起こし → チャット投稿 / オーバーレイ（原文）
           const transcription = await transcribeOnly(message.wavBytes, cfg);
           if (!transcription) return;
 
@@ -381,6 +384,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           }
 
           console.info('[background] transcription:', transcription.slice(0, 100));
+
+          // チャット: 原文投稿
           if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'translation') {
             await sendToContentScript(tabId, {
               type: 'POST_TRANSLATION',
@@ -388,19 +393,48 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             });
           }
 
-          // Step 2: LLM 翻訳 → チャット投稿
-          if (cfg.chatFormat === 'transcription') return;
-          // Strip filler words before sending to translation; skip if nothing remains.
+          // フィラー除去後のテキストを翻訳に使う
           const textToTranslate = stripFillers(transcription);
-          if (!textToTranslate) return;
+
+          // 翻訳不要なら原文のみオーバーレイ表示して終了
+          const needTranslation =
+            textToTranslate &&
+            ((cfg.chatEnabled    && cfg.chatFormat    !== 'transcription') ||
+             (cfg.overlayEnabled && cfg.overlayFormat !== 'transcription'));
+
+          if (!needTranslation) {
+            if (tabId && cfg.overlayEnabled && cfg.overlayFormat !== 'translation') {
+              await sendToContentScript(tabId, {
+                type:        'SHOW_OVERLAY',
+                original:    transcription,
+                translation: null,
+                scroll:      cfg.overlayScroll,
+              });
+            }
+            return;
+          }
+
+          // Step 2: LLM 翻訳
           const translation = await translateOnly(textToTranslate, cfg);
           if (!translation) return;
 
           console.info('[background] translation:', translation.slice(0, 100));
-          if (tabId && cfg.chatEnabled) {
+
+          // チャット: 翻訳投稿
+          if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'transcription') {
             await sendToContentScript(tabId, {
               type: 'POST_TRANSLATION',
               text: `[${langLabel(cfg.targetLang)}]\n${translation}`,
+            });
+          }
+
+          // オーバーレイ表示
+          if (tabId && cfg.overlayEnabled) {
+            await sendToContentScript(tabId, {
+              type:        'SHOW_OVERLAY',
+              original:    cfg.overlayFormat !== 'translation'   ? transcription : null,
+              translation: cfg.overlayFormat !== 'transcription' ? translation   : null,
+              scroll:      cfg.overlayScroll,
             });
           }
         } catch (err) {

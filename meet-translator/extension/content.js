@@ -261,6 +261,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     case 'TRANSLATION_STOPPED':
       console.log('[Meet Translator] 自動翻訳チャットを停止しました。');
+      destroyOverlay();
+      sendResponse({ success: true });
+      return false;
+
+    case 'SHOW_OVERLAY':
+      // Only the meet.google.com top frame renders the overlay.
+      if (location.hostname === 'meet.google.com' && window === window.top) {
+        showOverlay(message.original, message.translation, message.scroll);
+      }
       sendResponse({ success: true });
       return false;
 
@@ -270,3 +279,227 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 console.log('[Meet Translator] content script loaded on', location.href);
+
+// ---------------------------------------------------------------------------
+// Overlay display (subtitle mode / scroll mode)
+// ---------------------------------------------------------------------------
+
+const OVERLAY_ID       = 'meet-translator-overlay';
+const SUBTITLE_HIDE_MS = 8000; // fixed subtitle: hide after this long with no new text
+
+// --- Scroll mode constants -------------------------------------------------
+// Number of horizontal lanes distributed vertically across the screen.
+const LANE_COUNT  = 5;
+// Minimum vertical margin (fraction of viewport height) from top and bottom.
+const LANE_MARGIN = 0.08;
+// How long (ms) each entry takes to scroll across the full viewport width.
+// Scales with text length so longer lines don't feel rushed.
+const BASE_SCROLL_MS = 7000;
+const MS_PER_CHAR    = 60;
+// How long to keep the entry visible after the animation completes.
+const FADE_DELAY_MS  = 300;
+
+// Track which lanes are occupied so we can avoid collisions.
+const laneOccupied = new Array(LANE_COUNT).fill(false);
+let lanePointer = 0; // round-robin pointer
+
+// --- Subtitle mode state --------------------------------------------------
+let subtitleHideTimer = null;
+
+/** Inject shared CSS once. */
+function ensureOverlayStyles() {
+  if (document.getElementById('meet-translator-overlay-style')) return;
+  const style = document.createElement('style');
+  style.id = 'meet-translator-overlay-style';
+  style.textContent = `
+    #${OVERLAY_ID} {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      pointer-events: none;
+      z-index: 2147483647;
+      overflow: hidden;
+    }
+
+    /* ---- Scroll mode ---- */
+    .mt-entry {
+      position: absolute;
+      right: -100%;
+      display: inline-flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      animation: mt-scroll linear forwards;
+    }
+    @keyframes mt-scroll {
+      from { transform: translateX(0); }
+      to   { transform: translateX(calc(-100vw - 100%)); }
+    }
+
+    /* ---- Subtitle (fixed) mode ---- */
+    #mt-subtitle-panel {
+      position: absolute;
+      bottom: 8%;
+      left: 50%;
+      transform: translateX(-50%);
+      max-width: 80vw;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 8px 16px;
+      background: rgba(0, 0, 0, 0.55);
+      border-radius: 6px;
+      transition: opacity 0.4s ease;
+    }
+    #mt-subtitle-panel.mt-hidden {
+      opacity: 0;
+    }
+
+    /* ---- Shared text styles ---- */
+    .mt-original {
+      font-size: 18px;
+      font-weight: 600;
+      color: #e8e8e8;
+      text-shadow:
+        1px  1px 3px rgba(0,0,0,0.9),
+       -1px -1px 3px rgba(0,0,0,0.9);
+      white-space: nowrap;
+      line-height: 1.3;
+    }
+    .mt-translation {
+      font-size: 22px;
+      font-weight: 700;
+      color: #ffe066;
+      text-shadow:
+        1px  1px 3px rgba(0,0,0,0.9),
+       -1px -1px 3px rgba(0,0,0,0.9);
+      white-space: nowrap;
+      line-height: 1.3;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+/** Get or create the overlay container div. */
+function getOverlayContainer() {
+  let el = document.getElementById(OVERLAY_ID);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = OVERLAY_ID;
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+/** Destroy the overlay and clean up all state. */
+function destroyOverlay() {
+  const el = document.getElementById(OVERLAY_ID);
+  if (el) el.remove();
+  laneOccupied.fill(false);
+  lanePointer = 0;
+  if (subtitleHideTimer) { clearTimeout(subtitleHideTimer); subtitleHideTimer = null; }
+}
+
+/** Pick the next available scroll lane (round-robin, skip occupied). */
+function pickLane() {
+  for (let i = 0; i < LANE_COUNT; i++) {
+    const idx = (lanePointer + i) % LANE_COUNT;
+    if (!laneOccupied[idx]) {
+      lanePointer = (idx + 1) % LANE_COUNT;
+      return idx;
+    }
+  }
+  // All lanes occupied – use round-robin anyway to avoid stalling
+  const idx = lanePointer;
+  lanePointer = (lanePointer + 1) % LANE_COUNT;
+  return idx;
+}
+
+/** Build a text span for either .mt-original or .mt-translation. */
+function makeTextSpan(text, cssClass) {
+  const span = document.createElement('span');
+  span.className = cssClass;
+  span.textContent = text;
+  return span;
+}
+
+/**
+ * Show overlay in fixed subtitle mode (default).
+ * Content is replaced with each new utterance and auto-hides after SUBTITLE_HIDE_MS.
+ */
+function showSubtitle(original, translation) {
+  const container = getOverlayContainer();
+
+  let panel = document.getElementById('mt-subtitle-panel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'mt-subtitle-panel';
+    container.appendChild(panel);
+  }
+
+  // Replace content
+  panel.innerHTML = '';
+  if (original)    panel.appendChild(makeTextSpan(original,    'mt-original'));
+  if (translation) panel.appendChild(makeTextSpan(translation, 'mt-translation'));
+
+  // Show
+  panel.classList.remove('mt-hidden');
+
+  // Reset auto-hide timer
+  if (subtitleHideTimer) clearTimeout(subtitleHideTimer);
+  subtitleHideTimer = setTimeout(() => {
+    panel.classList.add('mt-hidden');
+    subtitleHideTimer = null;
+  }, SUBTITLE_HIDE_MS);
+}
+
+/**
+ * Show overlay in Niconico scroll mode.
+ * Each utterance spawns a new entry that scrolls right→left.
+ */
+function showScrolling(original, translation) {
+  const container = getOverlayContainer();
+
+  const lane     = pickLane();
+  const laneStep = (1 - LANE_MARGIN * 2) / (LANE_COUNT - 1);
+  const topPct   = (LANE_MARGIN + laneStep * lane) * 100;
+
+  const maxLen   = Math.max(original?.length ?? 0, translation?.length ?? 0);
+  const duration = BASE_SCROLL_MS + maxLen * MS_PER_CHAR;
+
+  const entry = document.createElement('div');
+  entry.className = 'mt-entry';
+  entry.style.top               = `${topPct}%`;
+  entry.style.animationDuration = `${duration}ms`;
+
+  if (original)    entry.appendChild(makeTextSpan(original,    'mt-original'));
+  if (translation) entry.appendChild(makeTextSpan(translation, 'mt-translation'));
+
+  laneOccupied[lane] = true;
+  container.appendChild(entry);
+
+  entry.addEventListener('animationend', () => {
+    setTimeout(() => {
+      entry.remove();
+      laneOccupied[lane] = false;
+    }, FADE_DELAY_MS);
+  });
+}
+
+/**
+ * Dispatch to subtitle or scroll mode based on the scroll flag.
+ * @param {string|null} original
+ * @param {string|null} translation
+ * @param {boolean} scroll
+ */
+function showOverlay(original, translation, scroll) {
+  if (!original && !translation) return;
+  ensureOverlayStyles();
+  if (scroll) {
+    showScrolling(original, translation);
+  } else {
+    showSubtitle(original, translation);
+  }
+}

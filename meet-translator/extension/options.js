@@ -1,12 +1,15 @@
 'use strict';
 
 const DEFAULTS = {
-  serverUrl:     'http://localhost:17070',
-  sourceLang:    '',
-  targetLang:    'ja',
-  audioSource:   'mic-only',  // 'both' | 'mic-only' | 'tab-only'
-  chatEnabled:   true,
-  chatFormat:    'both',      // 'both' | 'translation' | 'transcription'
+  serverUrl:      'http://localhost:17070',
+  sourceLang:     '',
+  targetLang:     'ja',
+  audioSource:    'mic-only',   // 'both' | 'mic-only' | 'tab-only'
+  chatEnabled:    false,        // チャットへの自動投稿（デフォルト無効）
+  chatFormat:     'both',       // 'both' | 'translation' | 'transcription'
+  overlayEnabled: true,         // Meet 画面オーバーレイ表示（デフォルト有効）
+  overlayFormat:  'both',       // 'both' | 'translation' | 'transcription'
+  overlayScroll:  false,        // true=ニコニコ風スクロール / false=固定字幕（デフォルト）
 };
 
 let msgs = getMessages('');
@@ -24,7 +27,11 @@ chrome.storage.local.get(Object.keys(DEFAULTS), (stored) => {
   $('audio-source').value   = cfg.audioSource;
   $('chat-enabled').checked = cfg.chatEnabled;
   $('chat-format').value    = cfg.chatFormat;
+  $('overlay-enabled').checked = cfg.overlayEnabled;
+  $('overlay-format').value    = cfg.overlayFormat;
+  $('overlay-scroll').checked  = cfg.overlayScroll;
   updateChatFormatField(cfg.chatEnabled);
+  updateOverlayOptionsField(cfg.overlayEnabled);
 
   msgs = getMessages(cfg.sourceLang);
   applyI18n(msgs);
@@ -42,21 +49,31 @@ $('chat-enabled').addEventListener('change', () => {
   updateChatFormatField($('chat-enabled').checked);
 });
 
+$('overlay-enabled').addEventListener('change', () => {
+  updateOverlayOptionsField($('overlay-enabled').checked);
+});
+
 function updateChatFormatField(enabled) {
   $('chat-format-field').style.display = enabled ? '' : 'none';
 }
 
+function updateOverlayOptionsField(enabled) {
+  $('overlay-options-field').style.display = enabled ? '' : 'none';
+}
 // ---------------------------------------------------------------------------
 // Save button
 // ---------------------------------------------------------------------------
 $('save-btn').addEventListener('click', () => {
   const cfg = {
-    serverUrl:     $('server-url').value.trim().replace(/\/$/, ''),
-    sourceLang:    $('source-lang').value,
-    targetLang:    $('target-lang').value,
-    audioSource:   $('audio-source').value,
-    chatEnabled:   $('chat-enabled').checked,
-    chatFormat:    $('chat-format').value,
+    serverUrl:      $('server-url').value.trim().replace(/\/$/, ''),
+    sourceLang:     $('source-lang').value,
+    targetLang:     $('target-lang').value,
+    audioSource:    $('audio-source').value,
+    chatEnabled:    $('chat-enabled').checked,
+    chatFormat:     $('chat-format').value,
+    overlayEnabled: $('overlay-enabled').checked,
+    overlayFormat:  $('overlay-format').value,
+    overlayScroll:  $('overlay-scroll').checked,
   };
   chrome.storage.local.set(cfg, () => {
     showStatus(msgs.msgSaved, 'ok');

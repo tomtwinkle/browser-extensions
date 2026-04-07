@@ -13,6 +13,8 @@ const statusText   = document.getElementById('status-text');
 const errorMsg     = document.getElementById('error-msg');
 const serverInfo   = document.getElementById('server-info');
 const serverUnavailable = document.getElementById('server-unavailable');
+const chatEnabledToggle   = document.getElementById('chat-enabled-toggle');
+const overlayEnabledToggle = document.getElementById('overlay-enabled-toggle');
 
 let isActive = false;
 // Initialised to English; overwritten after settings load.
@@ -58,6 +60,22 @@ function updateServerInfo(info) {
     serverUnavailable.style.display = 'block';
   }
 }
+
+// ---------------------------------------------------------------------------
+// Quick toggles: chat posting / overlay
+// ---------------------------------------------------------------------------
+chrome.storage.local.get({ chatEnabled: false, overlayEnabled: true }, (cfg) => {
+  chatEnabledToggle.checked   = cfg.chatEnabled;
+  overlayEnabledToggle.checked = cfg.overlayEnabled;
+});
+
+chatEnabledToggle.addEventListener('change', () => {
+  chrome.storage.local.set({ chatEnabled: chatEnabledToggle.checked });
+});
+
+overlayEnabledToggle.addEventListener('change', () => {
+  chrome.storage.local.set({ overlayEnabled: overlayEnabledToggle.checked });
+});
 
 // ---------------------------------------------------------------------------
 // Initialise: load settings (for i18n), then read state from background worker
