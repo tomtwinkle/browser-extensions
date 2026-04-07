@@ -36,22 +36,22 @@ func loadWhisperModel(modelPath string) (*C.whisper_context, error) {
 // Whisper への initial_prompt にはグロッサリーヒントのみを渡す。
 // 過去の発話テキストを initial_prompt に含めると Whisper が無音時に
 // 前回発話を幻覚再生（hallucination）し翻訳連鎖を引き起こすため除外する。
-func (s *server) transcribeInternal(audioData []byte, lang string) (string, error) {
+func (s *server) transcribeInternal(audioData []byte, lang string) (string, string, error) {
 	if s.whisperCtx == nil {
-		return "", fmt.Errorf("whisper context not initialized")
+		return "", "", fmt.Errorf("whisper context not initialized")
 	}
 
 	// WAV をパース → 16kHz float32 に変換
 	wav, err := parseWAV(bytes.NewReader(audioData))
 	if err != nil {
-		return "", fmt.Errorf("failed to parse WAV: %w", err)
+		return "", "", fmt.Errorf("failed to parse WAV: %w", err)
 	}
 	s.logVerbose("WAV: sampleRate=%d, channels=%d, samples=%d, duration=%.2fs",
 		wav.sampleRate, wav.channels, len(wav.samples),
 		float64(len(wav.samples))/float64(wav.sampleRate))
 	samples := resampleTo16k(wav.samples, wav.sampleRate)
 	if len(samples) == 0 {
-		return "", nil
+		return "", "", nil
 	}
 
 	// C に渡す
@@ -70,6 +70,10 @@ func (s *server) transcribeInternal(audioData []byte, lang string) (string, erro
 	outBuf := (*C.char)(C.malloc(outSize))
 	defer C.free(unsafe.Pointer(outBuf))
 
+	const langBufSize = 16
+	langBuf := (*C.char)(C.malloc(langBufSize))
+	defer C.free(unsafe.Pointer(langBuf))
+
 	const errSize = 512
 	errBuf := (*C.char)(C.malloc(errSize))
 	defer C.free(unsafe.Pointer(errBuf))
@@ -80,15 +84,17 @@ func (s *server) transcribeInternal(audioData []byte, lang string) (string, erro
 		cLang,
 		cPrompt,
 		outBuf, C.int(outSize),
+		langBuf, C.int(langBufSize),
 		errBuf, C.int(errSize),
 	)
 	if ret != 0 {
-		return "", fmt.Errorf("whisper_bridge_transcribe failed: %s", C.GoString(errBuf))
+		return "", "", fmt.Errorf("whisper_bridge_transcribe failed: %s", C.GoString(errBuf))
 	}
 
 	result := strings.TrimSpace(C.GoString(outBuf))
-	s.logVerbose("whisper raw output: %q", result)
+	detectedLang := strings.TrimSpace(C.GoString(langBuf))
+	s.logVerbose("whisper raw output: %q, detected_lang: %q", result, detectedLang)
 	// 辞書の修正テーブルを適用 (ASR 誤認識を既知のパターンで修正)
 	result = s.glossary.ApplyCorrections(result)
-	return result, nil
+	return result, detectedLang, nil
 }

@@ -138,8 +138,8 @@ async function transcribeOnly(wavBytes, cfg) {
     const detail = await res.text().catch(() => '');
     throw new Error(`server error ${res.status}: ${detail}`);
   }
-  const { transcription } = await res.json();
-  return transcription || null;
+  const { transcription, detected_language } = await res.json();
+  return { transcription: transcription || null, detectedLang: detected_language || null };
 }
 
 /**
@@ -412,7 +412,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           const cfg = await getSettings();
 
           // Step 1: Whisper 文字起こし → チャット投稿 / オーバーレイ（原文）
-          const transcription = await transcribeOnly(message.wavBytes, cfg);
+          const { transcription, detectedLang } = await transcribeOnly(message.wavBytes, cfg);
           if (!transcription) return;
 
           if (isFillerOnly(transcription)) {
@@ -422,11 +422,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
           console.info('[background] transcription:', transcription.slice(0, 100));
 
-          // 双方向翻訳: 発話言語を検出して翻訳方向を決定
+          // 双方向翻訳: Whisper 検出言語を優先し、未取得時は文字種フォールバック
           let translSourceLang = cfg.sourceLang;
           let translTargetLang = cfg.targetLang;
           if (cfg.bidirectional && cfg.sourceLang && cfg.targetLang) {
-            const detected = detectTextLang(transcription);
+            const detected = detectedLang || detectTextLang(transcription);
             if (detected && detected === cfg.targetLang) {
               // 翻訳先言語で発話 → 逆方向に翻訳
               translSourceLang = cfg.targetLang;

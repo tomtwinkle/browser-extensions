@@ -217,7 +217,7 @@ type server struct {
 	improver *GlossaryImprover
 
 	// テスト時にモック実装を注入できる関数フィールド
-	transcribeFn  func(audioData []byte, lang string) (string, error)
+	transcribeFn  func(audioData []byte, lang string) (string, string, error)
 	translateFn   func(text, srcLang, tgtLang string, opts ModelOptions, history []contextEntry) (string, error)
 	swapModelFn   func(spec string) error
 	rawGenerateFn func(prompt string) (string, error)
@@ -354,7 +354,7 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 
 	// Whisper は非スレッドセーフ – whisperMu で直列化
 	s.whisperMu.Lock()
-	transcription, transcribeErr := s.transcribeFn(audioData, sourceLang)
+	transcription, detectedLang, transcribeErr := s.transcribeFn(audioData, sourceLang)
 	s.whisperMu.Unlock()
 
 	if transcribeErr != nil {
@@ -416,8 +416,9 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 	s.contextBuf.Add(contextEntry{Transcription: transcription, Translation: translation})
 
 	writeJSON(w, http.StatusOK, map[string]string{
-		"transcription": transcription,
-		"translation":   translation,
+		"transcription":     transcription,
+		"translation":       translation,
+		"detected_language": detectedLang,
 	})
 }
 
@@ -454,7 +455,7 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 	// contextBuf 読み取りはロック外で行う (contextBuf 自身に内部ロックあり)
 	// Whisper は非スレッドセーフ – whisperMu で直列化
 	s.whisperMu.Lock()
-	transcription, err := s.transcribeFn(audioData, sourceLang)
+	transcription, detectedLang, err := s.transcribeFn(audioData, sourceLang)
 	s.whisperMu.Unlock()
 	if err != nil {
 		log.Printf("[transcribe] %v", err)
@@ -481,7 +482,10 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 	}
 	s.logVerbose("transcription: %q", transcription)
 
-	writeJSON(w, http.StatusOK, map[string]string{"transcription": transcription})
+	writeJSON(w, http.StatusOK, map[string]string{
+		"transcription":     transcription,
+		"detected_language": detectedLang,
+	})
 }
 
 // handleTranslate はテキストを受け取り、LLM で翻訳のみを行う。
