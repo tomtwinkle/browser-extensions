@@ -144,6 +144,25 @@ function buildModelOptions(cfg) {
 }
 
 /**
+ * Returns true when the transcription consists entirely of filler sounds
+ * (hesitation words like "うーん", "えー", "uh", "hmm") and should be discarded.
+ *
+ * The regex requires that the *whole* string be filler tokens (optionally
+ * separated by punctuation), so "えーと、今日は" is NOT filtered — only
+ * strings where every token is a filler.
+ *
+ * @param {string} text - Whisper transcription result
+ * @returns {boolean}
+ */
+function isFillerOnly(text) {
+  if (!text || !text.trim()) return true;
+  // Filler tokens: Japanese hesitations + common English equivalents
+  // Punctuation/whitespace characters that may appear between or around tokens
+  const FILLER_RE = /^[\s\u3000、。,.!?！？…「」]*((う[ーんむ]*|え[ーと]*|あ[ーの]*|は[ー]+|ふ[ーん]*|ん[ーん]*|uh+|um+|hm+|er+|ah+|oh+|mm+)[\s\u3000、。,.!?！？…「」]*)+$/iu;
+  return FILLER_RE.test(text.trim());
+}
+
+/**
  * content.js へメッセージを送る。
  * 「Receiving end does not exist」の場合は content.js を動的注入してリトライする。
  * 拡張機能の更新後に開いたままのタブでも確実に届くようにする。
@@ -353,6 +372,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           // Step 1: Whisper 文字起こし → 即チャット投稿
           const transcription = await transcribeOnly(message.wavBytes, cfg);
           if (!transcription) return;
+
+          if (isFillerOnly(transcription)) {
+            console.info('[background] filler-only transcription, skipping:', transcription);
+            return;
+          }
 
           console.info('[background] transcription:', transcription.slice(0, 100));
           if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'translation') {
