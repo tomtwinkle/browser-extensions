@@ -9,6 +9,7 @@ const DEFAULTS = {
   chatFormat:     'both',       // 'both' | 'translation' | 'transcription'
   overlayEnabled: false,        // Meet 画面オーバーレイ表示
   overlayFormat:  'both',       // 'both' | 'translation' | 'transcription'
+  overlayScroll:  false,        // true=ニコニコ風スクロール / false=固定字幕（デフォルト）
 };
 
 let msgs = getMessages('');
@@ -28,6 +29,7 @@ chrome.storage.local.get(Object.keys(DEFAULTS), (stored) => {
   $('chat-format').value    = cfg.chatFormat;
   $('overlay-enabled').checked = cfg.overlayEnabled;
   $('overlay-format').value    = cfg.overlayFormat;
+  $('overlay-scroll').checked  = cfg.overlayScroll;
   updateChatFormatField(cfg.chatEnabled);
   updateOverlayOptionsField(cfg.overlayEnabled);
 
@@ -71,6 +73,7 @@ $('save-btn').addEventListener('click', () => {
     chatFormat:     $('chat-format').value,
     overlayEnabled: $('overlay-enabled').checked,
     overlayFormat:  $('overlay-format').value,
+    overlayScroll:  $('overlay-scroll').checked,
   };
   chrome.storage.local.set(cfg, () => {
     showStatus(msgs.msgSaved, 'ok');

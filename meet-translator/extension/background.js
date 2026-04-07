@@ -45,6 +45,7 @@ async function getSettings() {
     chatFormat:     'both',      // 'both' | 'translation' | 'transcription'
     overlayEnabled: false,       // Meet 画面オーバーレイ表示
     overlayFormat:  'both',      // 'both' | 'translation' | 'transcription'
+    overlayScroll:  false,       // true=ニコニコ風スクロール / false=固定字幕
   };
   const stored = await chrome.storage.local.get(Object.keys(defaults));
   return { ...defaults, ...stored };
@@ -404,9 +405,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           if (!needTranslation) {
             if (tabId && cfg.overlayEnabled && cfg.overlayFormat !== 'translation') {
               await sendToContentScript(tabId, {
-                type: 'SHOW_OVERLAY',
+                type:        'SHOW_OVERLAY',
                 original:    transcription,
                 translation: null,
+                scroll:      cfg.overlayScroll,
               });
             }
             return;
@@ -429,9 +431,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           // オーバーレイ表示
           if (tabId && cfg.overlayEnabled) {
             await sendToContentScript(tabId, {
-              type: 'SHOW_OVERLAY',
-              original:    cfg.overlayFormat !== 'translation'    ? transcription : null,
-              translation: cfg.overlayFormat !== 'transcription'  ? translation   : null,
+              type:        'SHOW_OVERLAY',
+              original:    cfg.overlayFormat !== 'translation'   ? transcription : null,
+              translation: cfg.overlayFormat !== 'transcription' ? translation   : null,
+              scroll:      cfg.overlayScroll,
             });
           }
         } catch (err) {
