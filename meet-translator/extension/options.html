@@ -197,55 +197,6 @@
     </select>
   </div>
 
-  <h2 data-i18n="sectionModel">Model Settings</h2>
-  <div class="field">
-    <label for="whisper-model" data-i18n="labelWhisperModel">Whisper model</label>
-    <select id="whisper-model">
-      <option value="tiny" data-i18n="optWhisperTiny">tiny (fastest, low accuracy)</option>
-      <option value="base" selected data-i18n="optWhisperBase">base (recommended)</option>
-      <option value="small" data-i18n="optWhisperSmall">small</option>
-      <option value="medium" data-i18n="optWhisperMedium">medium (high accuracy)</option>
-      <option value="large-v3" data-i18n="optWhisperLargeV3">large-v3 (best accuracy, GPU required)</option>
-    </select>
-  </div>
-
-  <div class="field">
-    <label for="llama-model" data-i18n="labelLlamaModel">Translation model (LLM)</label>
-    <select id="llama-model">
-      <optgroup data-i18n-label="optGroupServerDefault" label="Server default">
-        <option value="" data-i18n="optLlamaDefault">Use server default</option>
-      </optgroup>
-      <optgroup label="Qwen2.5">
-        <option value="qwen2.5:3b-instruct-q4_k_m" data-i18n="optQwen25_3b">Qwen2.5 3B (lightweight)</option>
-        <option value="qwen2.5:7b-instruct-q4_k_m" data-i18n="optQwen25_7b">Qwen2.5 7B (recommended)</option>
-        <option value="qwen2.5:14b-instruct-q4_k_m" data-i18n="optQwen25_14b">Qwen2.5 14B (accurate, GPU required)</option>
-      </optgroup>
-      <optgroup data-i18n-label="optGroupQwen3" label="Qwen3 (Thinking)">
-        <option value="qwen3:0.6b-q4_k_m" data-i18n="optQwen3_0_6b">Qwen3 0.6B (lightest)</option>
-        <option value="qwen3:1.7b-q4_k_m" data-i18n="optQwen3_1_7b">Qwen3 1.7B</option>
-        <option value="qwen3:4b-q4_k_m" data-i18n="optQwen3_4b">Qwen3 4B</option>
-        <option value="qwen3:8b-q4_k_m" data-i18n="optQwen3_8b">Qwen3 8B (recommended)</option>
-      </optgroup>
-      <optgroup label="Gemma 4">
-        <option value="gemma4:e2b-q4_k_m" data-i18n="optGemma4_2b">Gemma4 2B (lightest)</option>
-        <option value="gemma4:e4b-q4_k_m" data-i18n="optGemma4_4b">Gemma4 4B</option>
-        <option value="gemma4:26b-q4_k_m" data-i18n="optGemma4_26b">Gemma4 26B (accurate, GPU required)</option>
-      </optgroup>
-    </select>
-    <p class="hint" data-i18n="hintLlamaModel">If not selected, uses the LLAMA_MODEL set at server startup.</p>
-  </div>
-
-  <!-- Model-specific options (Qwen3 only) -->
-  <div id="model-options-qwen3" class="model-options" style="display:none;">
-    <div class="field">
-      <label class="checkbox-label">
-        <input type="checkbox" id="qwen3-thinking" checked>
-        <span data-i18n="labelQwen3Thinking">Thinking mode</span>
-      </label>
-      <p class="hint" data-i18n="hintQwen3Thinking">When enabled, Qwen3 reasons before translating (better accuracy, slower).</p>
-    </div>
-  </div>
-
   <div class="row-btn">
     <button id="save-btn" data-i18n="btnSave">Save</button>
     <button id="health-btn" data-i18n="btnHealthCheck">Check server connection</button>
