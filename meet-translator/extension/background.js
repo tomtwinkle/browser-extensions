@@ -41,7 +41,7 @@ async function getSettings() {
     sourceLang:     '',
     targetLang:     'ja',
     audioSource:    'mic-only',  // 'both' | 'mic-only' | 'tab-only'
-    chatEnabled:    true,        // チャットへの自動投稿
+    chatEnabled:    false,       // チャットへの自動投稿（デフォルト無効）
     chatFormat:     'both',      // 'both' | 'translation' | 'transcription'
     overlayEnabled: false,       // Meet 画面オーバーレイ表示
     overlayFormat:  'both',      // 'both' | 'translation' | 'transcription'
