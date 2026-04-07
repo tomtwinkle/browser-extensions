@@ -378,6 +378,12 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
 		return
 	}
+	// 既知ハルシネーションフレーズ (YouTube 締め言葉等) を破棄する
+	if isKnownHallucination(transcription) {
+		s.logVerbose("transcription filtered (known hallucination): %q", transcription)
+		writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
+		return
+	}
 	s.logVerbose("transcription: %q", transcription)
 
 	// LLM の few-shot context を modelMu 取得前に読む (ネストロック回避)
@@ -464,6 +470,12 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 	// 直近の発話と実質同一なら Whisper hallucination とみなして破棄する
 	if isRepeatTranscription(transcription, s.contextBuf.Entries()) {
 		s.logVerbose("transcription filtered (repeat/hallucination): %q", transcription)
+		writeJSON(w, http.StatusOK, map[string]string{"transcription": ""})
+		return
+	}
+	// 既知ハルシネーションフレーズ (YouTube 締め言葉等) を破棄する
+	if isKnownHallucination(transcription) {
+		s.logVerbose("transcription filtered (known hallucination): %q", transcription)
 		writeJSON(w, http.StatusOK, map[string]string{"transcription": ""})
 		return
 	}
