@@ -16,20 +16,41 @@
 const LANG_LABELS = {
   en: 'English', ja: '日本語', zh: '中文', ko: '한국어',
   fr: 'Français', de: 'Deutsch', es: 'Español', pt: 'Português',
+  vi: 'Tiếng Việt',
 };
 const langLabel = (code) => LANG_LABELS[code] || code || '原文';
 
 /**
- * テキストの言語を簡易判定する（ja / en のみ対応）。
- * ひらがな・カタカナ・漢字の割合が 20% を超えれば 'ja'、それ以外は 'en'。
+ * テキストの言語を簡易判定する。
+ * 文字の種類・割合から ja / ko / zh / vi / en (Latin fallback) を返す。
  * @param {string} text
- * @returns {'ja'|'en'|null} 空文字・空白のみの場合は null
+ * @returns {'ja'|'ko'|'zh'|'vi'|'en'|null} 空テキストは null
  */
 function detectTextLang(text) {
-  const stripped = text.replace(/\s+/g, '');
-  if (!stripped) return null;
-  const jpChars = (stripped.match(/[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]/g) || []).length;
-  return jpChars / stripped.length > 0.2 ? 'ja' : 'en';
+  const s = text.replace(/\s+/g, '');
+  if (!s) return null;
+  const n = s.length;
+  const count = (re) => (s.match(re) || []).length;
+
+  // 日本語: ひらがな・カタカナ（読点・句点含む）
+  const kana = count(/[\u3040-\u309f\u30a0-\u30ff\u3000-\u303f]/g);
+  const cjk  = count(/[\u4e00-\u9fff\u3400-\u4dbf]/g);
+  if (kana / n > 0.1 || (kana > 0 && cjk > 0)) return 'ja';
+
+  // 韓国語: ハングル
+  const ko = count(/[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]/g);
+  if (ko / n > 0.1) return 'ko';
+
+  // 中国語: CJK（かな・ハングルを除外した後）
+  if (cjk / n > 0.2) return 'zh';
+
+  // ベトナム語: ơ/Ơ ư/Ư đ/Đ + 声調付き文字 (U+1EA0–U+1EF9)
+  // これらは他の Latin 系言語にはほぼ現れない固有文字
+  const vi = count(/[\u0110\u0111\u01a0\u01a1\u01af\u01b0\u1ea0-\u1ef9]/g);
+  if (vi > 0 && vi / n > 0.03) return 'vi';
+
+  // フォールバック: Latin 系（英語・フランス語・ドイツ語・スペイン語等）
+  return 'en';
 }
 
 // ---------------------------------------------------------------------------
