@@ -261,6 +261,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     case 'TRANSLATION_STOPPED':
       console.log('[Meet Translator] 自動翻訳チャットを停止しました。');
+      destroyOverlay();
+      sendResponse({ success: true });
+      return false;
+
+    case 'SHOW_OVERLAY':
+      // Only the meet.google.com top frame renders the overlay.
+      if (location.hostname === 'meet.google.com' && window === window.top) {
+        showOverlay(message.original, message.translation);
+      }
       sendResponse({ success: true });
       return false;
 
@@ -270,3 +279,164 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 console.log('[Meet Translator] content script loaded on', location.href);
+
+// ---------------------------------------------------------------------------
+// Niconico-style scrolling overlay
+// ---------------------------------------------------------------------------
+
+const OVERLAY_ID = 'meet-translator-overlay';
+
+// Number of horizontal lanes distributed vertically across the screen.
+const LANE_COUNT = 5;
+// Minimum vertical margin (fraction of viewport height) from top and bottom.
+const LANE_MARGIN = 0.08;
+// How long (ms) each entry takes to scroll across the full viewport width.
+// Scales with text length so longer lines don't feel rushed.
+const BASE_SCROLL_MS = 7000;
+const MS_PER_CHAR    = 60;
+// How long to keep the entry visible after the animation completes.
+const FADE_DELAY_MS  = 300;
+
+// Track which lanes are occupied so we can avoid collisions.
+const laneOccupied = new Array(LANE_COUNT).fill(false);
+let lanePointer = 0; // round-robin pointer
+
+/** Return CSS injected once into the document. */
+function ensureOverlayStyles() {
+  if (document.getElementById('meet-translator-overlay-style')) return;
+  const style = document.createElement('style');
+  style.id = 'meet-translator-overlay-style';
+  style.textContent = `
+    #${OVERLAY_ID} {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      pointer-events: none;
+      z-index: 2147483647;
+      overflow: hidden;
+    }
+    .mt-entry {
+      position: absolute;
+      right: -100%;
+      display: inline-flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      animation: mt-scroll linear forwards;
+    }
+    @keyframes mt-scroll {
+      from { transform: translateX(0); }
+      to   { transform: translateX(calc(-100vw - 100%)); }
+    }
+    .mt-original {
+      font-size: 18px;
+      font-weight: 600;
+      color: #e8e8e8;
+      text-shadow:
+        1px  1px 3px rgba(0,0,0,0.9),
+       -1px -1px 3px rgba(0,0,0,0.9),
+        1px -1px 3px rgba(0,0,0,0.9),
+       -1px  1px 3px rgba(0,0,0,0.9);
+      white-space: nowrap;
+      line-height: 1.2;
+    }
+    .mt-translation {
+      font-size: 22px;
+      font-weight: 700;
+      color: #ffe066;
+      text-shadow:
+        1px  1px 3px rgba(0,0,0,0.9),
+       -1px -1px 3px rgba(0,0,0,0.9),
+        1px -1px 3px rgba(0,0,0,0.9),
+       -1px  1px 3px rgba(0,0,0,0.9);
+      white-space: nowrap;
+      line-height: 1.2;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+/** Get or create the overlay container div. */
+function getOverlayContainer() {
+  let el = document.getElementById(OVERLAY_ID);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = OVERLAY_ID;
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+/** Destroy the overlay and clean up. */
+function destroyOverlay() {
+  const el = document.getElementById(OVERLAY_ID);
+  if (el) el.remove();
+  laneOccupied.fill(false);
+  lanePointer = 0;
+}
+
+/** Pick the next available lane (round-robin, skip occupied). */
+function pickLane() {
+  for (let i = 0; i < LANE_COUNT; i++) {
+    const idx = (lanePointer + i) % LANE_COUNT;
+    if (!laneOccupied[idx]) {
+      lanePointer = (idx + 1) % LANE_COUNT;
+      return idx;
+    }
+  }
+  // All lanes occupied – use round-robin anyway to avoid stalling
+  const idx = lanePointer;
+  lanePointer = (lanePointer + 1) % LANE_COUNT;
+  return idx;
+}
+
+/**
+ * Spawn one scrolling entry.
+ * @param {string|null} original
+ * @param {string|null} translation
+ */
+function showOverlay(original, translation) {
+  if (!original && !translation) return;
+
+  ensureOverlayStyles();
+  const container = getOverlayContainer();
+
+  const lane      = pickLane();
+  const laneStep  = (1 - LANE_MARGIN * 2) / (LANE_COUNT - 1);
+  const topPct    = (LANE_MARGIN + laneStep * lane) * 100;
+
+  // Duration scales with the longer of the two strings
+  const maxLen   = Math.max(original?.length ?? 0, translation?.length ?? 0);
+  const duration = BASE_SCROLL_MS + maxLen * MS_PER_CHAR;
+
+  // Build entry element
+  const entry = document.createElement('div');
+  entry.className = 'mt-entry';
+  entry.style.top              = `${topPct}%`;
+  entry.style.animationDuration = `${duration}ms`;
+
+  if (original) {
+    const span = document.createElement('span');
+    span.className = 'mt-original';
+    span.textContent = original;
+    entry.appendChild(span);
+  }
+  if (translation) {
+    const span = document.createElement('span');
+    span.className = 'mt-translation';
+    span.textContent = translation;
+    entry.appendChild(span);
+  }
+
+  laneOccupied[lane] = true;
+  container.appendChild(entry);
+
+  // Remove after animation completes
+  entry.addEventListener('animationend', () => {
+    setTimeout(() => {
+      entry.remove();
+      laneOccupied[lane] = false;
+    }, FADE_DELAY_MS);
+  });
+}

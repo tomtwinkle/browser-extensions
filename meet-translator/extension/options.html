@@ -151,6 +151,29 @@
     <p class="hint" data-i18n="hintAudio">Google Meet does not loop your own voice back to the tab. To translate your own speech too, choose a setting that includes "Microphone".</p>
   </div>
 
+  <h2 data-i18n="sectionDisplay">Display Settings</h2>
+  <div class="field">
+    <label class="checkbox-label">
+      <input type="checkbox" id="overlay-enabled">
+      <span data-i18n="labelOverlayEnabled">Show overlay on Meet screen</span>
+    </label>
+    <p class="hint" data-i18n="hintOverlay" style="margin-top:4px">Displays original and translated text as subtitles on the Meet screen. Does not block clicks.</p>
+  </div>
+  <div class="field model-options" id="overlay-options-field" style="display:none">
+    <label for="overlay-format" data-i18n="labelOverlayFormat">Display content</label>
+    <select id="overlay-format">
+      <option value="both" data-i18n="optOverlayBoth">Original + Translation</option>
+      <option value="translation" data-i18n="optOverlayTranslation">Translation only</option>
+      <option value="transcription" data-i18n="optOverlayTranscription">Original only</option>
+    </select>
+    <div style="margin-top:10px">
+      <label class="checkbox-label">
+        <input type="checkbox" id="overlay-scroll">
+        <span data-i18n="labelOverlayScroll">Scroll mode (Niconico-style, right to left)</span>
+      </label>
+    </div>
+  </div>
+
   <h2 data-i18n="sectionChat">Chat Post Settings</h2>
   <div class="field">
     <label class="checkbox-label">
