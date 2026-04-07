@@ -163,6 +163,23 @@ function isFillerOnly(text) {
 }
 
 /**
+ * Strip filler tokens from text, returning clean speech content for translation.
+ * Adjacent punctuation/whitespace is consumed along with each filler token and
+ * replaced with a single space so the remaining words stay naturally separated.
+ * Returns empty string if the whole text is fillers.
+ *
+ * Example: "えーと、今日は天気がいいですね" → "今日は天気がいいですね"
+ *
+ * @param {string} text - Whisper transcription result
+ * @returns {string}
+ */
+function stripFillers(text) {
+  if (!text) return '';
+  const FILLER_RE = /[\s\u3000、。,.!?！？…「」]*(う[ーんむ]*|え[ーと]*|あ[ーの]*|は[ー]+|ふ[ーん]*|ん[ーん]*|uh+|um+|hm+|er+|ah+|oh+|mm+)[\s\u3000、。,.!?！？…「」]*/giu;
+  return text.replace(FILLER_RE, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
  * content.js へメッセージを送る。
  * 「Receiving end does not exist」の場合は content.js を動的注入してリトライする。
  * 拡張機能の更新後に開いたままのタブでも確実に届くようにする。
@@ -388,7 +405,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
           // Step 2: LLM 翻訳 → チャット投稿
           if (cfg.chatFormat === 'transcription') return;
-          const translation = await translateOnly(transcription, cfg);
+          // Strip filler words before sending to translation; skip if nothing remains.
+          const textToTranslate = stripFillers(transcription);
+          if (!textToTranslate) return;
+          const translation = await translateOnly(textToTranslate, cfg);
           if (!translation) return;
 
           console.info('[background] translation:', translation.slice(0, 100));
