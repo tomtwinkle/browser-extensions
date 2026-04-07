@@ -64,7 +64,7 @@ function updateServerInfo(info) {
 // ---------------------------------------------------------------------------
 // Quick toggles: chat posting / overlay
 // ---------------------------------------------------------------------------
-chrome.storage.local.get({ chatEnabled: false, overlayEnabled: false }, (cfg) => {
+chrome.storage.local.get({ chatEnabled: false, overlayEnabled: true }, (cfg) => {
   chatEnabledToggle.checked   = cfg.chatEnabled;
   overlayEnabledToggle.checked = cfg.overlayEnabled;
 });

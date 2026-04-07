@@ -43,7 +43,7 @@ async function getSettings() {
     audioSource:    'mic-only',  // 'both' | 'mic-only' | 'tab-only'
     chatEnabled:    false,       // チャットへの自動投稿（デフォルト無効）
     chatFormat:     'both',      // 'both' | 'translation' | 'transcription'
-    overlayEnabled: false,       // Meet 画面オーバーレイ表示
+    overlayEnabled: true,        // Meet 画面オーバーレイ表示（デフォルト有効）
     overlayFormat:  'both',      // 'both' | 'translation' | 'transcription'
     overlayScroll:  false,       // true=ニコニコ風スクロール / false=固定字幕
   };
