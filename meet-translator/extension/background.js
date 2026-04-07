@@ -40,12 +40,9 @@ async function getSettings() {
     serverUrl:     'http://localhost:17070',
     sourceLang:    '',
     targetLang:    'ja',
-    whisperModel:  'base',
-    llamaModel:    '',
-    llamaThinking: true,
     audioSource:   'mic-only', // 'both' | 'mic-only' | 'tab-only'
-    chatEnabled:   true,        // チャットへの自動投稿
-    chatFormat:    'both',      // 'both' | 'translation' | 'transcription'
+    chatEnabled:   true,
+    chatFormat:    'both',     // 'both' | 'translation' | 'transcription'
   };
   const stored = await chrome.storage.local.get(Object.keys(defaults));
   return { ...defaults, ...stored };
@@ -115,11 +112,7 @@ async function transcribeOnly(wavBytes, cfg) {
  */
 async function translateOnly(text, cfg) {
   const params = new URLSearchParams({ text, target_lang: cfg.targetLang });
-  if (cfg.sourceLang)  params.set('source_lang', cfg.sourceLang);
-  if (cfg.llamaModel) {
-    params.set('llama_model', cfg.llamaModel);
-    params.set('llama_options', JSON.stringify(buildModelOptions(cfg)));
-  }
+  if (cfg.sourceLang) params.set('source_lang', cfg.sourceLang);
 
   console.info('[background] translateOnly: POST', `${cfg.serverUrl}/translate`);
   const res = await fetch(`${cfg.serverUrl}/translate`, {
@@ -133,14 +126,6 @@ async function translateOnly(text, cfg) {
   }
   const { translation } = await res.json();
   return translation || null;
-}
-
-/** モデル名に応じたオプションオブジェクトを組み立てる。 */
-function buildModelOptions(cfg) {
-  if (cfg.llamaModel.startsWith('qwen3:') || cfg.llamaModel.startsWith('qwen3.5:')) {
-    return { thinking: cfg.llamaThinking };
-  }
-  return {};
 }
 
 /**

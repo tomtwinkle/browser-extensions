@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Meet 自動翻訳チャット – 設定</title>
+  <title data-i18n="optionsTitle">⚙ Meet Auto-Translate Chat – Settings</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -131,127 +131,79 @@
   </style>
 </head>
 <body>
-  <h1>⚙ Meet 自動翻訳チャット – 設定</h1>
+  <h1 data-i18n="optionsTitle">⚙ Meet Auto-Translate Chat – Settings</h1>
 
-  <h2>ローカルサーバー</h2>
+  <h2 data-i18n="sectionServer">Local Server</h2>
   <div class="field">
-    <label for="server-url">サーバー URL</label>
+    <label for="server-url" data-i18n="labelServerUrl">Server URL</label>
     <input type="text" id="server-url" placeholder="http://localhost:17070">
-    <p class="hint">server/ ディレクトリの FastAPI サーバーを起動してください。</p>
+    <p class="hint" data-i18n="hintServer">Start the FastAPI server in the server/ directory.</p>
   </div>
 
-  <h2>音声ソース設定</h2>
+  <h2 data-i18n="sectionAudio">Audio Source Settings</h2>
   <div class="field">
-    <label for="audio-source">キャプチャ対象</label>
+    <label for="audio-source" data-i18n="labelAudioSource">Capture target</label>
     <select id="audio-source">
-      <option value="mic-only" selected>自分のマイクのみ</option>
-      <option value="both">自分のマイク ＋ 画面の音声（全員）</option>
-      <option value="tab-only">画面の音声のみ（他の参加者）</option>
+      <option value="mic-only" selected data-i18n="optMicOnly">Microphone only</option>
+      <option value="both" data-i18n="optBoth">Microphone + Tab audio (everyone)</option>
+      <option value="tab-only" data-i18n="optTabOnly">Tab audio only (other participants)</option>
     </select>
-    <p class="hint">Google Meet は自分の声をタブに返さないため、自分の発話も翻訳するには「マイク」を含む設定を選んでください。</p>
+    <p class="hint" data-i18n="hintAudio">Google Meet does not loop your own voice back to the tab. To translate your own speech too, choose a setting that includes "Microphone".</p>
   </div>
 
-  <h2>チャット投稿設定</h2>
+  <h2 data-i18n="sectionChat">Chat Post Settings</h2>
   <div class="field">
     <label class="checkbox-label">
       <input type="checkbox" id="chat-enabled">
-      <span>翻訳結果をチャットに自動投稿する</span>
+      <span data-i18n="labelChatEnabled">Auto-post translation to chat</span>
     </label>
   </div>
   <div class="field" id="chat-format-field">
-    <label for="chat-format">投稿形式</label>
+    <label for="chat-format" data-i18n="labelChatFormat">Post format</label>
     <select id="chat-format">
-      <option value="both">原文＋翻訳（各ラベル付き・2回投稿）</option>
-      <option value="translation">翻訳のみ</option>
-      <option value="transcription">原文のみ</option>
+      <option value="both" data-i18n="optChatBoth">Original + Translation (with labels, 2 posts)</option>
+      <option value="translation" data-i18n="optChatTranslation">Translation only</option>
+      <option value="transcription" data-i18n="optChatTranscription">Original only</option>
     </select>
-    <p class="hint">「原文＋翻訳」では Whisper の文字起こし直後に原文を投稿し、翻訳完了後に翻訳を続けて投稿します。</p>
+    <p class="hint" data-i18n="hintChatFormat">"Original + Translation" posts the original right after Whisper transcribes, then posts the translation once complete.</p>
   </div>
 
-  <h2>言語設定</h2>
+  <h2 data-i18n="sectionLang">Language Settings</h2>
   <div class="field">
-    <label for="source-lang">翻訳元言語</label>
+    <label for="source-lang" data-i18n="labelSourceLang">Source language</label>
     <select id="source-lang">
-      <option value="">自動検出</option>
-      <option value="en">英語 (en)</option>
-      <option value="ja">日本語 (ja)</option>
-      <option value="zh">中国語 (zh)</option>
-      <option value="ko">韓国語 (ko)</option>
-      <option value="fr">フランス語 (fr)</option>
-      <option value="de">ドイツ語 (de)</option>
-      <option value="es">スペイン語 (es)</option>
-      <option value="pt">ポルトガル語 (pt)</option>
+      <option value="" data-i18n="optLangAuto">Auto-detect</option>
+      <option value="en" data-i18n="optLangEn">English (en)</option>
+      <option value="ja" data-i18n="optLangJa">Japanese (ja)</option>
+      <option value="zh" data-i18n="optLangZh">Chinese (zh)</option>
+      <option value="ko" data-i18n="optLangKo">Korean (ko)</option>
+      <option value="fr" data-i18n="optLangFr">French (fr)</option>
+      <option value="de" data-i18n="optLangDe">German (de)</option>
+      <option value="es" data-i18n="optLangEs">Spanish (es)</option>
+      <option value="pt" data-i18n="optLangPt">Portuguese (pt)</option>
     </select>
   </div>
   <div class="field">
-    <label for="target-lang">翻訳先言語</label>
+    <label for="target-lang" data-i18n="labelTargetLang">Target language</label>
     <select id="target-lang">
-      <option value="ja">日本語 (ja)</option>
-      <option value="en">英語 (en)</option>
-      <option value="zh">中国語 (zh)</option>
-      <option value="ko">韓国語 (ko)</option>
-      <option value="fr">フランス語 (fr)</option>
-      <option value="de">ドイツ語 (de)</option>
-      <option value="es">スペイン語 (es)</option>
-      <option value="pt">ポルトガル語 (pt)</option>
+      <option value="ja" data-i18n="optLangJa">Japanese (ja)</option>
+      <option value="en" data-i18n="optLangEn">English (en)</option>
+      <option value="zh" data-i18n="optLangZh">Chinese (zh)</option>
+      <option value="ko" data-i18n="optLangKo">Korean (ko)</option>
+      <option value="fr" data-i18n="optLangFr">French (fr)</option>
+      <option value="de" data-i18n="optLangDe">German (de)</option>
+      <option value="es" data-i18n="optLangEs">Spanish (es)</option>
+      <option value="pt" data-i18n="optLangPt">Portuguese (pt)</option>
     </select>
-  </div>
-
-  <h2>モデル設定</h2>
-  <div class="field">
-    <label for="whisper-model">Whisper モデル</label>
-    <select id="whisper-model">
-      <option value="tiny">tiny（最速・低精度）</option>
-      <option value="base" selected>base（推奨バランス）</option>
-      <option value="small">small</option>
-      <option value="medium">medium（高精度）</option>
-      <option value="large-v3">large-v3（最高精度・要GPU）</option>
-    </select>
-  </div>
-
-  <div class="field">
-    <label for="llama-model">翻訳モデル (LLM)</label>
-    <select id="llama-model">
-      <optgroup label="サーバーデフォルト">
-        <option value="">サーバーデフォルトを使用</option>
-      </optgroup>
-      <optgroup label="Qwen2.5">
-        <option value="qwen2.5:3b-instruct-q4_k_m">Qwen2.5 3B（軽量）</option>
-        <option value="qwen2.5:7b-instruct-q4_k_m">Qwen2.5 7B（推奨）</option>
-        <option value="qwen2.5:14b-instruct-q4_k_m">Qwen2.5 14B（高精度・要GPU）</option>
-      </optgroup>
-      <optgroup label="Qwen3（Thinking 対応）">
-        <option value="qwen3:0.6b-q4_k_m">Qwen3 0.6B（最軽量）</option>
-        <option value="qwen3:1.7b-q4_k_m">Qwen3 1.7B</option>
-        <option value="qwen3:4b-q4_k_m">Qwen3 4B</option>
-        <option value="qwen3:8b-q4_k_m">Qwen3 8B（推奨）</option>
-      </optgroup>
-      <optgroup label="Gemma 4">
-        <option value="gemma4:e2b-q4_k_m">Gemma4 2B（超軽量）</option>
-        <option value="gemma4:e4b-q4_k_m">Gemma4 4B</option>
-        <option value="gemma4:26b-q4_k_m">Gemma4 26B（高精度・要GPU）</option>
-      </optgroup>
-    </select>
-    <p class="hint">未選択の場合はサーバー起動時の LLAMA_MODEL を使用します。</p>
-  </div>
-
-  <!-- モデル別オプション (Qwen3 のみ表示) -->
-  <div id="model-options-qwen3" class="model-options" style="display:none;">
-    <div class="field">
-      <label class="checkbox-label">
-        <input type="checkbox" id="qwen3-thinking" checked>
-        <span>Thinking モード</span>
-      </label>
-      <p class="hint">有効にすると Qwen3 が推論を展開してから翻訳します（精度向上・低速）。</p>
-    </div>
   </div>
 
   <div class="row-btn">
-    <button id="save-btn">保存</button>
-    <button id="health-btn">サーバー疎通確認</button>
+    <button id="save-btn" data-i18n="btnSave">Save</button>
+    <button id="health-btn" data-i18n="btnHealthCheck">Check server connection</button>
     <span id="status-msg"></span>
   </div>
 
+  <script src="i18n.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

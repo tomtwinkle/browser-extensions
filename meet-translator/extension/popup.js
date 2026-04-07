@@ -15,6 +15,8 @@ const serverInfo   = document.getElementById('server-info');
 const serverUnavailable = document.getElementById('server-unavailable');
 
 let isActive = false;
+// Initialised to English; overwritten after settings load.
+let msgs = getMessages('');
 
 // ---------------------------------------------------------------------------
 // UI helpers
@@ -23,15 +25,15 @@ function setUI(active) {
   isActive = active;
 
   if (active) {
-    toggleBtn.textContent = '自動翻訳チャット停止';
+    toggleBtn.textContent = msgs.btnStop;
     toggleBtn.classList.add('stop');
     statusDot.classList.add('active');
-    statusText.textContent = '実行中 …';
+    statusText.textContent = msgs.statusRunning;
   } else {
-    toggleBtn.textContent = '自動翻訳チャット開始';
+    toggleBtn.textContent = msgs.btnStart;
     toggleBtn.classList.remove('stop');
     statusDot.classList.remove('active');
-    statusText.textContent = '停止中';
+    statusText.textContent = msgs.statusStopped;
   }
 }
 
@@ -58,8 +60,15 @@ function updateServerInfo(info) {
 }
 
 // ---------------------------------------------------------------------------
-// Initialise: read current state from the background worker
+// Initialise: load settings (for i18n), then read state from background worker
 // ---------------------------------------------------------------------------
+chrome.storage.local.get({ sourceLang: '' }, ({ sourceLang }) => {
+  msgs = getMessages(sourceLang);
+  applyI18n(msgs);
+  // Re-render the button / status with the correct language after i18n is applied.
+  setUI(isActive);
+});
+
 chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
   if (chrome.runtime.lastError) return;
   if (!response) return;
@@ -83,7 +92,7 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'SERVER_UNREACHABLE') {
     setUI(false);
     updateServerInfo(null);
-    showError('サーバーへの接続が切断されました。自動翻訳を停止しました。');
+    showError(msgs.errorServerDisconnected);
   }
 });
 
@@ -97,41 +106,32 @@ document.getElementById('settings-link').addEventListener('click', (e) => {
 // Microphone permission helper
 // ---------------------------------------------------------------------------
 /**
- * マイク権限を確認し、未確認なら getUserMedia でダイアログを表示する。
- * @returns {Promise<boolean>} 利用可能なら true
+ * Checks microphone permission and prompts via getUserMedia if not yet granted.
+ * @returns {Promise<boolean>} true if available
  */
 async function ensureMicPermission() {
-  // まず現在の権限状態を確認
   let state = 'prompt';
   try {
     const status = await navigator.permissions.query({ name: 'microphone' });
     state = status.state; // 'granted' | 'denied' | 'prompt'
   } catch (_) {
-    // permissions API 非対応環境 → getUserMedia に任せる
+    // permissions API not supported → fall through to getUserMedia
   }
 
   if (state === 'granted') return true;
 
   if (state === 'denied') {
-    showError(
-      'マイクへのアクセスが拒否されています。\n' +
-      'Chrome の設定 → プライバシーとセキュリティ → サイトの設定 → マイク\n' +
-      'から、この拡張機能のブロックを解除してください。',
-    );
+    showError(msgs.errorMicDenied);
     return false;
   }
 
-  // 'prompt' → getUserMedia でダイアログを出す
+  // 'prompt' → show dialog via getUserMedia
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     stream.getTracks().forEach((t) => t.stop());
     return true;
   } catch (err) {
-    showError(
-      'マイクへのアクセスを拒否しました。\n' +
-      'Chrome の設定 → プライバシーとセキュリティ → サイトの設定 → マイク\n' +
-      'から拡張機能の許可を確認してください。',
-    );
+    showError(msgs.errorMicRejected);
     return false;
   }
 }
@@ -150,12 +150,12 @@ toggleBtn.addEventListener('click', async () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
       if (!tab || !tab.url?.startsWith('https://meet.google.com/')) {
-        showError('Google Meet タブで拡張機能を起動してください。');
+        showError(msgs.errorMeetTab);
         setLoading(false);
         return;
       }
 
-      // マイク権限の確認（マイクを使うモードの場合）
+      // Check microphone permission when mic capture is needed
       const cfg = await new Promise((resolve) =>
         chrome.storage.local.get({ audioSource: 'mic-only' }, resolve));
       const needsMic = cfg.audioSource !== 'tab-only';
@@ -163,7 +163,7 @@ toggleBtn.addEventListener('click', async () => {
       if (needsMic) {
         const micOk = await ensureMicPermission();
         if (!micOk && cfg.audioSource === 'mic-only') {
-          // mic-only なのにマイクが使えない → 開始を中止
+          // mic-only but mic unavailable → abort
           setLoading(false);
           return;
         }
@@ -173,12 +173,11 @@ toggleBtn.addEventListener('click', async () => {
         { type: 'START_CAPTURE', tabId: tab.id },
         (response) => {          setLoading(false);
           if (chrome.runtime.lastError || !response?.success) {
-            showError(response?.error || '開始に失敗しました。サーバーが起動しているか確認してください。');
+            showError(response?.error || msgs.errorStartFailed);
             updateServerInfo(null);
             return;
           }
           setUI(true);
-          // キャプチャ開始後にモデル情報を更新
           chrome.runtime.sendMessage({ type: 'GET_STATE' }, (r) => {
             if (r?.serverInfo) updateServerInfo(r.serverInfo);
           });
@@ -189,7 +188,7 @@ toggleBtn.addEventListener('click', async () => {
       chrome.runtime.sendMessage({ type: 'STOP_CAPTURE' }, (response) => {
         setLoading(false);
         if (chrome.runtime.lastError || !response?.success) {
-          showError('停止に失敗しました。');
+          showError(msgs.errorStopFailed);
           return;
         }
         setUI(false);
