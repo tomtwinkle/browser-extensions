@@ -46,6 +46,11 @@ type GlossaryImprover struct {
 	// バッファサイズ 1 により、解析中に新バッチが届いても積み上がらない。
 	workCh chan []TranslationRecord
 
+	// wg によりシャットダウン時に worker goroutine の終了を待てる。
+	// CGo 呼び出し (llama_bridge_generate) はコンテキストキャンセルで即座に中断できないため、
+	// モデルを解放する前に必ず Wait() してリソース解放の競合を防ぐ。
+	wg sync.WaitGroup
+
 	// generateFn は生プロンプトを LLM に送り結果テキストを返す。
 	// テストではモックを注入できる。
 	generateFn func(prompt string) (string, error)
@@ -71,8 +76,20 @@ func newGlossaryImprover(
 }
 
 // Start はバックグラウンドワーカーを起動する。ctx でシャットダウン可能。
+// ワーカーの完全終了は Wait() で確認できる。
 func (imp *GlossaryImprover) Start(ctx context.Context) {
-	go imp.worker(ctx)
+	imp.wg.Add(1)
+	go func() {
+		defer imp.wg.Done()
+		imp.worker(ctx)
+	}()
+}
+
+// Wait はバックグラウンドワーカーが完全に終了するまでブロックする。
+// シャットダウン時に CGo 呼び出し (llama_bridge_generate) が完了してから
+// モデルを解放するために必ず呼び出すこと。
+func (imp *GlossaryImprover) Wait() {
+	imp.wg.Wait()
 }
 
 // AddRecord は翻訳結果を記録し、必要に応じて解析をトリガーする。

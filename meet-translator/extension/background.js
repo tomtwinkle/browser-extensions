@@ -127,12 +127,14 @@ async function checkServerHealth() {
  * @returns {Promise<string|null>}
  */
 async function transcribeOnly(wavBytes, cfg) {
-  const wavBuffer = new Uint8Array(wavBytes).buffer;
+  // Accept both Uint8Array (new path) and Array<number> (legacy fallback).
+  // Blob accepts TypedArrays directly, so avoid an extra ArrayBuffer copy.
+  const audioData = wavBytes instanceof Uint8Array ? wavBytes : new Uint8Array(wavBytes);
   const form = new FormData();
-  form.append('audio', new Blob([wavBuffer], { type: 'audio/wav' }), 'audio.wav');
+  form.append('audio', new Blob([audioData], { type: 'audio/wav' }), 'audio.wav');
   if (cfg.sourceLang) form.append('source_lang', cfg.sourceLang);
 
-  console.info('[background] transcribeOnly: POST', `${cfg.serverUrl}/transcribe`, '–', wavBuffer.byteLength, 'bytes');
+  console.info('[background] transcribeOnly: POST', `${cfg.serverUrl}/transcribe`, '–', audioData.byteLength, 'bytes');
   const res = await fetch(`${cfg.serverUrl}/transcribe`, { method: 'POST', body: form });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
