@@ -12,9 +12,11 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 # pinned versions
-# llama.cpp: PrismML fork (adds Q1_0_g128 1-bit quantization support for Bonsai-8B)
-LLAMA_VERSION   := v0.0.2-prism
-LLAMA_REPO      := https://github.com/PrismML-Eng/llama.cpp.git
+# llama.cpp: official ggml-org repo (supports gemma4 architecture)
+# Note: PrismML fork (Q1_0_g128 for Bonsai-8B) is no longer used because it
+# lacks gemma4 architecture support. bonsai-8b will fail to load with this build.
+LLAMA_VERSION   := b8699
+LLAMA_REPO      := https://github.com/ggml-org/llama.cpp.git
 WHISPER_VERSION := v1.8.4
 
 OS_NAME   := $(shell uname -s 2>/dev/null || echo Windows_NT)
