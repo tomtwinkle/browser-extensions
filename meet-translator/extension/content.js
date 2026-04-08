@@ -287,11 +287,28 @@ console.log('[Meet Translator] content script loaded on', location.href);
 const OVERLAY_ID       = 'meet-translator-overlay';
 const SUBTITLE_HIDE_MS = 8000; // fixed subtitle: hide after this long with no new text
 
-// Selector for the Google Meet video grid container.
-// The overlay is anchored inside this element so subtitles appear only over
-// the video area.  If the element is not found (DOM change), the overlay
-// falls back to document.body.
-const VIDEO_CONTAINER_SEL = 'div[jscontroller="h8UR3d"]';
+// Selector for the Google Meet video area (the main stage, not the full viewport).
+//
+// DOM analysis of the Google Meet HTML (2025/2026):
+//   <main class="axUSnc ..." jscontroller="izfDQc"
+//         style="inset: 70px 392px 132px 16px;">
+//     ...video tiles...
+//   </main>
+//
+// The <main> element is position:absolute with its inset driven dynamically
+// by Meet JS to match the area between the toolbar (top), control bar (bottom)
+// and side panels (right).  It has NO overflow:hidden so overlays are not
+// clipped.  Children with position:absolute;inset:0 fill exactly this region.
+//
+// Note: div[jscontroller="h8UR3d"] (class="tTdl5d") is an individual video
+// tile overlay control INSIDE a tile wrapper (div.p2hjYe) that has
+// overflow:hidden — appending the overlay there clips the subtitle/scroll text.
+//
+// Selector priority:
+//   1. main[jscontroller="izfDQc"]  — current Meet build (verified 2025-04)
+//   2. main                         — semantic fallback (one <main> per page)
+//   3. document.body                — last-resort fallback
+const VIDEO_AREA_SEL = 'main[jscontroller="izfDQc"], main';
 
 // --- Scroll mode constants -------------------------------------------------
 // Number of horizontal lanes distributed vertically across the screen.
@@ -393,30 +410,26 @@ function ensureOverlayStyles() {
   document.head.appendChild(style);
 }
 
-/** Get or create the overlay container div, anchored to the video area. */
+/** Get or create the overlay container div, anchored to the Meet video area. */
 function getOverlayContainer() {
   let el = document.getElementById(OVERLAY_ID);
   if (!el) {
     el = document.createElement('div');
     el.id = OVERLAY_ID;
 
-    const videoEl = document.querySelector(VIDEO_CONTAINER_SEL);
-    if (videoEl) {
-      // Ensure the video container establishes a positioning context so that
-      // the overlay's "position: absolute; inset: 0" fills exactly that element.
-      if (getComputedStyle(videoEl).position === 'static') {
-        videoEl.style.position = 'relative';
-      }
-
+    // <main> is already position:absolute (CSS class axUSnc), so it
+    // establishes a containing block.  No need to set position:relative.
+    const videoArea = document.querySelector(VIDEO_AREA_SEL);
+    if (videoArea) {
       // Initialise the CSS variable and keep it in sync with container resizes.
       const updateCw = (width) => el.style.setProperty('--mt-cw', `${width}px`);
-      updateCw(videoEl.getBoundingClientRect().width);
+      updateCw(videoArea.getBoundingClientRect().width);
       containerResizeObserver = new ResizeObserver(entries => {
         updateCw(entries[0].contentRect.width);
       });
-      containerResizeObserver.observe(videoEl);
+      containerResizeObserver.observe(videoArea);
 
-      videoEl.appendChild(el);
+      videoArea.appendChild(el);
     } else {
       // Fallback: anchor to body (--mt-cw defaults to 100vw via CSS).
       document.body.appendChild(el);
