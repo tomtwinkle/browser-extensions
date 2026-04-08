@@ -93,10 +93,12 @@ func (s *server) translateInternal(text, sourceLang, targetLang string, opts Mod
 
 // generateRaw はテンプレートラッパーなしで生プロンプトを LLM に送る。
 // バックグラウンドの GlossaryImprover が解析プロンプトを送るために使用する。
-// modelMu を取得してから実行するため、通常の翻訳と直列化される。
+// startLlamaOp/endLlamaOp により通常の翻訳と直列化され、シャットダウン中は拒否される。
 func (s *server) generateRaw(prompt string) (string, error) {
-	s.modelMu.Lock()
-	defer s.modelMu.Unlock()
+	if err := s.startLlamaOp(); err != nil {
+		return "", err
+	}
+	defer s.endLlamaOp()
 
 	if s.llamaModel == nil {
 		return "", fmt.Errorf("llama model not initialized")

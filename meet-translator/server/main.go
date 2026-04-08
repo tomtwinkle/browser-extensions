@@ -30,6 +30,7 @@ import "C"
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -205,6 +206,8 @@ type server struct {
 	modelMu         sync.Mutex
 	llamaModel      C.llama_bridge_model
 	loadedModelSpec string // 現在ロード中のモデル名またはパス
+	llamaOps        sync.WaitGroup
+	shuttingDown    atomic.Bool
 
 	// 直近の発話履歴 (LLM few-shot context に使用)
 	// ※ Whisper initial_prompt には使用しない（hallucination による翻訳連鎖防止）
@@ -291,6 +294,52 @@ func logV(format string, args ...any) {
 func (s *server) logVerbose(format string, args ...any) {
 	if s.cfg.verbose {
 		log.Printf("[verbose] "+format, args...)
+	}
+}
+
+var errServerShuttingDown = errors.New("server shutting down")
+
+// startLlamaOp は llama モデルを使う処理を直列化し、シャットダウン中の新規実行を拒否する。
+// シャットダウン側は shuttingDown を立てたあとに modelMu でバリアを張ってから
+// llamaOps.Wait() することで、モデル解放前に既存の CGo 呼び出し完了を待てる。
+func (s *server) startLlamaOp() error {
+	if s.shuttingDown.Load() {
+		return errServerShuttingDown
+	}
+	s.modelMu.Lock()
+	if s.shuttingDown.Load() {
+		s.modelMu.Unlock()
+		return errServerShuttingDown
+	}
+	s.llamaOps.Add(1)
+	return nil
+}
+
+func (s *server) endLlamaOp() {
+	s.llamaOps.Done()
+	s.modelMu.Unlock()
+}
+
+func (s *server) beginShutdown() {
+	s.shuttingDown.Store(true)
+}
+
+func (s *server) waitForLlamaIdle() {
+	s.modelMu.Lock()
+	s.modelMu.Unlock()
+	s.llamaOps.Wait()
+}
+
+func (s *server) releaseLlamaModel() {
+	s.beginShutdown()
+	s.waitForLlamaIdle()
+
+	s.modelMu.Lock()
+	m := s.llamaModel
+	s.llamaModel = nil
+	s.modelMu.Unlock()
+	if m != nil {
+		C.llama_bridge_free_model(m)
 	}
 }
 
@@ -389,12 +438,15 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 	// LLM の few-shot context を modelMu 取得前に読む (ネストロック回避)
 	history := s.contextBuf.Entries()
 
-	// モデルのホットスワップと翻訳は排他制御 (llama のみ)
-	// defer を使わず明示的 Unlock で Add をロック外に置く
-	s.modelMu.Lock()
+	// モデルのホットスワップと翻訳は排他制御 (llama のみ)。
+	// シャットダウン開始後の新規 llama 処理は 503 で明示的に拒否する。
+	if err := s.startLlamaOp(); err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer s.endLlamaOp()
 	if requestedModel != "" && requestedModel != s.loadedModelSpec {
 		if err := s.swapModelFn(requestedModel); err != nil {
-			s.modelMu.Unlock()
 			log.Printf("[model] hot-swap failed: %v", err)
 			http.Error(w, "model swap failed: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -402,7 +454,6 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 	}
 	opts := parseModelOptions(rawOpts, s.loadedModelSpec)
 	translation, translateErr := s.translateFn(transcription, sourceLang, targetLang, opts, history)
-	s.modelMu.Unlock()
 
 	if translateErr != nil {
 		log.Printf("[translate] %v", translateErr)
@@ -518,12 +569,15 @@ func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 	// LLM の few-shot context を modelMu 取得前に読む (ネストロック回避)
 	history := s.contextBuf.Entries()
 
-	// モデルのホットスワップと翻訳は排他制御
-	// defer を使わず明示的 Unlock で Add をロック外に置く
-	s.modelMu.Lock()
+	// モデルのホットスワップと翻訳は排他制御。
+	// シャットダウン開始後の新規 llama 処理は 503 で明示的に拒否する。
+	if err := s.startLlamaOp(); err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer s.endLlamaOp()
 	if requestedModel != "" && requestedModel != s.loadedModelSpec {
 		if err := s.swapModelFn(requestedModel); err != nil {
-			s.modelMu.Unlock()
 			log.Printf("[model] hot-swap failed: %v", err)
 			http.Error(w, "model swap failed: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -531,7 +585,6 @@ func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 	}
 	opts := parseModelOptions(rawOpts, s.loadedModelSpec)
 	translation, err := s.translateFn(text, sourceLang, targetLang, opts, history)
-	s.modelMu.Unlock()
 
 	if err != nil {
 		log.Printf("[translate] %v", err)
@@ -631,19 +684,9 @@ func main() {
 	srv := newServer(cfg, whisperCtx, llamaModel, originalWhisperSpec, originalModelSpec, glossary)
 
 	// llamaModel の解放責任を server に委譲する。
-	// swapModel() が呼ばれると元のポインタは既に解放されるため、
-	// main() 起動時のポインタを defer で解放すると double-free になる。
-	// srv.llamaModel は常に「現在有効なモデル」を指すので、
-	// ここで defer することで正しく最新モデルを解放できる。
-	defer func() {
-		srv.modelMu.Lock()
-		m := srv.llamaModel
-		srv.llamaModel = nil
-		srv.modelMu.Unlock()
-		if m != nil {
-			C.llama_bridge_free_model(m)
-		}
-	}()
+	// シャットダウン開始後は新規 llama 処理を止め、進行中の CGo 呼び出しが終わってから
+	// 現在のモデルポインタだけを解放する。
+	defer srv.releaseLlamaModel()
 
 	// サーバーのライフタイムと連動したコンテキスト
 	srvCtx, srvCancel := context.WithCancel(context.Background())
@@ -680,9 +723,8 @@ func main() {
 		// 2. バックグラウンドワーカー（辞書監視・improver）を停止
 		srvCancel()
 
-		// 3. improver が進行中の CGo 呼び出し (llama_bridge_generate) を完了するまで待つ。
-		//    この Wait() が終わるまで main goroutine の defer はブロックされるため、
-		//    モデルポインタは安全に解放できる。
+		// 3. バックグラウンド improver の終了を待つ。
+		//    モデル解放前の llama CGo 呼び出し完了待ちは srv.releaseLlamaModel() が担う。
 		srv.improver.Wait()
 
 		close(done)
