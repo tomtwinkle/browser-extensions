@@ -582,6 +582,10 @@ func main() {
 	// マシンスペックからベストなモデルを自動選択して config を保存する。
 	applyAutoConfig(&cfg)
 
+	// モデルが現在のバイナリで対応可能か確認する。
+	// 別バリアントが必要な場合は同ディレクトリの対応バイナリへ exec する。
+	redirectIfNeeded(cfg.llamaModel)
+
 	// パラメーター未指定時はヘルプを表示して終了
 	if cfg.whisperModel == "" && cfg.llamaModel == "" {
 		printFullHelp()

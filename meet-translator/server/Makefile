@@ -2,19 +2,25 @@
 # meet-translator-server Makefile
 #
 # Usage:
-#   make                   auto-detect GPU and build
+#   make                   auto-detect GPU and build (official llama.cpp: gemma4 対応)
 #   make GPU=cuda          force NVIDIA CUDA
 #   make GPU=metal         force Apple Metal
 #   make GPU=cpu           CPU only
+#   make prism             PrismML ビルド (bonsai-8b / Q1_0_g128 対応) → server-prism
+#   make all               両バリアント (server + server-prism) をビルド
 #   make rebuild           re-run cmake + go build (keep vendor clone)
 #   make clean             remove binary + cmake build
 #   make distclean         remove vendor as well
 # ──────────────────────────────────────────────────────────────────────────────
 
-# pinned versions
-# llama.cpp: PrismML fork (adds Q1_0_g128 1-bit quantization support for Bonsai-8B)
-LLAMA_VERSION   := v0.0.2-prism
-LLAMA_REPO      := https://github.com/PrismML-Eng/llama.cpp.git
+# ── Standard build (official llama.cpp: gemma4 support) ──────────────────────
+LLAMA_VERSION   := b8699
+LLAMA_REPO      := https://github.com/ggml-org/llama.cpp.git
+
+# ── PrismML build (Q1_0_g128 support for bonsai-8b) ──────────────────────────
+LLAMA_VERSION_PRISM := prism-b8201-ba7e817
+LLAMA_REPO_PRISM    := https://github.com/PrismML-Eng/llama.cpp.git
+
 WHISPER_VERSION := v1.8.4
 
 OS_NAME   := $(shell uname -s 2>/dev/null || echo Windows_NT)
@@ -25,10 +31,16 @@ ifneq ($(filter MINGW% MSYS% CYGWIN%,$(OS_NAME)),)
   OS_NAME := Windows_NT
 endif
 
-VENDOR_DIR  := vendor
-BUILD_DIR   := $(VENDOR_DIR)/build
-LLAMA_DIR   := $(VENDOR_DIR)/llama.cpp
-WHISPER_DIR := $(VENDOR_DIR)/whisper.cpp
+VENDOR_DIR       := vendor
+BUILD_DIR        := $(VENDOR_DIR)/build
+LLAMA_DIR        := $(VENDOR_DIR)/llama.cpp
+WHISPER_DIR      := $(VENDOR_DIR)/whisper.cpp
+
+# PrismML バリアント用ディレクトリ (標準と共存)
+VENDOR_PRISM_DIR := vendor-prism
+BUILD_PRISM_DIR  := $(VENDOR_PRISM_DIR)/build
+LLAMA_PRISM_DIR  := $(VENDOR_PRISM_DIR)/llama.cpp
+WHISPER_PRISM_DIR := $(VENDOR_PRISM_DIR)/whisper.cpp
 
 # ── GPU target detection ──────────────────────────────────────────────────────
 GPU ?= auto
@@ -76,6 +88,18 @@ CGO_LDFLAGS_VAL := -L$(abspath $(BUILD_DIR)/vendor/llama.cpp/src) \
                    -L$(abspath $(BUILD_DIR)/vendor/llama.cpp/ggml/src/ggml-metal) \
                    -L$(abspath $(BUILD_DIR)/vendor/llama.cpp/ggml/src/ggml-blas)
 
+# PrismML バリアント用 CGo パス
+CGO_CFLAGS_PRISM_VAL  := -I$(abspath $(LLAMA_PRISM_DIR)/include) -I$(abspath $(WHISPER_PRISM_DIR)/include) -I$(abspath $(LLAMA_PRISM_DIR)/ggml/include)
+
+CGO_LDFLAGS_PRISM_VAL := -L$(abspath $(BUILD_PRISM_DIR)/llama.cpp/src) \
+                          -L$(abspath $(BUILD_PRISM_DIR)/whisper.cpp/src) \
+                          -L$(abspath $(BUILD_PRISM_DIR)/llama.cpp/ggml/src) \
+                          -L$(abspath $(BUILD_PRISM_DIR)/llama.cpp/ggml/src/ggml-metal) \
+                          -L$(abspath $(BUILD_PRISM_DIR)/llama.cpp/ggml/src/ggml-blas)
+
+# ,のエスケープ (GNU Make で GO_TAGS に , を含める際に必要)
+comma := ,
+
 # ── OS-specific settings ──────────────────────────────────────────────────────
 ifeq ($(OS_NAME),Windows_NT)
   # Ninja: use C:\mingw64\bin\gcc (same as Go CGo) to avoid MSYS2 toolchain mix
@@ -92,14 +116,32 @@ else
   BIN_EXT           :=
 endif
 
-BIN := server$(BIN_EXT)
+BIN       := server$(BIN_EXT)
+BIN_PRISM := server-prism$(BIN_EXT)
 
 # ── targets ───────────────────────────────────────────────────────────────────
-.PHONY: all build deps test bench-build bench clean rebuild distclean
+.PHONY: all build prism deps deps-prism test bench-build bench clean rebuild distclean
 
-all: build
+## all: 両バリアント (server + server-prism) をビルド
+all: build prism
 
-## deps: clone whisper.cpp + llama.cpp and build with cmake
+## build: 標準ビルド (gemma4 対応, 公式 ggml-org/llama.cpp)
+build: deps
+	@echo "[go build] tags=$(GO_TAGS) GPU=$(GPU_TARGET) variant=standard"
+	CGO_ENABLED=1 \
+	CGO_CFLAGS="$(CGO_CFLAGS_VAL)" \
+	CGO_LDFLAGS="$(CGO_LDFLAGS_VAL) $(CGO_EXTRA_LDFLAGS)" \
+	go build $(if $(GO_TAGS),-tags $(GO_TAGS)) -o $(BIN) .
+
+## prism: PrismML ビルド (bonsai-8b / Q1_0_g128 対応) → server-prism
+prism: deps-prism
+	@echo "[go build] tags=$(GO_TAGS),prism GPU=$(GPU_TARGET) variant=prism"
+	CGO_ENABLED=1 \
+	CGO_CFLAGS="$(CGO_CFLAGS_PRISM_VAL)" \
+	CGO_LDFLAGS="$(CGO_LDFLAGS_PRISM_VAL) $(CGO_EXTRA_LDFLAGS)" \
+	go build $(if $(GO_TAGS),-tags $(GO_TAGS)$(comma)prism,-tags prism) -o $(BIN_PRISM) .
+
+## deps: 標準ビルド用ライブラリをクローン＆ビルド
 deps: $(BUILD_DIR)/.built
 
 $(LLAMA_DIR):
@@ -113,7 +155,7 @@ $(WHISPER_DIR):
 	https://github.com/ggerganov/whisper.cpp.git $(WHISPER_DIR)
 
 $(BUILD_DIR)/.built: $(LLAMA_DIR) $(WHISPER_DIR)
-	@echo "[cmake] Building with GPU=$(GPU_TARGET)..."
+	@echo "[cmake] Building standard variant with GPU=$(GPU_TARGET)..."
 	cmake -S . -B $(BUILD_DIR) \
 	$(CMAKE_GENERATOR) \
 	$(CMAKE_EXTRA_FLAGS) \
@@ -132,13 +174,39 @@ $(BUILD_DIR)/.built: $(LLAMA_DIR) $(WHISPER_DIR)
 	fi
 	@touch $(BUILD_DIR)/.built
 
-## build: build Go binary after deps
-build: deps
-	@echo "[go build] tags=$(GO_TAGS) GPU=$(GPU_TARGET)"
-	CGO_ENABLED=1 \
-	CGO_CFLAGS="$(CGO_CFLAGS_VAL)" \
-	CGO_LDFLAGS="$(CGO_LDFLAGS_VAL) $(CGO_EXTRA_LDFLAGS)" \
-	go build $(if $(GO_TAGS),-tags $(GO_TAGS)) -o $(BIN) .
+## deps-prism: PrismML ビルド用ライブラリをクローン＆ビルド
+deps-prism: $(BUILD_PRISM_DIR)/.built
+
+$(LLAMA_PRISM_DIR):
+	@echo "[deps-prism] Cloning llama.cpp PrismML fork ($(LLAMA_VERSION_PRISM))..."
+	git clone --depth=1 --branch $(LLAMA_VERSION_PRISM) \
+	$(LLAMA_REPO_PRISM) $(LLAMA_PRISM_DIR)
+
+$(WHISPER_PRISM_DIR):
+	@echo "[deps-prism] Cloning whisper.cpp ($(WHISPER_VERSION))..."
+	git clone --depth=1 --branch $(WHISPER_VERSION) \
+	https://github.com/ggerganov/whisper.cpp.git $(WHISPER_PRISM_DIR)
+
+$(BUILD_PRISM_DIR)/.built: $(LLAMA_PRISM_DIR) $(WHISPER_PRISM_DIR)
+	@echo "[cmake] Building PrismML variant with GPU=$(GPU_TARGET)..."
+	cmake -S . -B $(BUILD_PRISM_DIR) \
+	-DVENDOR_DIR=$(abspath $(VENDOR_PRISM_DIR)) \
+	$(CMAKE_GENERATOR) \
+	$(CMAKE_EXTRA_FLAGS) \
+	-DCMAKE_BUILD_TYPE=Release \
+	-DBUILD_SHARED_LIBS=OFF \
+	$(CMAKE_GPU_FLAGS)
+	cmake --build $(BUILD_PRISM_DIR) $(CMAKE_BUILD_FLAGS) --target llama whisper
+	@if [ "$(OS_NAME)" = "Windows_NT" ]; then \
+		GGML_SRC="$(BUILD_PRISM_DIR)/llama.cpp/ggml/src"; \
+		for lib in ggml ggml-base ggml-cpu; do \
+			if [ -f "$$GGML_SRC/$$lib.a" ] && [ ! -f "$$GGML_SRC/lib$$lib.a" ]; then \
+				echo "[fix] $$lib.a -> lib$$lib.a"; \
+				cp "$$GGML_SRC/$$lib.a" "$$GGML_SRC/lib$$lib.a"; \
+			fi; \
+		done; \
+	fi
+	@touch $(BUILD_PRISM_DIR)/.built
 
 ## test: run go test with CGo include/library paths
 test: deps
@@ -161,8 +229,8 @@ bench: bench-build
 
 ## clean: remove binary and cmake build artifacts
 clean:
-	rm -f $(BIN)
-	rm -rf $(BUILD_DIR)
+	rm -f $(BIN) $(BIN_PRISM)
+	rm -rf $(BUILD_DIR) $(BUILD_PRISM_DIR)
 
 ## rebuild: force cmake rebuild + go build without re-cloning vendor
 ##          use after: git pull changes bridge C++ files or cmake settings
@@ -172,4 +240,4 @@ rebuild:
 
 ## distclean: remove everything including vendor
 distclean: clean
-	rm -rf $(VENDOR_DIR)
+	rm -rf $(VENDOR_DIR) $(VENDOR_PRISM_DIR)

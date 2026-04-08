@@ -49,6 +49,7 @@ type LlamaEntry struct {
 	URL         string
 	Template    string // "qwen" | "qwen3" | "gemma"
 	HasThinking bool   // Qwen3 の thinking モードに対応しているか
+	NeedsPrism  bool   // PrismML ビルドが必要 (Q1_0_g128 量子化を使用するモデル)
 }
 
 var llamaRegistry = map[string]LlamaEntry{
@@ -115,12 +116,14 @@ var llamaRegistry = map[string]LlamaEntry{
 	},
 
 	// ── Bonsai 8B (PrismML 1-bit, Qwen3-8B ベース, Apache 2.0) ──────────────
-	// Q1_0_g128 形式: ~1.15 GB, 標準 llama.cpp では読み込み不可。
-	// PrismML fork (v0.0.2-prism 以降) が必要。
+	// Q1_0_g128 形式: ~1.15 GB
+	// 注意: 現在のビルドは公式 ggml-org/llama.cpp を使用するため Q1_0_g128 非対応。
+	// Bonsai-8B は llama_model_load 時に "unsupported quantization type" エラーで失敗する。
 	"bonsai-8b": {
 		URL:         "https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B.gguf",
 		Template:    "qwen3",
 		HasThinking: true,
+		NeedsPrism:  true, // Q1_0_g128 quantization requires PrismML build (make prism)
 	},
 
 	// ── Gemma 4 ──────────────────────────────────────────────────────────────
