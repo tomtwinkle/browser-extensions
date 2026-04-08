@@ -145,16 +145,33 @@ function calcRmsChunk(data) {
   return data.length > 0 ? Math.sqrt(sumSq / data.length) : 0;
 }
 
+/**
+ * ArrayBuffer を base64 文字列にエンコードする。
+ * String.fromCharCode.apply を 32 KB チャンクで呼び出すことで
+ * 大きなバッファでもスタックオーバーフローを防ぐ。
+ */
+function bufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000; // 32 768 bytes – apply() の安全な上限
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
 /** Encode and send the accumulated speech samples to the background worker. */
 function flushSpeech(chunks) {
   if (chunks.length === 0) return;
   const sampleRate = audioContext ? audioContext.sampleRate : 48000;
   const wavBuffer = encodeWav(chunks, sampleRate);
   bgLog('info', 'sendAudioBuffer: sending WAV ' + wavBuffer.byteLength + ' bytes (end-of-speech)');
-  // Send as Uint8Array – structured clone preserves TypedArrays across the
-  // offscreen→service-worker boundary efficiently (no per-element boxing overhead
-  // that Array<number> would incur, which can be 4–8× larger in the JS heap).
-  chrome.runtime.sendMessage({ type: 'AUDIO_DATA', wavBytes: new Uint8Array(wavBuffer) });
+  // WAV を base64 文字列として送る。
+  // Uint8Array / ArrayBuffer をそのまま sendMessage に渡すと、Chrome が
+  // structured-clone で backing ArrayBuffer を転送（detach）し、受信側で
+  // byteLength === 0 になる場合がある（→ サーバーで RIFF ヘッダー読み取りエラー）。
+  // 文字列は必ずコピーされるため安全。Array<number> より約 3 倍コンパクト。
+  chrome.runtime.sendMessage({ type: 'AUDIO_DATA', wavB64: bufferToBase64(wavBuffer) });
 }
 
 // ---------------------------------------------------------------------------
