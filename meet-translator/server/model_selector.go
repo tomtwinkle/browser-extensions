@@ -18,6 +18,11 @@ import (
 	"syscall"
 )
 
+// execBinary はテスト時に差し替え可能な syscall.Exec のラッパー。
+var execBinary = func(path string, argv []string, env []string) error {
+	return syscall.Exec(path, argv, env)
+}
+
 // redirectIfNeeded はモデルスペックに応じて適切なバイナリへ exec する。
 // llamaSpec が空またはファイルパスの場合は何もしない。
 // 注意: この関数は flag.Parse() 後・モデルロード前に呼ぶこと。
@@ -63,7 +68,7 @@ func redirectIfNeeded(llamaSpec string) {
 	}
 
 	log.Printf("[selector] model %q requires %s – redirecting to %s", llamaSpec, binaryDesc(!backendIsPrism), targetPath)
-	if err := syscall.Exec(targetPath, os.Args, os.Environ()); err != nil {
+	if err := execBinary(targetPath, os.Args, os.Environ()); err != nil {
 		log.Fatalf("[selector] exec %s: %v", targetPath, err)
 	}
 }
