@@ -122,14 +122,13 @@ async function checkServerHealth() {
 
 /**
  * POST /transcribe – 音声データを Whisper で文字起こしして返す。
- * @param {number[]} wavBytes - offscreen から送られてきた Array<number>
- * @param {object}  cfg       - getSettings() の結果
- * @returns {Promise<string|null>}
+ * @param {string} wavB64 - base64 エンコードされた WAV データ (offscreen から送られてくる)
+ * @param {object} cfg    - getSettings() の結果
+ * @returns {Promise<{transcription: string|null, detectedLang: string|null}>}
  */
-async function transcribeOnly(wavBytes, cfg) {
-  // Accept both Uint8Array (new path) and Array<number> (legacy fallback).
-  // Blob accepts TypedArrays directly, so avoid an extra ArrayBuffer copy.
-  const audioData = wavBytes instanceof Uint8Array ? wavBytes : new Uint8Array(wavBytes);
+async function transcribeOnly(wavB64, cfg) {
+  // base64 → Uint8Array に変換。文字列は structured-clone で常に正しくコピーされる。
+  const audioData = Uint8Array.from(atob(wavB64), (c) => c.charCodeAt(0));
   const form = new FormData();
   form.append('audio', new Blob([audioData], { type: 'audio/wav' }), 'audio.wav');
   if (cfg.sourceLang) form.append('source_lang', cfg.sourceLang);
@@ -403,7 +402,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // ---- Audio data from the offscreen document -------------------------
     case 'AUDIO_DATA': {
       console.info('[background] AUDIO_DATA received, isActive=', state.isActive,
-        'bytes=', Array.isArray(message.wavBytes) ? message.wavBytes.length : '?');
+        'wav_bytes(approx)=', message.wavB64 ? Math.round(message.wavB64.length * 0.75) : '?');
       if (!state.isActive) {
         console.warn('[background] AUDIO_DATA dropped: capture is not active');
         return false;
@@ -414,7 +413,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           const cfg = await getSettings();
 
           // Step 1: Whisper 文字起こし → チャット投稿 / オーバーレイ（原文）
-          const { transcription, detectedLang } = await transcribeOnly(message.wavBytes, cfg);
+          const { transcription, detectedLang } = await transcribeOnly(message.wavB64, cfg);
           if (!transcription) return;
 
           if (isFillerOnly(transcription)) {
