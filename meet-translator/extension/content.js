@@ -287,6 +287,12 @@ console.log('[Meet Translator] content script loaded on', location.href);
 const OVERLAY_ID       = 'meet-translator-overlay';
 const SUBTITLE_HIDE_MS = 8000; // fixed subtitle: hide after this long with no new text
 
+// Selector for the Google Meet video grid container.
+// The overlay is anchored inside this element so subtitles appear only over
+// the video area.  If the element is not found (DOM change), the overlay
+// falls back to document.body.
+const VIDEO_CONTAINER_SEL = 'div[jscontroller="h8UR3d"]';
+
 // --- Scroll mode constants -------------------------------------------------
 // Number of horizontal lanes distributed vertically across the screen.
 const LANE_COUNT  = 5;
@@ -306,6 +312,10 @@ let lanePointer = 0; // round-robin pointer
 // --- Subtitle mode state --------------------------------------------------
 let subtitleHideTimer = null;
 
+// ResizeObserver that keeps --mt-cw in sync with the video container width.
+// Disconnected in destroyOverlay().
+let containerResizeObserver = null;
+
 /** Inject shared CSS once. */
 function ensureOverlayStyles() {
   if (document.getElementById('meet-translator-overlay-style')) return;
@@ -313,13 +323,14 @@ function ensureOverlayStyles() {
   style.id = 'meet-translator-overlay-style';
   style.textContent = `
     #${OVERLAY_ID} {
-      position: fixed;
+      position: absolute;
       inset: 0;
-      width: 100vw;
-      height: 100vh;
       pointer-events: none;
       z-index: 2147483647;
       overflow: hidden;
+      /* --mt-cw is set dynamically to the video container width.
+         Falls back to 100vw when the overlay is on document.body. */
+      --mt-cw: 100vw;
     }
 
     /* ---- Scroll mode ---- */
@@ -334,7 +345,7 @@ function ensureOverlayStyles() {
     }
     @keyframes mt-scroll {
       from { transform: translateX(0); }
-      to   { transform: translateX(calc(-100vw - 100%)); }
+      to   { transform: translateX(calc(-1 * var(--mt-cw) - 100%)); }
     }
 
     /* ---- Subtitle (fixed) mode ---- */
@@ -343,7 +354,7 @@ function ensureOverlayStyles() {
       bottom: 8%;
       left: 50%;
       transform: translateX(-50%);
-      max-width: 80vw;
+      max-width: 80%;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -382,13 +393,34 @@ function ensureOverlayStyles() {
   document.head.appendChild(style);
 }
 
-/** Get or create the overlay container div. */
+/** Get or create the overlay container div, anchored to the video area. */
 function getOverlayContainer() {
   let el = document.getElementById(OVERLAY_ID);
   if (!el) {
     el = document.createElement('div');
     el.id = OVERLAY_ID;
-    document.body.appendChild(el);
+
+    const videoEl = document.querySelector(VIDEO_CONTAINER_SEL);
+    if (videoEl) {
+      // Ensure the video container establishes a positioning context so that
+      // the overlay's "position: absolute; inset: 0" fills exactly that element.
+      if (getComputedStyle(videoEl).position === 'static') {
+        videoEl.style.position = 'relative';
+      }
+
+      // Initialise the CSS variable and keep it in sync with container resizes.
+      const updateCw = (width) => el.style.setProperty('--mt-cw', `${width}px`);
+      updateCw(videoEl.getBoundingClientRect().width);
+      containerResizeObserver = new ResizeObserver(entries => {
+        updateCw(entries[0].contentRect.width);
+      });
+      containerResizeObserver.observe(videoEl);
+
+      videoEl.appendChild(el);
+    } else {
+      // Fallback: anchor to body (--mt-cw defaults to 100vw via CSS).
+      document.body.appendChild(el);
+    }
   }
   return el;
 }
@@ -397,6 +429,10 @@ function getOverlayContainer() {
 function destroyOverlay() {
   const el = document.getElementById(OVERLAY_ID);
   if (el) el.remove();
+  if (containerResizeObserver) {
+    containerResizeObserver.disconnect();
+    containerResizeObserver = null;
+  }
   laneOccupied.fill(false);
   lanePointer = 0;
   if (subtitleHideTimer) { clearTimeout(subtitleHideTimer); subtitleHideTimer = null; }
