@@ -185,22 +185,33 @@ jobs:
           key: models-v1-${{ runner.os }}-${{ runner.arch }}-whisper-${{ matrix.whisper_model }}-${{ matrix.llama_model }}
 
       # ── テスト用音声ファイルの生成 ─────────────────────────────────────────
-      # Python で 1 秒の無音 WAV を生成する (全ランナーで利用可能)。
+      # Node.js で 1 秒の無音 WAV を生成する (全ランナーで利用可能)。
       # 無音入力では whisper が空文字を返すため llama 翻訳はスキップされる。
       # → 目的はサーバーの起動 (両モデルのロード) と HTTP 応答形式の検証。
       - name: Generate test audio (1s silence, 16kHz mono WAV)
         run: |
-          python3 - <<'PYEOF'
-          import wave, struct, os
-          sample_rate = 16000
-          num_samples = sample_rate
-          with wave.open('test_silence.wav', 'wb') as f:
-              f.setnchannels(1)
-              f.setsampwidth(2)
-              f.setframerate(sample_rate)
-              f.writeframes(struct.pack('<' + 'h' * num_samples, *([0] * num_samples)))
-          print(f"Generated test_silence.wav: {os.path.getsize('test_silence.wav')} bytes")
-          PYEOF
+          node - <<'JSEOF'
+          const fs = require('node:fs');
+          const sampleRate = 16000;
+          const numSamples = sampleRate;
+          const dataBytes = numSamples * 2;
+          const buffer = Buffer.alloc(44 + dataBytes);
+          buffer.write('RIFF', 0, 'ascii');
+          buffer.writeUInt32LE(36 + dataBytes, 4);
+          buffer.write('WAVE', 8, 'ascii');
+          buffer.write('fmt ', 12, 'ascii');
+          buffer.writeUInt32LE(16, 16);
+          buffer.writeUInt16LE(1, 20);
+          buffer.writeUInt16LE(1, 22);
+          buffer.writeUInt32LE(sampleRate, 24);
+          buffer.writeUInt32LE(sampleRate * 2, 28);
+          buffer.writeUInt16LE(2, 32);
+          buffer.writeUInt16LE(16, 34);
+          buffer.write('data', 36, 'ascii');
+          buffer.writeUInt32LE(dataBytes, 40);
+          fs.writeFileSync('test_silence.wav', buffer);
+          console.log(`Generated test_silence.wav: ${fs.statSync('test_silence.wav').size} bytes`);
+          JSEOF
 
       # ── llama モデルの事前ダウンロード ───────────────────────────────────
       # 大きなモデル (例: bonsai-8b ~1.15GB) はダウンロードに時間がかかるため、
@@ -262,12 +273,14 @@ jobs:
         run: |
           curl -sf http://localhost:7070/health -o health.json
           cat health.json
-          python3 -c "
-          import json
-          d = json.load(open('health.json'))
-          assert d.get('status') == 'ok', f'want status=ok, got: {d}'
-          print('PASS: /health returned status=ok')
-          "
+          node - <<'JSEOF'
+          const fs = require('node:fs');
+          const data = JSON.parse(fs.readFileSync('health.json', 'utf8'));
+          if (data.status !== 'ok') {
+            throw new Error(`want status=ok, got: ${JSON.stringify(data)}`);
+          }
+          console.log('PASS: /health returned status=ok');
+          JSEOF
 
       # ── POST /transcribe-and-translate ────────────────────────────────────
       # 無音 WAV を送信 → transcription/translation フィールドを持つ JSON が返ること
@@ -278,15 +291,23 @@ jobs:
             -F "target_lang=ja" \
             -o translate.json
           cat translate.json
-          python3 -c "
-          import json
-          d = json.load(open('translate.json'))
-          assert 'transcription' in d, f'missing transcription field: {d}'
-          assert 'translation' in d, f'missing translation field: {d}'
-          assert isinstance(d['transcription'], str), f'transcription must be string: {d}'
-          assert isinstance(d['translation'], str), f'translation must be string: {d}'
-          print('PASS: /transcribe-and-translate returned valid JSON:', d)
-          "
+          node - <<'JSEOF'
+          const fs = require('node:fs');
+          const data = JSON.parse(fs.readFileSync('translate.json', 'utf8'));
+          if (!Object.hasOwn(data, 'transcription')) {
+            throw new Error(`missing transcription field: ${JSON.stringify(data)}`);
+          }
+          if (!Object.hasOwn(data, 'translation')) {
+            throw new Error(`missing translation field: ${JSON.stringify(data)}`);
+          }
+          if (typeof data.transcription !== 'string') {
+            throw new Error(`transcription must be string: ${JSON.stringify(data)}`);
+          }
+          if (typeof data.translation !== 'string') {
+            throw new Error(`translation must be string: ${JSON.stringify(data)}`);
+          }
+          console.log('PASS: /transcribe-and-translate returned valid JSON:', data);
+          JSEOF
 
       # ── クリーンアップ ────────────────────────────────────────────────────
       - name: Stop server
