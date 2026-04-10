@@ -17,7 +17,10 @@ const {
   stripFillers,
 } = require('../shared.js');
 
-function createWavBase64(samples, { sampleRate = 16000, channels = 1, bitsPerSample = 16 } = {}) {
+function createWavBase64(
+  samples,
+  { sampleRate = 16000, channels = 1, bitsPerSample = 16 } = {}
+) {
   const bytesPerSample = bitsPerSample / 8;
   const dataBytes = samples.length * bytesPerSample;
   const buffer = Buffer.alloc(44 + dataBytes);
@@ -123,7 +126,10 @@ test('mergeWavBase64Chunks concatenates compatible PCM chunks', () => {
   const merged = mergeWavBase64Chunks([first, second]);
 
   assert.deepEqual(readPcmSamples(merged), [0, 1, 2, 3, 4, 5]);
-  assert.equal(getWavDurationMs(merged), getWavDurationMs(first) + getWavDurationMs(second));
+  assert.equal(
+    getWavDurationMs(merged),
+    getWavDurationMs(first) + getWavDurationMs(second)
+  );
 });
 
 test('mergeWavBase64Chunks rejects incompatible WAV formats', () => {

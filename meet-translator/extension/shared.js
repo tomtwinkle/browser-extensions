@@ -4,7 +4,9 @@
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = shared;
   }
-})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+})(
+  typeof globalThis !== 'undefined' ? globalThis : this,
+  function () {
   'use strict';
 
   const LANG_LABELS = {
@@ -24,7 +26,8 @@
   }
 
   function normalizeSpeakerName(name) {
-    const normalized = typeof name === 'string' ? name.replace(/\s+/g, ' ').trim() : '';
+    const normalized =
+      typeof name === 'string' ? name.replace(/\s+/g, ' ').trim() : '';
     return normalized || null;
   }
 
@@ -82,13 +85,19 @@
 
   function isFillerOnly(text) {
     if (!text || !text.trim()) return true;
-    const fillerRe = new RegExp(`^[\\s\\u3000、。,.!?！？…「」]*((?:${fillerTokenPattern})[\\s\\u3000、。,.!?！？…「」]*)+$`, 'iu');
+    const fillerRe = new RegExp(
+      `^[\\s\\u3000、。,.!?！？…「」]*((?:${fillerTokenPattern})[\\s\\u3000、。,.!?！？…「」]*)+$`,
+      'iu'
+    );
     return fillerRe.test(text.trim());
   }
 
   function stripFillers(text) {
     if (!text) return '';
-    const fillerRe = new RegExp(`[\\s\\u3000、。,.!?！？…「」]*(?:${fillerTokenPattern})[\\s\\u3000、。,.!?！？…「」]*`, 'giu');
+    const fillerRe = new RegExp(
+      `[\\s\\u3000、。,.!?！？…「」]*(?:${fillerTokenPattern})[\\s\\u3000、。,.!?！？…「」]*`,
+      'giu'
+    );
     return text.replace(fillerRe, ' ').replace(/\s+/g, ' ').trim();
   }
 
@@ -123,13 +132,17 @@
 
   function decodeBase64(base64) {
     if (typeof atob === 'function') return atob(base64);
-    if (typeof Buffer !== 'undefined') return Buffer.from(base64, 'base64').toString('binary');
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.from(base64, 'base64').toString('binary');
+    }
     throw new Error('base64 decode unavailable');
   }
 
   function encodeBase64(binary) {
     if (typeof btoa === 'function') return btoa(binary);
-    if (typeof Buffer !== 'undefined') return Buffer.from(binary, 'binary').toString('base64');
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.from(binary, 'binary').toString('base64');
+    }
     throw new Error('base64 encode unavailable');
   }
 
@@ -244,4 +257,5 @@
     truncateForDescription,
     uint8ArrayToBase64,
   };
-});
+  }
+);
