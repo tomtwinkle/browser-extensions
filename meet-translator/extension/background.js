@@ -8,6 +8,7 @@
  *  3. Receive raw audio data back from the offscreen document.
  *  4. Run transcribeAndTranslate() – currently a mock – and forward the result
  *     to the content script so it can post the text to the Meet chat.
+ *  5. Accept in-call glossary feedback from the Meet UI and upsert it to the server.
  */
 
 'use strict';
@@ -218,6 +219,27 @@ function formatChatMessage(langCode, text, speakerName) {
   return `[${headerParts.join(' · ')}]\n${text}`;
 }
 
+function normalizeFeedbackText(text) {
+  const normalized = typeof text === 'string' ? text.trim() : '';
+  return normalized || null;
+}
+
+function truncateForDescription(text, maxLen = 80) {
+  if (!text) return null;
+  return text.length > maxLen ? `${text.slice(0, maxLen - 3)}...` : text;
+}
+
+function buildGlossaryFeedbackDescription(feedback) {
+  const parts = ['user-feedback'];
+  const speakerName = normalizeSpeakerName(feedback?.speakerName);
+  const original = truncateForDescription(normalizeFeedbackText(feedback?.original));
+  const translation = truncateForDescription(normalizeFeedbackText(feedback?.translation));
+  if (speakerName) parts.push(`speaker=${speakerName}`);
+  if (original) parts.push(`original=${original}`);
+  if (translation) parts.push(`translation=${translation}`);
+  return parts.join(' | ');
+}
+
 /**
  * content.js へメッセージを送る。
  * 「Receiving end does not exist」の場合は content.js を動的注入してリトライする。
@@ -245,6 +267,53 @@ async function getActiveSpeaker(tabId) {
   if (!tabId) return null;
   const response = await sendToContentScript(tabId, { type: 'GET_ACTIVE_SPEAKER' });
   return normalizeSpeakerName(response?.speakerName);
+}
+
+async function pushFeedbackContext(tabId, context) {
+  if (!tabId) return null;
+  return sendToContentScript(tabId, {
+    type: 'UPDATE_FEEDBACK_CONTEXT',
+    original: context.original || null,
+    translation: context.translation || null,
+    speakerName: context.speakerName || null,
+  });
+}
+
+async function submitGlossaryFeedback(feedback) {
+  const kind = feedback?.kind;
+  const source = normalizeFeedbackText(feedback?.source);
+  const target = normalizeFeedbackText(feedback?.target);
+  if (!source || !target) {
+    throw new Error('source and target are required');
+  }
+
+  let path;
+  switch (kind) {
+    case 'correction':
+      path = '/glossary/corrections';
+      break;
+    case 'term':
+      path = '/glossary/terms';
+      break;
+    default:
+      throw new Error(`unknown feedback kind: ${String(kind)}`);
+  }
+
+  const cfg = await getSettings();
+  const res = await fetch(`${cfg.serverUrl}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      source,
+      target,
+      description: buildGlossaryFeedbackDescription(feedback),
+    }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`server error ${res.status}: ${detail}`);
+  }
+  return res.json().catch(() => ({ status: 'ok' }));
 }
 
 // ---------------------------------------------------------------------------
@@ -411,6 +480,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       })();
       return true; // 非同期レスポンスのためチャネルを維持
 
+    case 'SUBMIT_GLOSSARY_FEEDBACK':
+      submitGlossaryFeedback(message.feedback)
+        .then(() => sendResponse({ success: true }))
+        .catch((err) => sendResponse({ success: false, error: err.message }));
+      return true;
+
     // ---- Log bridge from offscreen document -----------------------------
     case 'OFFSCREEN_LOG': {
       const fn = console[message.level] ?? console.info;
@@ -442,6 +517,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           }
 
           console.info('[background] transcription:', transcription.slice(0, 100));
+          await pushFeedbackContext(tabId, {
+            original: transcription,
+            translation: null,
+            speakerName,
+          });
 
           // 双方向翻訳: Whisper 検出言語を優先し、未取得時は文字種フォールバック
           let translSourceLang = cfg.sourceLang;
@@ -491,6 +571,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           if (!translation) return;
 
           console.info('[background] translation:', translation.slice(0, 100));
+          await pushFeedbackContext(tabId, {
+            original: transcription,
+            translation,
+            speakerName,
+          });
 
           // チャット: 翻訳投稿
           if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'transcription') {

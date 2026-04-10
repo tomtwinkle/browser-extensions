@@ -299,6 +299,8 @@ curl -X POST http://localhost:7070/glossary/learn \
   -d '{"kind":"correction","source":"get hub","target":"GitHub"}'
 ```
 
+The Meet UI also exposes a small **dictionary feedback** widget that sends the same glossary updates without leaving the call.
+
 ### Hot reload
 
 `glossary.json` can be edited in any text editor.
@@ -431,6 +433,7 @@ Click the extension icon → **⚙ Settings** and configure:
 3. Audio capture begins and translated text is posted to chat approximately every 5 seconds
    - Silent intervals are skipped by VAD, which also adapts to the session noise floor to suppress low-SNR / non-speech chunks
    - When Meet highlights the current speaker, their display name is prefixed in chat and overlay output
+   - Use the in-call **dictionary feedback** button on the Meet screen to register misheard words or incorrect translated terms into the glossary immediately
    - The chat panel is opened automatically if it is closed
 4. Press **"Stop Auto-Translate Chat"** to stop
 
