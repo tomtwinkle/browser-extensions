@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestIsMeaningfulTranscription(t *testing.T) {
 	tests := []struct {
@@ -45,6 +48,7 @@ func TestIsRepeatTranscription(t *testing.T) {
 	history := []contextEntry{
 		{Transcription: "Hello everyone.", Translation: "皆さんこんにちは。"},
 		{Transcription: "Good morning.", Translation: "おはようございます。"},
+		{Transcription: "Let's move on to the next topic.", Translation: "次の議題に移りましょう。"},
 	}
 
 	tests := []struct {
@@ -59,6 +63,10 @@ func TestIsRepeatTranscription(t *testing.T) {
 		{"partial overlap is not dup", "Hello", false},
 		{"empty input", "", false},
 		{"second entry match", "Good morning.", true},
+		{"history loop replay", "Let's move on to the next topic. Let's move on to the next topic.", true},
+		{"long micro loop", strings.Repeat("Project update starts now. ", 3), true},
+		{"short repeated emphasis allowed", "yes yes yes yes", false},
+		{"repeated word in normal sentence", "This is very very important.", false},
 	}
 
 	for _, tt := range tests {
@@ -71,9 +79,15 @@ func TestIsRepeatTranscription(t *testing.T) {
 	}
 }
 
+func TestIsRepeatTranscription_MicroLoopWithoutHistory(t *testing.T) {
+	if !isRepeatTranscription(strings.Repeat("Project update starts now. ", 3), nil) {
+		t.Error("long micro-loop should be filtered even without history")
+	}
+}
+
 func TestIsRepeatTranscription_EmptyHistory(t *testing.T) {
 	if isRepeatTranscription("hello", nil) {
-		t.Error("empty history should never match")
+		t.Error("plain non-loop text should not match with empty history")
 	}
 }
 

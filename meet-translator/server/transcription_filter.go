@@ -8,7 +8,7 @@ package main
 //
 // このファイルでは 3 種類のフィルターを提供する:
 //  1. isMeaningfulTranscription  – ノイズアノテーション除去 + 最小文字数チェック
-//  2. isRepeatTranscription      – 直近発話との重複検出
+//  2. isRepeatTranscription      – 直近発話との重複 / 反復ループ検出
 //  3. isKnownHallucination       – 既知ハルシネーションフレーズのブロックリスト
 
 import (
@@ -27,15 +27,27 @@ var noiseTokenRe = regexp.MustCompile(
 	`[\(（].*?[\)）]|[\[【].*?[\]】]|[♪♫♬🎵🎶]`,
 )
 
-// minMeaningfulRunes は「有意な発話」とみなすための最小文字数。
-const minMeaningfulRunes = 2
+const (
+	// minMeaningfulRunes は「有意な発話」とみなすための最小文字数。
+	minMeaningfulRunes = 2
+
+	// 長時間セッションで発生しやすい「同じフレーズのループ再生」を低リスクで弾く閾値。
+	// 短い単位は 4 回以上、十分に長い単位は 3 回以上の完全反復のみを hallucination とみなす。
+	minLoopUnitRunes      = 4
+	minLoopRepeats        = 4
+	minLongLoopUnitRunes  = 8
+	minLongLoopRepeats    = 3
+	minHistoryLoopRunes   = 8
+	minHistoryLoopRepeats = 2
+)
 
 // ── ブロックリスト ──────────────────────────────────────────────────────────
 
 // hallucinationExactPhrases は正規化後に完全一致でフィルタするフレーズ一覧。
 //
 // 選定基準: ビジネスミーティングでは通常発生しない
-//           YouTube/放送コンテンツ特有の締め言葉・字幕クレジット・システム通知。
+//
+//	YouTube/放送コンテンツ特有の締め言葉・字幕クレジット・システム通知。
 //
 // 参照:
 //   - https://github.com/openai/whisper/discussions/1873
@@ -100,7 +112,8 @@ var hallucinationExactPhrases = []string{
 // hallucinationSubstrings は正規化後に部分一致でフィルタするパターン一覧。
 //
 // 選定基準: ビジネスミーティングでは「絶対に」使われない固有表現。
-//           サブストリングとして含むだけでハルシネーションと断定できるもの。
+//
+//	サブストリングとして含むだけでハルシネーションと断定できるもの。
 var hallucinationSubstrings = []string{
 	// "ご視聴" は YouTube アウトロ特有; ビジネスMTGには登場しない
 	"ご視聴",
@@ -133,6 +146,74 @@ func normalizeForDedup(s string) string {
 	return b.String()
 }
 
+func runeSlicesEqual(a, b []rune) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// isRepeatedNormalizedUnit は norm が unit の完全反復で構成されているかを判定する。
+func isRepeatedNormalizedUnit(norm, unit string, minUnitRunes, minRepeats int) bool {
+	if norm == "" || unit == "" {
+		return false
+	}
+	normRunes := []rune(norm)
+	unitRunes := []rune(unit)
+	if len(unitRunes) < minUnitRunes || len(normRunes) < len(unitRunes)*minRepeats {
+		return false
+	}
+	if len(normRunes)%len(unitRunes) != 0 {
+		return false
+	}
+	repeats := len(normRunes) / len(unitRunes)
+	if repeats < minRepeats {
+		return false
+	}
+	for start := 0; start < len(normRunes); start += len(unitRunes) {
+		if !runeSlicesEqual(normRunes[start:start+len(unitRunes)], unitRunes) {
+			return false
+		}
+	}
+	return true
+}
+
+// isRepeatedNormalizedPattern は norm 全体が短い単位の反復で構成されるかを判定する。
+// Whisper が長時間セッションで陥る「同一句の無限ループ」検出に使用する。
+func isRepeatedNormalizedPattern(norm string, minUnitRunes, minRepeats int) bool {
+	normRunes := []rune(norm)
+	total := len(normRunes)
+	if total < minUnitRunes*minRepeats {
+		return false
+	}
+	for unitLen := minUnitRunes; unitLen <= total/minRepeats; unitLen++ {
+		if total%unitLen != 0 {
+			continue
+		}
+		repeats := total / unitLen
+		if repeats < minRepeats {
+			continue
+		}
+		unit := normRunes[:unitLen]
+		match := true
+		for start := unitLen; start < total; start += unitLen {
+			if !runeSlicesEqual(normRunes[start:start+unitLen], unit) {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
 // isKnownHallucination は text が Whisper の既知ハルシネーションフレーズかどうかを判定する。
 //
 // 判定ロジック:
@@ -156,15 +237,25 @@ func isKnownHallucination(text string) bool {
 	return false
 }
 
-// isRepeatTranscription は text が直近の発話履歴と実質同一かどうかを判定する。
-// Whisper が initial_prompt なしでも過去発話を幻覚再生した場合を検出する。
+// isRepeatTranscription は text が直近の発話履歴と実質同一、または
+// 反復ループ状の hallucination かどうかを判定する。
+// Whisper が initial_prompt なしでも過去発話を幻覚再生した場合や、
+// 長時間セッションで同一句を連打する場合を検出する。
 func isRepeatTranscription(text string, history []contextEntry) bool {
 	norm := normalizeForDedup(text)
 	if norm == "" {
 		return false
 	}
+	if isRepeatedNormalizedPattern(norm, minLongLoopUnitRunes, minLongLoopRepeats) ||
+		isRepeatedNormalizedPattern(norm, minLoopUnitRunes, minLoopRepeats) {
+		return true
+	}
 	for _, e := range history {
-		if normalizeForDedup(e.Transcription) == norm {
+		histNorm := normalizeForDedup(e.Transcription)
+		if histNorm == norm {
+			return true
+		}
+		if isRepeatedNormalizedUnit(norm, histNorm, minHistoryLoopRunes, minHistoryLoopRepeats) {
 			return true
 		}
 	}
