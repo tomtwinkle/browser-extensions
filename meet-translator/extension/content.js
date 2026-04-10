@@ -616,8 +616,9 @@ function ensureOverlayStyles() {
       right: -100%;
       display: inline-flex;
       flex-direction: column;
-      align-items: flex-start;
+      align-items: stretch;
       gap: 2px;
+      max-width: min(calc(var(--mt-cw) - 32px), 72vw);
       animation: mt-scroll linear forwards;
     }
     @keyframes mt-scroll {
@@ -631,10 +632,10 @@ function ensureOverlayStyles() {
       bottom: 8%;
       left: 50%;
       transform: translateX(-50%);
-      max-width: 80%;
+      max-width: min(calc(var(--mt-cw) - 32px), 80%);
       display: flex;
       flex-direction: column;
-      align-items: center;
+      align-items: stretch;
       gap: 4px;
       padding: 8px 16px;
       background: rgba(0, 0, 0, 0.55);
@@ -647,34 +648,56 @@ function ensureOverlayStyles() {
 
     /* ---- Shared text styles ---- */
     .mt-speaker {
+      display: block;
+      max-width: 100%;
       font-size: 13px;
       font-weight: 700;
       color: #b9d6ff;
       text-shadow:
         1px  1px 3px rgba(0,0,0,0.9),
-       -1px -1px 3px rgba(0,0,0,0.9);
-      white-space: nowrap;
+        -1px -1px 3px rgba(0,0,0,0.9);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
       line-height: 1.2;
     }
     .mt-original {
+      display: block;
+      max-width: 100%;
       font-size: 18px;
       font-weight: 600;
       color: #e8e8e8;
       text-shadow:
         1px  1px 3px rgba(0,0,0,0.9),
-       -1px -1px 3px rgba(0,0,0,0.9);
-      white-space: nowrap;
+        -1px -1px 3px rgba(0,0,0,0.9);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
       line-height: 1.3;
     }
     .mt-translation {
+      display: block;
+      max-width: 100%;
       font-size: 22px;
       font-weight: 700;
       color: #ffe066;
       text-shadow:
         1px  1px 3px rgba(0,0,0,0.9),
-       -1px -1px 3px rgba(0,0,0,0.9);
-      white-space: nowrap;
+        -1px -1px 3px rgba(0,0,0,0.9);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
       line-height: 1.3;
+    }
+    #mt-subtitle-panel .mt-speaker,
+    #mt-subtitle-panel .mt-original,
+    #mt-subtitle-panel .mt-translation {
+      text-align: center;
+    }
+    .mt-entry .mt-speaker,
+    .mt-entry .mt-original,
+    .mt-entry .mt-translation {
+      text-align: left;
     }
   `;
   document.head.appendChild(style);
