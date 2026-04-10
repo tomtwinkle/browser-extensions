@@ -4,7 +4,8 @@
  * Responsibilities:
  *  1. Listen for POST_TRANSLATION messages from the background worker.
  *  2. Locate the Google Meet chat textarea and send button in the DOM.
- *  3. Programmatically fill the input and submit the message.
+ *  3. Detect the currently highlighted speaker in the Meet DOM.
+ *  4. Programmatically fill the input and submit the message.
  *
  * DOM selector notes
  * ------------------
@@ -89,6 +90,11 @@ const SEL = {
   ].join(', '),
 };
 
+const SPEAKER_TILE_SEL = 'div[jscontroller="gu0YGc"]';
+const ACTIVE_SPEAKER_BORDER_SEL = '.tC2Wod.fdKMD';
+const ACTIVE_SPEAKER_GLOW_SEL = `${ACTIVE_SPEAKER_BORDER_SEL}.v5h6Xc`;
+const ACTIVE_SPEAKER_VISIBLE_SEL = `${ACTIVE_SPEAKER_BORDER_SEL}.kssMZb`;
+
 // ---------------------------------------------------------------------------
 // Helper: check element visibility (not hidden, not zero-size)
 // ---------------------------------------------------------------------------
@@ -111,6 +117,75 @@ function isElementVisible(el) {
 // ---------------------------------------------------------------------------
 function isEmbeddedChatMode() {
   return !!document.querySelector('iframe[src*="chat.google.com"]');
+}
+
+// ---------------------------------------------------------------------------
+// Helper: detect the active speaker tile in the Meet main frame
+// ---------------------------------------------------------------------------
+function normalizeSpeakerName(name) {
+  return name ? name.replace(/\s+/g, ' ').trim() : '';
+}
+
+function parseSpeakerNameFromAriaLabel(label) {
+  const normalized = normalizeSpeakerName(label);
+  if (!normalized) return null;
+
+  const patterns = [
+    /^メイン画面の (.+?) さんの共有画面の固定を解除します$/,
+    /^(.+?) さんをメイン画面に固定します$/,
+    /^(.+?) さんの共有画面をミュート$/,
+    /^(.+?) さんのマイクをミュート$/,
+    /^Pin (.+?) to the main screen$/i,
+    /^Unpin (.+?) from the main screen$/i,
+    /^Mute (.+?)(?:['’]s)? microphone$/i,
+    /^Mute (.+?)(?:['’]s)? screen share$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (match) return normalizeSpeakerName(match[1]);
+  }
+  return null;
+}
+
+function extractSpeakerNameFromTile(tile) {
+  if (!tile) return null;
+
+  const seen = new Set();
+  for (const el of tile.querySelectorAll('[aria-label]')) {
+    const label = normalizeSpeakerName(el.getAttribute('aria-label'));
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+
+    const parsed = parseSpeakerNameFromAriaLabel(label);
+    if (parsed) return parsed;
+  }
+
+  const textFallbacks = [
+    tile.querySelector('.P245vb')?.textContent,
+    tile.querySelector('[jsname="YQuObe"]')?.textContent,
+  ];
+  for (const text of textFallbacks) {
+    const candidate = normalizeSpeakerName(text);
+    if (candidate && !/(固定|ミュート|History|履歴)/i.test(candidate)) return candidate;
+  }
+
+  return null;
+}
+
+function findActiveSpeakerTile() {
+  for (const selector of [ACTIVE_SPEAKER_GLOW_SEL, ACTIVE_SPEAKER_VISIBLE_SEL]) {
+    for (const border of document.querySelectorAll(selector)) {
+      if (!isElementVisible(border)) continue;
+      const tile = border.closest(SPEAKER_TILE_SEL);
+      if (tile) return tile;
+    }
+  }
+  return null;
+}
+
+function getActiveSpeakerName() {
+  if (location.hostname !== 'meet.google.com' || window !== window.top) return null;
+  return extractSpeakerNameFromTile(findActiveSpeakerTile());
 }
 
 // ---------------------------------------------------------------------------
@@ -234,6 +309,12 @@ async function postToChat(text) {
 // ---------------------------------------------------------------------------
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   switch (message.type) {
+    case 'GET_ACTIVE_SPEAKER':
+      if (location.hostname === 'meet.google.com' && window === window.top) {
+        sendResponse({ speakerName: getActiveSpeakerName() });
+      }
+      return false;
+
     case 'POST_TRANSLATION': {
       // With all_frames:true, this script runs in both the meet.google.com
       // main frame AND the chat.google.com iframe.
@@ -268,7 +349,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     case 'SHOW_OVERLAY':
       // Only the meet.google.com top frame renders the overlay.
       if (location.hostname === 'meet.google.com' && window === window.top) {
-        showOverlay(message.original, message.translation, message.scroll);
+        showOverlay(message.original, message.translation, message.scroll, message.speakerName || null);
       }
       sendResponse({ success: true });
       return false;
@@ -386,6 +467,16 @@ function ensureOverlayStyles() {
     }
 
     /* ---- Shared text styles ---- */
+    .mt-speaker {
+      font-size: 13px;
+      font-weight: 700;
+      color: #b9d6ff;
+      text-shadow:
+        1px  1px 3px rgba(0,0,0,0.9),
+       -1px -1px 3px rgba(0,0,0,0.9);
+      white-space: nowrap;
+      line-height: 1.2;
+    }
     .mt-original {
       font-size: 18px;
       font-weight: 600;
@@ -474,11 +565,16 @@ function makeTextSpan(text, cssClass) {
   return span;
 }
 
+function makeSpeakerSpan(speakerName) {
+  if (!speakerName) return null;
+  return makeTextSpan(speakerName, 'mt-speaker');
+}
+
 /**
  * Show overlay in fixed subtitle mode (default).
  * Content is replaced with each new utterance and auto-hides after SUBTITLE_HIDE_MS.
  */
-function showSubtitle(original, translation) {
+function showSubtitle(original, translation, speakerName) {
   const container = getOverlayContainer();
 
   let panel = document.getElementById('mt-subtitle-panel');
@@ -490,6 +586,8 @@ function showSubtitle(original, translation) {
 
   // Replace content
   panel.innerHTML = '';
+  const speaker = makeSpeakerSpan(speakerName);
+  if (speaker) panel.appendChild(speaker);
   if (original)    panel.appendChild(makeTextSpan(original,    'mt-original'));
   if (translation) panel.appendChild(makeTextSpan(translation, 'mt-translation'));
 
@@ -508,14 +606,14 @@ function showSubtitle(original, translation) {
  * Show overlay in Niconico scroll mode.
  * Each utterance spawns a new entry that scrolls right→left.
  */
-function showScrolling(original, translation) {
+function showScrolling(original, translation, speakerName) {
   const container = getOverlayContainer();
 
   const lane     = pickLane();
   const laneStep = (1 - LANE_MARGIN * 2) / (LANE_COUNT - 1);
   const topPct   = (LANE_MARGIN + laneStep * lane) * 100;
 
-  const maxLen   = Math.max(original?.length ?? 0, translation?.length ?? 0);
+  const maxLen   = Math.max(original?.length ?? 0, translation?.length ?? 0, speakerName?.length ?? 0);
   const duration = BASE_SCROLL_MS + maxLen * MS_PER_CHAR;
 
   const entry = document.createElement('div');
@@ -523,6 +621,8 @@ function showScrolling(original, translation) {
   entry.style.top               = `${topPct}%`;
   entry.style.animationDuration = `${duration}ms`;
 
+  const speaker = makeSpeakerSpan(speakerName);
+  if (speaker) entry.appendChild(speaker);
   if (original)    entry.appendChild(makeTextSpan(original,    'mt-original'));
   if (translation) entry.appendChild(makeTextSpan(translation, 'mt-translation'));
 
@@ -542,13 +642,14 @@ function showScrolling(original, translation) {
  * @param {string|null} original
  * @param {string|null} translation
  * @param {boolean} scroll
+ * @param {string|null} speakerName
  */
-function showOverlay(original, translation, scroll) {
+function showOverlay(original, translation, scroll, speakerName) {
   if (!original && !translation) return;
   ensureOverlayStyles();
   if (scroll) {
-    showScrolling(original, translation);
+    showScrolling(original, translation, speakerName);
   } else {
-    showSubtitle(original, translation);
+    showSubtitle(original, translation, speakerName);
   }
 }

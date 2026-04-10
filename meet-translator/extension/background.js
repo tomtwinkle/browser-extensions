@@ -205,6 +205,19 @@ function stripFillers(text) {
   return text.replace(FILLER_RE, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeSpeakerName(name) {
+  const normalized = typeof name === 'string' ? name.replace(/\s+/g, ' ').trim() : '';
+  return normalized || null;
+}
+
+function formatChatMessage(langCode, text, speakerName) {
+  const headerParts = [];
+  const normalizedSpeaker = normalizeSpeakerName(speakerName);
+  if (normalizedSpeaker) headerParts.push(normalizedSpeaker);
+  headerParts.push(langLabel(langCode));
+  return `[${headerParts.join(' · ')}]\n${text}`;
+}
+
 /**
  * content.js へメッセージを送る。
  * 「Receiving end does not exist」の場合は content.js を動的注入してリトライする。
@@ -226,6 +239,12 @@ async function sendToContentScript(tabId, message) {
       return null;
     }
   }
+}
+
+async function getActiveSpeaker(tabId) {
+  if (!tabId) return null;
+  const response = await sendToContentScript(tabId, { type: 'GET_ACTIVE_SPEAKER' });
+  return normalizeSpeakerName(response?.speakerName);
 }
 
 // ---------------------------------------------------------------------------
@@ -411,6 +430,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       (async () => {
         try {
           const cfg = await getSettings();
+          const speakerName = await getActiveSpeaker(tabId);
 
           // Step 1: Whisper 文字起こし → チャット投稿 / オーバーレイ（原文）
           const { transcription, detectedLang } = await transcribeOnly(message.wavB64, cfg);
@@ -440,7 +460,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'translation') {
             await sendToContentScript(tabId, {
               type: 'POST_TRANSLATION',
-              text: `[${langLabel(translSourceLang || cfg.sourceLang)}]\n${transcription}`,
+              text: formatChatMessage(translSourceLang || cfg.sourceLang, transcription, speakerName),
             });
           }
 
@@ -460,6 +480,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
                 original:    transcription,
                 translation: null,
                 scroll:      cfg.overlayScroll,
+                speakerName,
               });
             }
             return;
@@ -475,7 +496,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'transcription') {
             await sendToContentScript(tabId, {
               type: 'POST_TRANSLATION',
-              text: `[${langLabel(translTargetLang)}]\n${translation}`,
+              text: formatChatMessage(translTargetLang, translation, speakerName),
             });
           }
 
@@ -486,6 +507,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
               original:    cfg.overlayFormat !== 'translation'   ? transcription : null,
               translation: cfg.overlayFormat !== 'transcription' ? translation   : null,
               scroll:      cfg.overlayScroll,
+              speakerName,
             });
           }
         } catch (err) {
