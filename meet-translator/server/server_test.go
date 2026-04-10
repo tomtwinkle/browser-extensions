@@ -66,6 +66,11 @@ func newTestServer(t *testing.T, m mockFuncs) *server {
 // buildAudioForm は /transcribe-and-translate 用の multipart リクエストを組み立てる。
 func buildAudioForm(t *testing.T, fields map[string]string, audioData []byte) *http.Request {
 	t.Helper()
+	return buildAudioFormForPath(t, "/transcribe-and-translate", fields, audioData)
+}
+
+func buildAudioFormForPath(t *testing.T, path string, fields map[string]string, audioData []byte) *http.Request {
+	t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 
@@ -82,7 +87,7 @@ func buildAudioForm(t *testing.T, fields map[string]string, audioData []byte) *h
 	}
 	mw.Close()
 
-	req := httptest.NewRequest(http.MethodPost, "/transcribe-and-translate", &buf)
+	req := httptest.NewRequest(http.MethodPost, path, &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	return req
 }
@@ -375,6 +380,62 @@ func TestHandleTranscribeAndTranslate_RepeatFiltered(t *testing.T) {
 	if resp["transcription"] != "" || resp["translation"] != "" {
 		t.Errorf("repeated transcription should be filtered, got transcription=%q translation=%q",
 			resp["transcription"], resp["translation"])
+	}
+}
+
+func TestHandleTranscribeAndTranslate_RepeatedHistoryLoopFiltered(t *testing.T) {
+	translateCalled := false
+	phrase := "Let's move on to the next topic."
+	s := newTestServer(t, mockFuncs{
+		transcribe: func(_ []byte, _ string) (string, string, error) {
+			return phrase + " " + phrase, "", nil
+		},
+		translate: func(string, string, string, ModelOptions, []contextEntry) (string, error) {
+			translateCalled = true
+			return "should not translate", nil
+		},
+	})
+	s.contextBuf.Add(contextEntry{Transcription: phrase, Translation: "次の議題に移りましょう"})
+
+	req := buildAudioForm(t, nil, fakeWAV)
+	w := httptest.NewRecorder()
+	s.handleTranscribeAndTranslate(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["transcription"] != "" || resp["translation"] != "" {
+		t.Errorf("looped replay should be filtered, got transcription=%q translation=%q",
+			resp["transcription"], resp["translation"])
+	}
+	if translateCalled {
+		t.Error("translation should not be called for filtered loop hallucination")
+	}
+	if got := len(s.contextBuf.Entries()); got != 1 {
+		t.Errorf("filtered loop should not be added to context buffer, got %d entries", got)
+	}
+}
+
+func TestHandleTranscribe_MicroLoopFiltered(t *testing.T) {
+	s := newTestServer(t, mockFuncs{
+		transcribe: func(_ []byte, _ string) (string, string, error) {
+			return strings.Repeat("Project update starts now. ", 3), "", nil
+		},
+	})
+
+	req := buildAudioFormForPath(t, "/transcribe", nil, fakeWAV)
+	w := httptest.NewRecorder()
+	s.handleTranscribe(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["transcription"] != "" {
+		t.Errorf("micro-loop transcription should be filtered, got %q", resp["transcription"])
 	}
 }
 

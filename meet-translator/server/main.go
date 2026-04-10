@@ -421,7 +421,7 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
 		return
 	}
-	// 直近の発話と実質同一なら Whisper hallucination とみなして破棄する
+	// 直近発話の再生や文中ループを Whisper hallucination とみなして破棄する
 	if isRepeatTranscription(transcription, s.contextBuf.Entries()) {
 		s.logVerbose("transcription filtered (repeat/hallucination): %q", transcription)
 		writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
@@ -519,7 +519,7 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"transcription": ""})
 		return
 	}
-	// 直近の発話と実質同一なら Whisper hallucination とみなして破棄する
+	// 直近発話の再生や文中ループを Whisper hallucination とみなして破棄する
 	if isRepeatTranscription(transcription, s.contextBuf.Entries()) {
 		s.logVerbose("transcription filtered (repeat/hallucination): %q", transcription)
 		writeJSON(w, http.StatusOK, map[string]string{"transcription": ""})
