@@ -429,7 +429,7 @@ Click the extension icon → **⚙ Settings** and configure:
 1. Join a meeting at `https://meet.google.com/`
 2. Click the extension icon and press **"Start Auto-Translate Chat"**
 3. Audio capture begins and translated text is posted to chat approximately every 5 seconds
-   - Silent intervals are skipped by VAD to avoid unnecessary inference
+   - Silent intervals are skipped by VAD, which also adapts to the session noise floor to suppress low-SNR / non-speech chunks
    - The chat panel is opened automatically if it is closed
 4. Press **"Stop Auto-Translate Chat"** to stop
 

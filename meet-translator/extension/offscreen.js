@@ -35,11 +35,35 @@ bgLog('info', 'script loaded');
 // but slow down detection of actual speech onset.
 const RMS_EMA_ALPHA = 0.5;
 
-// Smoothed RMS above this triggers the confirmation phase.
+// Minimum smoothed RMS above this triggers the confirmation phase.
+// Adaptive logic may raise the effective threshold when the session noise floor climbs.
 const SPEECH_RMS_THRESHOLD = 3e-3;
 
-// Smoothed RMS below this while SPEAKING counts as silence (hysteresis).
+// Minimum smoothed RMS below this while SPEAKING counts as silence (hysteresis).
+// Adaptive logic may raise the effective threshold when the session noise floor climbs.
 const SILENCE_RMS_THRESHOLD = 8e-4;
+
+// Slow running estimate of the session noise floor. Update it only during
+// clearly quiet stretches so sustained speech does not poison the baseline.
+const NOISE_FLOOR_RISE_ALPHA = 0.05;
+const NOISE_FLOOR_FALL_ALPHA = 0.01;
+const NOISE_FLOOR_UPDATE_GATE = 0.75;
+const MIN_NOISE_FLOOR_RMS = 1e-4;
+
+// Require speech to clear the current noise floor by both a ratio and a small
+// absolute margin. This helps suppress HVAC hum / fan noise / AGC drift during
+// long meetings without making quiet rooms harder to capture.
+const SPEECH_TO_NOISE_RATIO = 1.8;
+const SPEECH_TO_NOISE_MARGIN = 8e-4;
+
+// Let the silence threshold follow the noise floor more gently than the speech
+// start threshold so natural within-speech dips still survive.
+const SILENCE_TO_NOISE_RATIO = 1.25;
+
+// Drop utterances whose active speech energy never separated enough from the
+// captured noise floor. This keeps very low-SNR chunks away from Whisper.
+const MIN_ACTIVE_SPEECH_TO_NOISE_RATIO = 1.35;
+const MIN_PEAK_SPEECH_TO_NOISE_RATIO = 1.8;
 
 // How many milliseconds of continuous above-threshold audio must be observed
 // before the state machine transitions CONFIRMING → SPEAKING.
@@ -68,14 +92,14 @@ let micStream     = null;   // microphone MediaStream
 // VAD state machine
 // States: 'SILENCE' | 'CONFIRMING' | 'SPEAKING'
 //
-//  SILENCE ──(RMS > SPEECH_RMS_THRESHOLD)──► CONFIRMING
+//  SILENCE ──(RMS > speechStartThreshold)──► CONFIRMING
 //              │                                │
-//              │  (RMS drops / timout)          │ (confirmMs >= SPEECH_CONFIRM_MS)
+//              │  (RMS drops / timeout)         │ (confirmMs >= SPEECH_CONFIRM_MS)
 //              ◄────────────────────────────────┤
 //                                               ▼
 //                                           SPEAKING
 //                                               │
-//                              (silenceMs >= SILENCE_AFTER_SPEECH_MS)
+//                 (RMS < silenceThreshold for SILENCE_AFTER_SPEECH_MS)
 //                                               ▼
 //                                           SILENCE
 //
@@ -86,6 +110,11 @@ let silenceMs  = 0;        // accumulated silence while SPEAKING
 let speechMs   = 0;        // accumulated speech duration for current utterance
 let confirmMs  = 0;        // accumulated above-threshold time while CONFIRMING
 let smoothedRms = 0;       // exponential moving average of RMS
+let noiseFloorRms = 0;     // slow-running baseline noise estimate
+let speechActiveRmsSum = 0;
+let speechActiveChunks = 0;
+let speechPeakRms = 0;
+let speechNoiseFloorRms = 0;
 
 // ---------------------------------------------------------------------------
 // WAV encoder  (PCM 16-bit, mono)
@@ -145,6 +174,129 @@ function calcRmsChunk(data) {
   return data.length > 0 ? Math.sqrt(sumSq / data.length) : 0;
 }
 
+function updateNoiseFloor(rms) {
+  const clampedRms = Math.max(rms, MIN_NOISE_FLOOR_RMS);
+  if (noiseFloorRms === 0) {
+    noiseFloorRms = clampedRms;
+    return;
+  }
+  const alpha = clampedRms > noiseFloorRms ? NOISE_FLOOR_RISE_ALPHA : NOISE_FLOOR_FALL_ALPHA;
+  noiseFloorRms = alpha * clampedRms + (1 - alpha) * noiseFloorRms;
+}
+
+function getSpeechStartThreshold() {
+  return Math.max(
+    SPEECH_RMS_THRESHOLD,
+    noiseFloorRms * SPEECH_TO_NOISE_RATIO,
+    noiseFloorRms + SPEECH_TO_NOISE_MARGIN
+  );
+}
+
+function getSilenceThreshold() {
+  return Math.max(
+    SILENCE_RMS_THRESHOLD,
+    noiseFloorRms * SILENCE_TO_NOISE_RATIO
+  );
+}
+
+function resetSpeechState() {
+  speechSamples = [];
+  silenceMs = 0;
+  speechMs = 0;
+  speechActiveRmsSum = 0;
+  speechActiveChunks = 0;
+  speechPeakRms = 0;
+  speechNoiseFloorRms = 0;
+}
+
+function trackSpeechChunkRms(rms, silenceThreshold) {
+  speechPeakRms = Math.max(speechPeakRms, rms);
+  if (rms >= silenceThreshold) {
+    speechActiveRmsSum += rms;
+    speechActiveChunks += 1;
+  }
+}
+
+function initializeSpeechTracking(silenceThreshold) {
+  speechActiveRmsSum = 0;
+  speechActiveChunks = 0;
+  speechPeakRms = 0;
+  speechNoiseFloorRms = noiseFloorRms;
+  for (const chunk of speechSamples) {
+    trackSpeechChunkRms(calcRmsChunk(chunk), silenceThreshold);
+  }
+}
+
+function evaluateSpeechForFlush() {
+  const baselineNoise = Math.max(speechNoiseFloorRms, MIN_NOISE_FLOOR_RMS);
+  const avgActiveRms = speechActiveChunks > 0 ? speechActiveRmsSum / speechActiveChunks : 0;
+  const minAvgActiveRms = Math.max(SILENCE_RMS_THRESHOLD, baselineNoise * MIN_ACTIVE_SPEECH_TO_NOISE_RATIO);
+  const minPeakRms = Math.max(SPEECH_RMS_THRESHOLD, baselineNoise * MIN_PEAK_SPEECH_TO_NOISE_RATIO);
+
+  if (speechMs < MIN_SPEECH_DURATION_MS) {
+    return {
+      shouldFlush: false,
+      reason: 'utterance too short',
+      baselineNoise,
+      avgActiveRms,
+      minAvgActiveRms,
+      minPeakRms,
+    };
+  }
+  if (speechPeakRms < minPeakRms) {
+    return {
+      shouldFlush: false,
+      reason: 'peak RMS too close to noise floor',
+      baselineNoise,
+      avgActiveRms,
+      minAvgActiveRms,
+      minPeakRms,
+    };
+  }
+  if (avgActiveRms < minAvgActiveRms) {
+    return {
+      shouldFlush: false,
+      reason: 'average RMS too close to noise floor',
+      baselineNoise,
+      avgActiveRms,
+      minAvgActiveRms,
+      minPeakRms,
+    };
+  }
+  return {
+    shouldFlush: true,
+    baselineNoise,
+    avgActiveRms,
+    minAvgActiveRms,
+    minPeakRms,
+  };
+}
+
+function finishSpeech(reason) {
+  const verdict = evaluateSpeechForFlush();
+  bgLog(
+    'info',
+    'VAD: speech end (' + reason +
+      ', speechMs=' + speechMs.toFixed(0) + 'ms' +
+      ', silenceMs=' + silenceMs.toFixed(0) + 'ms' +
+      ', noiseFloor=' + verdict.baselineNoise.toFixed(6) +
+      ', avgActiveRms=' + verdict.avgActiveRms.toFixed(6) +
+      ', peakRms=' + speechPeakRms.toFixed(6) + ')'
+  );
+  if (verdict.shouldFlush) {
+    flushSpeech(speechSamples);
+  } else {
+    bgLog(
+      'info',
+      'VAD: discarding utterance (' + verdict.reason +
+        ', minAvgActiveRms=' + verdict.minAvgActiveRms.toFixed(6) +
+        ', minPeakRms=' + verdict.minPeakRms.toFixed(6) + ')'
+    );
+  }
+  vadState = 'SILENCE';
+  resetSpeechState();
+}
+
 /**
  * ArrayBuffer を base64 文字列にエンコードする。
  * String.fromCharCode.apply を 32 KB チャンクで呼び出すことで
@@ -189,12 +341,11 @@ function startAudioProcessing(tabStream, micMediaStream) {
 
   // Reset VAD state
   vadState = 'SILENCE';
-  speechSamples  = [];
+  resetSpeechState();
   confirmSamples = [];
-  silenceMs  = 0;
-  speechMs   = 0;
   confirmMs  = 0;
   smoothedRms = 0;
+  noiseFloorRms = 0;
 
   const bufferSize = 4096;
   processorNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
@@ -206,18 +357,25 @@ function startAudioProcessing(tabStream, micMediaStream) {
 
     // Exponential moving average smooths out transient spikes (keyboard clicks, etc.)
     smoothedRms = RMS_EMA_ALPHA * rms + (1 - RMS_EMA_ALPHA) * smoothedRms;
+    const speechStartThreshold = getSpeechStartThreshold();
+    const silenceThreshold = getSilenceThreshold();
 
     if (vadState === 'SILENCE') {
-      if (smoothedRms > SPEECH_RMS_THRESHOLD) {
+      if (smoothedRms > speechStartThreshold) {
         // Possible speech – enter confirmation phase
         vadState = 'CONFIRMING';
         confirmMs = chunkMs;
         confirmSamples = [new Float32Array(inputData)];
-        bgLog('info', 'VAD: confirming (smoothedRms=' + smoothedRms.toFixed(6) + ')');
+        bgLog(
+          'info',
+          'VAD: confirming (smoothedRms=' + smoothedRms.toFixed(6) +
+            ', noiseFloor=' + noiseFloorRms.toFixed(6) +
+            ', threshold=' + speechStartThreshold.toFixed(6) + ')'
+        );
       }
 
     } else if (vadState === 'CONFIRMING') {
-      if (smoothedRms > SPEECH_RMS_THRESHOLD) {
+      if (smoothedRms > speechStartThreshold) {
         // Signal still above threshold – keep accumulating
         confirmSamples.push(new Float32Array(inputData));
         confirmMs += chunkMs;
@@ -228,15 +386,19 @@ function startAudioProcessing(tabStream, micMediaStream) {
           speechSamples = confirmSamples;
           speechMs = confirmMs;
           silenceMs = 0;
+          initializeSpeechTracking(silenceThreshold);
           confirmSamples = [];
           confirmMs = 0;
           bgLog('info', 'VAD: speech confirmed (smoothedRms=' + smoothedRms.toFixed(6) +
-            ', confirmDuration=' + speechMs.toFixed(0) + 'ms)');
+            ', confirmDuration=' + speechMs.toFixed(0) + 'ms' +
+            ', noiseFloor=' + speechNoiseFloorRms.toFixed(6) +
+            ', threshold=' + speechStartThreshold.toFixed(6) + ')');
         }
       } else {
         // Signal dropped – was transient noise, not speech; discard and go back to SILENCE
         bgLog('info', 'VAD: transient noise discarded (confirmMs=' + confirmMs.toFixed(0) +
-          'ms, smoothedRms=' + smoothedRms.toFixed(6) + ')');
+          'ms, smoothedRms=' + smoothedRms.toFixed(6) +
+          ', threshold=' + speechStartThreshold.toFixed(6) + ')');
         vadState = 'SILENCE';
         confirmSamples = [];
         confirmMs = 0;
@@ -245,22 +407,12 @@ function startAudioProcessing(tabStream, micMediaStream) {
     } else { // SPEAKING
       speechSamples.push(new Float32Array(inputData));
       speechMs += chunkMs;
+      trackSpeechChunkRms(rms, silenceThreshold);
 
-      if (smoothedRms < SILENCE_RMS_THRESHOLD) {
+      if (smoothedRms < silenceThreshold) {
         silenceMs += chunkMs;
         if (silenceMs >= SILENCE_AFTER_SPEECH_MS) {
-          // End of utterance
-          bgLog('info', 'VAD: speech end (speechMs=' + speechMs.toFixed(0) +
-            ', silenceMs=' + silenceMs.toFixed(0) + ')');
-          if (speechMs >= MIN_SPEECH_DURATION_MS) {
-            flushSpeech(speechSamples);
-          } else {
-            bgLog('info', 'VAD: utterance too short, discarding');
-          }
-          vadState = 'SILENCE';
-          speechSamples = [];
-          silenceMs = 0;
-          speechMs  = 0;
+          finishSpeech('silence');
         }
       } else {
         // Still speaking – reset silence counter
@@ -269,13 +421,13 @@ function startAudioProcessing(tabStream, micMediaStream) {
 
       // Safety cap: flush if utterance is too long
       if (speechMs >= MAX_SPEECH_DURATION_MS) {
-        bgLog('info', 'VAD: max duration reached, flushing (' + speechMs.toFixed(0) + 'ms)');
-        flushSpeech(speechSamples);
-        vadState = 'SILENCE';
-        speechSamples = [];
-        silenceMs = 0;
-        speechMs  = 0;
+        bgLog('info', 'VAD: max duration reached, evaluating flush (' + speechMs.toFixed(0) + 'ms)');
+        finishSpeech('max-duration');
       }
+    }
+
+    if (vadState === 'SILENCE' && smoothedRms <= speechStartThreshold * NOISE_FLOOR_UPDATE_GATE) {
+      updateNoiseFloor(smoothedRms);
     }
   };
 
@@ -304,9 +456,9 @@ function startAudioProcessing(tabStream, micMediaStream) {
 
 function stopAudioProcessing() {
   // Flush any in-progress utterance before tearing down
-  if (vadState === 'SPEAKING' && speechMs >= MIN_SPEECH_DURATION_MS) {
-    bgLog('info', 'VAD: flushing incomplete utterance on stop (' + speechMs.toFixed(0) + 'ms)');
-    flushSpeech(speechSamples);
+  if (vadState === 'SPEAKING' && speechSamples.length > 0) {
+    bgLog('info', 'VAD: evaluating incomplete utterance on stop (' + speechMs.toFixed(0) + 'ms)');
+    finishSpeech('stop');
   }
 
   if (micSourceNode) {
@@ -335,12 +487,11 @@ function stopAudioProcessing() {
   }
 
   vadState = 'SILENCE';
-  speechSamples  = [];
+  resetSpeechState();
   confirmSamples = [];
-  silenceMs  = 0;
-  speechMs   = 0;
   confirmMs  = 0;
   smoothedRms = 0;
+  noiseFloorRms = 0;
 }
 
 // ---------------------------------------------------------------------------
