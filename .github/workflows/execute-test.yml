@@ -210,11 +210,11 @@ jobs:
         timeout-minutes: 20
         run: |
           # model_manager.go の resolveLlamaModel と同じパスにダウンロードする
-          # URL は registry の値と一致させる
+          # mutable な resolve/main は supply-chain 上避け、固定 revision に pin する
           case "${{ matrix.llama_model }}" in
             bonsai-8b)
               DEST="$MODEL_CACHE_DIR/llama/Bonsai-8B.gguf"
-              URL="https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B.gguf"
+              URL="https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/f708df14d9e83594af9564fb4c9c345a571c481c/Bonsai-8B.gguf"
               ;;
             *)
               # その他のモデルはサーバー起動時に自動ダウンロード

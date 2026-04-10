@@ -25,7 +25,7 @@ release:
     1. お使いの OS のアーカイブをダウンロードして展開
     2. whisper モデルをダウンロード:
        ```
-       curl -L -o ggml-base.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+       curl -L -o ggml-base.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin
        ```
     3. llama モデルをダウンロード:
        ```
