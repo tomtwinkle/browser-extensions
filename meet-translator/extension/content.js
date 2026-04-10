@@ -6,6 +6,7 @@
  *  2. Locate the Google Meet chat textarea and send button in the DOM.
  *  3. Detect the currently highlighted speaker in the Meet DOM.
  *  4. Programmatically fill the input and submit the message.
+ *  5. Show an in-call feedback widget so users can upsert glossary entries.
  *
  * DOM selector notes
  * ------------------
@@ -94,6 +95,16 @@ const SPEAKER_TILE_SEL = 'div[jscontroller="gu0YGc"]';
 const ACTIVE_SPEAKER_BORDER_SEL = '.tC2Wod.fdKMD';
 const ACTIVE_SPEAKER_GLOW_SEL = `${ACTIVE_SPEAKER_BORDER_SEL}.v5h6Xc`;
 const ACTIVE_SPEAKER_VISIBLE_SEL = `${ACTIVE_SPEAKER_BORDER_SEL}.kssMZb`;
+const FEEDBACK_ROOT_ID = 'meet-translator-feedback';
+const FEEDBACK_FORM_ID = 'mt-feedback-form';
+const feedbackState = {
+  isOpen: false,
+  statusText: '',
+  statusError: false,
+  speakerName: '',
+  original: '',
+  translation: '',
+};
 
 // ---------------------------------------------------------------------------
 // Helper: check element visibility (not hidden, not zero-size)
@@ -117,6 +128,18 @@ function isElementVisible(el) {
 // ---------------------------------------------------------------------------
 function isEmbeddedChatMode() {
   return !!document.querySelector('iframe[src*="chat.google.com"]');
+}
+
+function sendRuntimeMessage(message) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(response);
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +338,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       return false;
 
+    case 'UPDATE_FEEDBACK_CONTEXT':
+      if (location.hostname === 'meet.google.com' && window === window.top) {
+        updateFeedbackContext(message);
+      }
+      sendResponse({ success: true });
+      return false;
+
     case 'POST_TRANSLATION': {
       // With all_frames:true, this script runs in both the meet.google.com
       // main frame AND the chat.google.com iframe.
@@ -343,6 +373,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     case 'TRANSLATION_STOPPED':
       console.log('[Meet Translator] 自動翻訳チャットを停止しました。');
       destroyOverlay();
+      destroyFeedbackUi();
       sendResponse({ success: true });
       return false;
 
@@ -429,6 +460,154 @@ function ensureOverlayStyles() {
       /* --mt-cw is set dynamically to the video container width.
          Falls back to 100vw when the overlay is on document.body. */
       --mt-cw: 100vw;
+    }
+
+    #${FEEDBACK_ROOT_ID} {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 2147483646;
+    }
+    #${FEEDBACK_ROOT_ID}.mt-body-anchor {
+      position: fixed;
+    }
+    #mt-feedback-widget {
+      position: absolute;
+      right: 16px;
+      bottom: 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 8px;
+      pointer-events: none;
+    }
+    #mt-feedback-toggle,
+    #mt-feedback-panel,
+    #mt-feedback-panel * {
+      pointer-events: auto;
+    }
+    #mt-feedback-toggle {
+      border: 0;
+      border-radius: 9999px;
+      background: rgba(17, 17, 17, 0.86);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 8px 12px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+      cursor: pointer;
+    }
+    #mt-feedback-toggle:disabled {
+      cursor: default;
+      opacity: 0.55;
+    }
+    #mt-feedback-widget.mt-open #mt-feedback-toggle {
+      background: rgba(31, 31, 31, 0.95);
+    }
+    #mt-feedback-panel {
+      display: none;
+      width: min(360px, calc(100vw - 32px));
+      box-sizing: border-box;
+      padding: 12px;
+      border-radius: 12px;
+      background: rgba(17, 17, 17, 0.94);
+      color: #f5f5f5;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(6px);
+    }
+    #mt-feedback-widget.mt-open #mt-feedback-panel {
+      display: block;
+    }
+    .mt-feedback-title {
+      margin: 0 0 6px;
+      font-size: 15px;
+      font-weight: 700;
+    }
+    .mt-feedback-meta {
+      margin-bottom: 10px;
+      color: #b9d6ff;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .mt-feedback-context {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .mt-feedback-row {
+      display: grid;
+      gap: 4px;
+    }
+    .mt-feedback-label {
+      color: #aab4c8;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    .mt-feedback-value {
+      max-height: 4.8em;
+      overflow: hidden;
+      color: #f5f5f5;
+      font-size: 12px;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .mt-feedback-form {
+      display: grid;
+      gap: 10px;
+    }
+    .mt-feedback-field {
+      display: grid;
+      gap: 4px;
+    }
+    .mt-feedback-field > span {
+      color: #d5d9e1;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .mt-feedback-input,
+    .mt-feedback-select {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+    .mt-feedback-input::placeholder {
+      color: rgba(255, 255, 255, 0.45);
+    }
+    .mt-feedback-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .mt-feedback-button {
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 8px 12px;
+    }
+    .mt-feedback-button-secondary {
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+    }
+    .mt-feedback-button-primary {
+      background: #8ab4f8;
+      color: #11203f;
+    }
+    .mt-feedback-status {
+      min-height: 1.2em;
+      color: #9ae6b4;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .mt-feedback-status.error {
+      color: #ffb4ab;
     }
 
     /* ---- Scroll mode ---- */
@@ -527,6 +706,215 @@ function getOverlayContainer() {
     }
   }
   return el;
+}
+
+function feedbackPreview(text) {
+  if (!text) return '\u2014';
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return '\u2014';
+  return normalized.length > 140 ? `${normalized.slice(0, 137)}...` : normalized;
+}
+
+function getFeedbackAnchor() {
+  return document.querySelector(VIDEO_AREA_SEL) || document.body;
+}
+
+function getFeedbackRoot() {
+  ensureOverlayStyles();
+
+  let root = document.getElementById(FEEDBACK_ROOT_ID);
+  const anchor = getFeedbackAnchor();
+
+  if (!root) {
+    root = document.createElement('div');
+    root.id = FEEDBACK_ROOT_ID;
+    root.innerHTML = `
+      <div id="mt-feedback-widget">
+        <button type="button" id="mt-feedback-toggle">辞書修正</button>
+        <div id="mt-feedback-panel">
+          <div class="mt-feedback-title">誤認識 / 誤訳を登録</div>
+          <div id="mt-feedback-meta" class="mt-feedback-meta"></div>
+          <div class="mt-feedback-context">
+            <div class="mt-feedback-row">
+              <div class="mt-feedback-label">直近の文字起こし</div>
+              <div id="mt-feedback-original" class="mt-feedback-value"></div>
+            </div>
+            <div class="mt-feedback-row">
+              <div class="mt-feedback-label">直近の翻訳</div>
+              <div id="mt-feedback-translation" class="mt-feedback-value"></div>
+            </div>
+          </div>
+          <form id="${FEEDBACK_FORM_ID}" class="mt-feedback-form">
+            <label class="mt-feedback-field">
+              <span>登録先</span>
+              <select id="mt-feedback-kind" class="mt-feedback-select">
+                <option value="correction">文字起こし補正</option>
+                <option value="term">翻訳用語</option>
+              </select>
+            </label>
+            <label class="mt-feedback-field">
+              <span id="mt-feedback-source-label">誤っていた語句</span>
+              <input id="mt-feedback-source" class="mt-feedback-input" type="text" autocomplete="off">
+            </label>
+            <label class="mt-feedback-field">
+              <span id="mt-feedback-target-label">正しい語句</span>
+              <input id="mt-feedback-target" class="mt-feedback-input" type="text" autocomplete="off">
+            </label>
+            <div id="mt-feedback-status" class="mt-feedback-status"></div>
+            <div class="mt-feedback-actions">
+              <button type="button" id="mt-feedback-close" class="mt-feedback-button mt-feedback-button-secondary">閉じる</button>
+              <button type="submit" id="mt-feedback-submit" class="mt-feedback-button mt-feedback-button-primary">辞書に追加</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+    anchor.appendChild(root);
+
+    root.querySelector('#mt-feedback-toggle')?.addEventListener('click', () => {
+      if (!(feedbackState.original || feedbackState.translation)) return;
+      feedbackState.isOpen = !feedbackState.isOpen;
+      syncFeedbackUi();
+    });
+    root.querySelector('#mt-feedback-close')?.addEventListener('click', () => {
+      feedbackState.isOpen = false;
+      syncFeedbackUi();
+    });
+    root.querySelector('#mt-feedback-kind')?.addEventListener('change', syncFeedbackFormCopy);
+    root.querySelector(`#${FEEDBACK_FORM_ID}`)?.addEventListener('submit', submitGlossaryFeedback);
+  } else if (root.parentElement !== anchor) {
+    anchor.appendChild(root);
+  }
+
+  root.classList.toggle('mt-body-anchor', anchor === document.body);
+  syncFeedbackFormCopy();
+  syncFeedbackUi();
+  return root;
+}
+
+function syncFeedbackFormCopy() {
+  const root = document.getElementById(FEEDBACK_ROOT_ID);
+  if (!root) return;
+  const kind = root.querySelector('#mt-feedback-kind')?.value || 'correction';
+  const sourceLabel = root.querySelector('#mt-feedback-source-label');
+  const targetLabel = root.querySelector('#mt-feedback-target-label');
+  const sourceInput = root.querySelector('#mt-feedback-source');
+  const targetInput = root.querySelector('#mt-feedback-target');
+  if (kind === 'term') {
+    sourceLabel.textContent = '誤っていた翻訳語句';
+    targetLabel.textContent = '正しい翻訳語句';
+    sourceInput.placeholder = '例: プールリクエスト';
+    targetInput.placeholder = '例: プルリクエスト';
+  } else {
+    sourceLabel.textContent = '誤っていた聞き取り語句';
+    targetLabel.textContent = '正しい語句';
+    sourceInput.placeholder = '例: get hub';
+    targetInput.placeholder = '例: GitHub';
+  }
+}
+
+function syncFeedbackUi() {
+  const root = document.getElementById(FEEDBACK_ROOT_ID);
+  if (!root) return;
+
+  const widget = root.querySelector('#mt-feedback-widget');
+  const toggle = root.querySelector('#mt-feedback-toggle');
+  const meta = root.querySelector('#mt-feedback-meta');
+  const original = root.querySelector('#mt-feedback-original');
+  const translation = root.querySelector('#mt-feedback-translation');
+  const status = root.querySelector('#mt-feedback-status');
+  const hasContext = Boolean(feedbackState.original || feedbackState.translation);
+
+  toggle.disabled = !hasContext;
+  widget.classList.toggle('mt-open', feedbackState.isOpen && hasContext);
+  meta.textContent = feedbackState.speakerName
+    ? `話者: ${feedbackState.speakerName}`
+    : '直近の発話から辞書へ反映します';
+  original.textContent = feedbackPreview(feedbackState.original);
+  translation.textContent = feedbackPreview(feedbackState.translation);
+  status.textContent = feedbackState.statusText || '';
+  status.classList.toggle('error', feedbackState.statusError);
+}
+
+function updateFeedbackContext(message) {
+  if (!message.original && !message.translation) return;
+  feedbackState.speakerName = normalizeSpeakerName(message.speakerName);
+  feedbackState.original = message.original || feedbackState.original || '';
+  feedbackState.translation = message.translation || '';
+  feedbackState.statusText = '';
+  feedbackState.statusError = false;
+  getFeedbackRoot();
+}
+
+function resetFeedbackState() {
+  feedbackState.isOpen = false;
+  feedbackState.statusText = '';
+  feedbackState.statusError = false;
+  feedbackState.speakerName = '';
+  feedbackState.original = '';
+  feedbackState.translation = '';
+}
+
+function destroyFeedbackUi() {
+  const root = document.getElementById(FEEDBACK_ROOT_ID);
+  if (root) root.remove();
+  resetFeedbackState();
+}
+
+async function submitGlossaryFeedback(event) {
+  event.preventDefault();
+
+  const root = getFeedbackRoot();
+  const kind = root.querySelector('#mt-feedback-kind')?.value || 'correction';
+  const sourceInput = root.querySelector('#mt-feedback-source');
+  const targetInput = root.querySelector('#mt-feedback-target');
+  const submitButton = root.querySelector('#mt-feedback-submit');
+  const source = sourceInput.value.trim();
+  const target = targetInput.value.trim();
+
+  if (!source || !target) {
+    feedbackState.statusText = '誤りと正しい語句の両方を入力してください。';
+    feedbackState.statusError = true;
+    syncFeedbackUi();
+    return;
+  }
+
+  submitButton.disabled = true;
+  feedbackState.statusText = '辞書を更新しています...';
+  feedbackState.statusError = false;
+  syncFeedbackUi();
+
+  try {
+    const response = await sendRuntimeMessage({
+      type: 'SUBMIT_GLOSSARY_FEEDBACK',
+      feedback: {
+        kind,
+        source,
+        target,
+        speakerName: feedbackState.speakerName || null,
+        original: feedbackState.original || null,
+        translation: feedbackState.translation || null,
+      },
+    });
+    if (!response?.success) {
+      throw new Error(response?.error || '辞書更新に失敗しました。');
+    }
+
+    feedbackState.statusText = kind === 'term'
+      ? '翻訳辞書を更新しました。'
+      : '文字起こし補正を更新しました。';
+    feedbackState.statusError = false;
+    sourceInput.value = '';
+    targetInput.value = '';
+    feedbackState.isOpen = true;
+    syncFeedbackUi();
+  } catch (err) {
+    feedbackState.statusText = err?.message || '辞書更新に失敗しました。';
+    feedbackState.statusError = true;
+    syncFeedbackUi();
+  } finally {
+    submitButton.disabled = false;
+  }
 }
 
 /** Destroy the overlay and clean up all state. */
