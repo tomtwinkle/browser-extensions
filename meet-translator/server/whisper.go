@@ -98,3 +98,15 @@ func (s *server) transcribeInternal(audioData []byte, lang string) (string, stri
 	result = s.glossary.ApplyCorrections(result)
 	return result, detectedLang, nil
 }
+
+func whisperBridgeShouldKeepSegment(text string, tokenCount int, avgLogprob, noSpeechProb float32) bool {
+	cText := C.CString(text)
+	defer C.free(unsafe.Pointer(cText))
+
+	return C.whisper_bridge_should_keep_segment(
+		cText,
+		C.int(tokenCount),
+		C.float(avgLogprob),
+		C.float(noSpeechProb),
+	) != 0
+}
