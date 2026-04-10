@@ -6,7 +6,9 @@
  *  2. Obtain a Tab Capture stream-ID via chrome.tabCapture.getMediaStreamId(),
  *     then hand it to the offscreen document for Web Audio processing.
  *  3. Receive raw audio data back from the offscreen document.
- *  4. Run transcribeAndTranslate() – currently a mock – and forward the result
+ *  4. Batch consecutive same-speaker utterances briefly before sending them to
+ *     the local server.
+ *  5. Run transcribeAndTranslate() – currently a mock – and forward the result
  *     to the content script so it can post the text to the Meet chat.
  *  5. Accept in-call glossary feedback from the Meet UI and upsert it to the server.
  */
@@ -20,6 +22,9 @@ const LANG_LABELS = {
   vi: 'Tiếng Việt',
 };
 const langLabel = (code) => LANG_LABELS[code] || code || '原文';
+const SPEAKER_BATCH_ALARM = 'speaker-audio-batch-flush';
+const SPEAKER_BATCH_IDLE_MS = 1200;
+const MAX_SPEAKER_BATCH_DURATION_MS = 20000;
 
 /**
  * テキストの言語を簡易判定する。
@@ -63,6 +68,8 @@ const state = {
   lastError: null,
   healthCheckTimer: null,
   serverInfo: null, // { whisperModel, llamaModel } – populated from /health
+  pendingSpeakerBatch: null,
+  audioQueue: Promise.resolve(),
 };
 
 // ---------------------------------------------------------------------------
@@ -129,7 +136,7 @@ async function checkServerHealth() {
  */
 async function transcribeOnly(wavB64, cfg) {
   // base64 → Uint8Array に変換。文字列は structured-clone で常に正しくコピーされる。
-  const audioData = Uint8Array.from(atob(wavB64), (c) => c.charCodeAt(0));
+  const audioData = base64ToUint8Array(wavB64);
   const form = new FormData();
   form.append('audio', new Blob([audioData], { type: 'audio/wav' }), 'audio.wav');
   if (cfg.sourceLang) form.append('source_lang', cfg.sourceLang);
@@ -238,6 +245,292 @@ function buildGlossaryFeedbackDescription(feedback) {
   if (original) parts.push(`original=${original}`);
   if (translation) parts.push(`translation=${translation}`);
   return parts.join(' | ');
+}
+
+function base64ToUint8Array(base64) {
+  return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+}
+
+function uint8ArrayToBase64(bytes) {
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function readWavMetadata(bytes) {
+  if (bytes.byteLength < 44) {
+    throw new Error('WAV payload is too short');
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const readAscii = (offset, length) =>
+    String.fromCharCode(...bytes.subarray(offset, offset + length));
+
+  if (readAscii(0, 4) !== 'RIFF' || readAscii(8, 4) !== 'WAVE' ||
+      readAscii(12, 4) !== 'fmt ' || readAscii(36, 4) !== 'data') {
+    throw new Error('unsupported WAV layout');
+  }
+
+  const audioFormat = view.getUint16(20, true);
+  const channels = view.getUint16(22, true);
+  const sampleRate = view.getUint32(24, true);
+  const byteRate = view.getUint32(28, true);
+  const bitsPerSample = view.getUint16(34, true);
+  const dataBytes = view.getUint32(40, true);
+  if (audioFormat !== 1) {
+    throw new Error(`unsupported WAV encoding: ${audioFormat}`);
+  }
+  if (dataBytes + 44 > bytes.byteLength) {
+    throw new Error('corrupt WAV data length');
+  }
+
+  return {
+    channels,
+    sampleRate,
+    byteRate,
+    bitsPerSample,
+    dataOffset: 44,
+    dataBytes,
+  };
+}
+
+function getWavDurationMs(wavB64) {
+  const bytes = base64ToUint8Array(wavB64);
+  const meta = readWavMetadata(bytes);
+  return (meta.dataBytes / meta.byteRate) * 1000;
+}
+
+function mergeWavBase64Chunks(wavChunks) {
+  if (wavChunks.length === 0) {
+    throw new Error('no WAV chunks to merge');
+  }
+  if (wavChunks.length === 1) {
+    return wavChunks[0];
+  }
+
+  const decoded = wavChunks.map((wavB64) => base64ToUint8Array(wavB64));
+  const metas = decoded.map((bytes) => readWavMetadata(bytes));
+  const first = metas[0];
+
+  for (const meta of metas.slice(1)) {
+    if (meta.channels !== first.channels ||
+        meta.sampleRate !== first.sampleRate ||
+        meta.bitsPerSample !== first.bitsPerSample) {
+      throw new Error('incompatible WAV formats in speaker batch');
+    }
+  }
+
+  const totalDataBytes = metas.reduce((sum, meta) => sum + meta.dataBytes, 0);
+  const merged = new Uint8Array(44 + totalDataBytes);
+  merged.set(decoded[0].subarray(0, 44), 0);
+
+  const mergedView = new DataView(merged.buffer);
+  mergedView.setUint32(4, 36 + totalDataBytes, true);
+  mergedView.setUint32(40, totalDataBytes, true);
+
+  let offset = 44;
+  decoded.forEach((bytes, index) => {
+    const meta = metas[index];
+    merged.set(bytes.subarray(meta.dataOffset, meta.dataOffset + meta.dataBytes), offset);
+    offset += meta.dataBytes;
+  });
+
+  return uint8ArrayToBase64(merged);
+}
+
+function scheduleSpeakerBatchFlush(delayMs = SPEAKER_BATCH_IDLE_MS) {
+  chrome.alarms.create(SPEAKER_BATCH_ALARM, { when: Date.now() + delayMs });
+}
+
+function cancelSpeakerBatchFlush() {
+  chrome.alarms.clear(SPEAKER_BATCH_ALARM);
+}
+
+function startSpeakerBatch(wavB64, speakerName, durationMs) {
+  state.pendingSpeakerBatch = {
+    speakerName,
+    wavChunks: [wavB64],
+    totalDurationMs: durationMs,
+  };
+  console.info('[background] speaker batch started:', speakerName, `(${durationMs.toFixed(0)}ms)`);
+  scheduleSpeakerBatchFlush();
+}
+
+function enqueueAudioTask(task) {
+  const next = state.audioQueue.then(task);
+  state.audioQueue = next.catch((err) => {
+    console.error('[background] audio processing error:', err);
+  });
+  return next;
+}
+
+async function processAudioChunk(wavB64, speakerName, tabId) {
+  const cfg = await getSettings();
+
+  // Step 1: Whisper 文字起こし → チャット投稿 / オーバーレイ（原文）
+  const { transcription, detectedLang } = await transcribeOnly(wavB64, cfg);
+  if (!transcription) return;
+
+  if (isFillerOnly(transcription)) {
+    console.info('[background] filler-only transcription, skipping:', transcription);
+    return;
+  }
+
+  console.info('[background] transcription:', transcription.slice(0, 100));
+  await pushFeedbackContext(tabId, {
+    original: transcription,
+    translation: null,
+    speakerName,
+  });
+
+  // 双方向翻訳: Whisper 検出言語を優先し、未取得時は文字種フォールバック
+  let translSourceLang = cfg.sourceLang;
+  let translTargetLang = cfg.targetLang;
+  if (cfg.bidirectional && cfg.sourceLang && cfg.targetLang) {
+    const detected = detectedLang || detectTextLang(transcription);
+    if (detected && detected === cfg.targetLang) {
+      // 翻訳先言語で発話 → 逆方向に翻訳
+      translSourceLang = cfg.targetLang;
+      translTargetLang = cfg.sourceLang;
+      console.info('[background] bidirectional: detected', detected, '→ translating to', translTargetLang);
+    }
+  }
+
+  // チャット: 原文投稿
+  if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'translation') {
+    await sendToContentScript(tabId, {
+      type: 'POST_TRANSLATION',
+      text: formatChatMessage(translSourceLang || cfg.sourceLang, transcription, speakerName),
+    });
+  }
+
+  // フィラー除去後のテキストを翻訳に使う
+  const textToTranslate = stripFillers(transcription);
+
+  // 翻訳不要なら原文のみオーバーレイ表示して終了
+  const needTranslation =
+    textToTranslate &&
+    ((cfg.chatEnabled    && cfg.chatFormat    !== 'transcription') ||
+     (cfg.overlayEnabled && cfg.overlayFormat !== 'transcription'));
+
+  if (!needTranslation) {
+    if (tabId && cfg.overlayEnabled && cfg.overlayFormat !== 'translation') {
+      await sendToContentScript(tabId, {
+        type:        'SHOW_OVERLAY',
+        original:    transcription,
+        translation: null,
+        scroll:      cfg.overlayScroll,
+        speakerName,
+      });
+    }
+    return;
+  }
+
+  // Step 2: LLM 翻訳
+  const translation = await translateOnly(textToTranslate, translSourceLang, translTargetLang, cfg);
+  if (!translation) return;
+
+  console.info('[background] translation:', translation.slice(0, 100));
+  await pushFeedbackContext(tabId, {
+    original: transcription,
+    translation,
+    speakerName,
+  });
+
+  // チャット: 翻訳投稿
+  if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'transcription') {
+    await sendToContentScript(tabId, {
+      type: 'POST_TRANSLATION',
+      text: formatChatMessage(translTargetLang, translation, speakerName),
+    });
+  }
+
+  // オーバーレイ表示
+  if (tabId && cfg.overlayEnabled) {
+    await sendToContentScript(tabId, {
+      type:        'SHOW_OVERLAY',
+      original:    cfg.overlayFormat !== 'translation'   ? transcription : null,
+      translation: cfg.overlayFormat !== 'transcription' ? translation   : null,
+      scroll:      cfg.overlayScroll,
+      speakerName,
+    });
+  }
+}
+
+async function flushPendingSpeakerBatch(reason, tabId = state.tabId) {
+  const batch = state.pendingSpeakerBatch;
+  if (!batch) return false;
+
+  state.pendingSpeakerBatch = null;
+  cancelSpeakerBatchFlush();
+
+  console.info(
+    '[background] flushing speaker batch:',
+    batch.speakerName,
+    `(${batch.wavChunks.length} chunks, ${batch.totalDurationMs.toFixed(0)}ms, reason=${reason})`
+  );
+
+  if (batch.wavChunks.length === 1) {
+    await processAudioChunk(batch.wavChunks[0], batch.speakerName, tabId);
+    return true;
+  }
+
+  try {
+    const mergedWavB64 = mergeWavBase64Chunks(batch.wavChunks);
+    await processAudioChunk(mergedWavB64, batch.speakerName, tabId);
+  } catch (err) {
+    console.warn('[background] speaker batch merge failed, replaying individual chunks:', err.message);
+    for (const wavB64 of batch.wavChunks) {
+      await processAudioChunk(wavB64, batch.speakerName, tabId);
+    }
+  }
+
+  return true;
+}
+
+async function handleAudioData(wavB64) {
+  const tabId = state.tabId;
+  const speakerName = await getActiveSpeaker(tabId);
+  const normalizedSpeaker = normalizeSpeakerName(speakerName);
+
+  if (!normalizedSpeaker) {
+    await flushPendingSpeakerBatch('speaker-unavailable', tabId);
+    await processAudioChunk(wavB64, null, tabId);
+    return;
+  }
+
+  const durationMs = getWavDurationMs(wavB64);
+  if (durationMs >= MAX_SPEAKER_BATCH_DURATION_MS) {
+    await flushPendingSpeakerBatch('oversized-single-chunk', tabId);
+    await processAudioChunk(wavB64, normalizedSpeaker, tabId);
+    return;
+  }
+
+  const pending = state.pendingSpeakerBatch;
+  if (!pending) {
+    startSpeakerBatch(wavB64, normalizedSpeaker, durationMs);
+    return;
+  }
+
+  if (pending.speakerName !== normalizedSpeaker) {
+    await flushPendingSpeakerBatch('speaker-changed', tabId);
+    startSpeakerBatch(wavB64, normalizedSpeaker, durationMs);
+    return;
+  }
+
+  if (pending.totalDurationMs + durationMs > MAX_SPEAKER_BATCH_DURATION_MS) {
+    await flushPendingSpeakerBatch('max-batch-duration', tabId);
+    startSpeakerBatch(wavB64, normalizedSpeaker, durationMs);
+    return;
+  }
+
+  pending.wavChunks.push(wavB64);
+  pending.totalDurationMs += durationMs;
+  console.info('[background] speaker batch appended:', normalizedSpeaker, `(${pending.totalDurationMs.toFixed(0)}ms total)`);
+  scheduleSpeakerBatchFlush();
 }
 
 /**
@@ -362,6 +655,9 @@ async function startCapture(tabId) {
   state.tabId    = tabId;
   state.lastError = null;
   state.serverInfo = { whisperModel: health.whisperModel, llamaModel: health.llamaModel };
+  state.pendingSpeakerBatch = null;
+  state.audioQueue = Promise.resolve();
+  cancelSpeakerBatchFlush();
 
   // 定期ヘルスチェック（30 秒ごと）- サーバーが落ちたら自動停止
   state.healthCheckTimer = setInterval(async () => {
@@ -425,14 +721,18 @@ async function stopCapture() {
     state.healthCheckTimer = null;
   }
 
-  state.isActive = false;
   const tabId = state.tabId;
-  state.tabId = null;
 
   // Tell the offscreen document to stop processing
   try {
-    chrome.runtime.sendMessage({ type: 'OFFSCREEN_STOP_AUDIO' });
+    await chrome.runtime.sendMessage({ type: 'OFFSCREEN_STOP_AUDIO' });
   } catch (_) {}
+
+  await state.audioQueue;
+  await flushPendingSpeakerBatch('stop', tabId);
+
+  state.isActive = false;
+  state.tabId = null;
 
   await closeOffscreenDocument();
 
@@ -443,6 +743,12 @@ async function stopCapture() {
     } catch (_) {}
   }
 }
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== SPEAKER_BATCH_ALARM) return;
+  if (!state.pendingSpeakerBatch || !state.isActive) return;
+  enqueueAudioTask(() => flushPendingSpeakerBatch('idle-timeout', state.tabId));
+});
 
 // ---------------------------------------------------------------------------
 // Message router
@@ -501,104 +807,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         console.warn('[background] AUDIO_DATA dropped: capture is not active');
         return false;
       }
-      const tabId = state.tabId; // capture before async – state may change mid-await
-      (async () => {
-        try {
-          const cfg = await getSettings();
-          const speakerName = await getActiveSpeaker(tabId);
-
-          // Step 1: Whisper 文字起こし → チャット投稿 / オーバーレイ（原文）
-          const { transcription, detectedLang } = await transcribeOnly(message.wavB64, cfg);
-          if (!transcription) return;
-
-          if (isFillerOnly(transcription)) {
-            console.info('[background] filler-only transcription, skipping:', transcription);
-            return;
-          }
-
-          console.info('[background] transcription:', transcription.slice(0, 100));
-          await pushFeedbackContext(tabId, {
-            original: transcription,
-            translation: null,
-            speakerName,
-          });
-
-          // 双方向翻訳: Whisper 検出言語を優先し、未取得時は文字種フォールバック
-          let translSourceLang = cfg.sourceLang;
-          let translTargetLang = cfg.targetLang;
-          if (cfg.bidirectional && cfg.sourceLang && cfg.targetLang) {
-            const detected = detectedLang || detectTextLang(transcription);
-            if (detected && detected === cfg.targetLang) {
-              // 翻訳先言語で発話 → 逆方向に翻訳
-              translSourceLang = cfg.targetLang;
-              translTargetLang = cfg.sourceLang;
-              console.info('[background] bidirectional: detected', detected, '→ translating to', translTargetLang);
-            }
-          }
-
-          // チャット: 原文投稿
-          if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'translation') {
-            await sendToContentScript(tabId, {
-              type: 'POST_TRANSLATION',
-              text: formatChatMessage(translSourceLang || cfg.sourceLang, transcription, speakerName),
-            });
-          }
-
-          // フィラー除去後のテキストを翻訳に使う
-          const textToTranslate = stripFillers(transcription);
-
-          // 翻訳不要なら原文のみオーバーレイ表示して終了
-          const needTranslation =
-            textToTranslate &&
-            ((cfg.chatEnabled    && cfg.chatFormat    !== 'transcription') ||
-             (cfg.overlayEnabled && cfg.overlayFormat !== 'transcription'));
-
-          if (!needTranslation) {
-            if (tabId && cfg.overlayEnabled && cfg.overlayFormat !== 'translation') {
-              await sendToContentScript(tabId, {
-                type:        'SHOW_OVERLAY',
-                original:    transcription,
-                translation: null,
-                scroll:      cfg.overlayScroll,
-                speakerName,
-              });
-            }
-            return;
-          }
-
-          // Step 2: LLM 翻訳
-          const translation = await translateOnly(textToTranslate, translSourceLang, translTargetLang, cfg);
-          if (!translation) return;
-
-          console.info('[background] translation:', translation.slice(0, 100));
-          await pushFeedbackContext(tabId, {
-            original: transcription,
-            translation,
-            speakerName,
-          });
-
-          // チャット: 翻訳投稿
-          if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'transcription') {
-            await sendToContentScript(tabId, {
-              type: 'POST_TRANSLATION',
-              text: formatChatMessage(translTargetLang, translation, speakerName),
-            });
-          }
-
-          // オーバーレイ表示
-          if (tabId && cfg.overlayEnabled) {
-            await sendToContentScript(tabId, {
-              type:        'SHOW_OVERLAY',
-              original:    cfg.overlayFormat !== 'translation'   ? transcription : null,
-              translation: cfg.overlayFormat !== 'transcription' ? translation   : null,
-              scroll:      cfg.overlayScroll,
-              speakerName,
-            });
-          }
-        } catch (err) {
-          console.error('[background] audio processing error:', err);
-        }
-      })();
+      enqueueAudioTask(() => handleAudioData(message.wavB64));
       return false;
     }
 

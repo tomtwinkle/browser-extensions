@@ -434,6 +434,7 @@ Click the extension icon → **⚙ Settings** and configure:
    - Silent intervals are skipped by VAD, which also adapts to the session noise floor to suppress low-SNR / non-speech chunks
    - When Meet highlights the current speaker, their display name is prefixed in chat and overlay output
    - Use the in-call **dictionary feedback** button on the Meet screen to register misheard words or incorrect translated terms into the glossary immediately
+   - Consecutive short utterances from the same highlighted speaker are batched briefly and sent together after a short pause
    - The chat panel is opened automatically if it is closed
 4. Press **"Stop Auto-Translate Chat"** to stop
 
