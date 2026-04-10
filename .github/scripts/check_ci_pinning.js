@@ -18,9 +18,13 @@ function collectErrors(filePath) {
     const match = line.match(usesRe);
     if (match) {
       const reference = match[1];
-      if (!reference.startsWith('./') && !reference.startsWith('docker://')) {
+      const isLocalReference =
+        reference.startsWith('./') || reference.startsWith('docker://');
+      if (!isLocalReference) {
         if (!reference.includes('@')) {
-          errors.push(`${filePath}:${lineNo}: missing @ref in uses: ${reference}`);
+          errors.push(
+            `${filePath}:${lineNo}: missing @ref in uses: ${reference}`
+          );
         } else {
           const ref = reference.slice(reference.lastIndexOf('@') + 1);
           if (!shaRe.test(ref)) {
