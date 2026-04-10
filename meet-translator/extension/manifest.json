@@ -37,7 +37,7 @@
         "https://meet.google.com/*",
         "https://chat.google.com/*"
       ],
-      "js": ["content.js"],
+      "js": ["shared.js", "content.js"],
       "run_at": "document_idle",
       "all_frames": true
     }

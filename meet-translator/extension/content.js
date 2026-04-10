@@ -29,6 +29,11 @@
 
 'use strict';
 
+const {
+  normalizeSpeakerName,
+  parseSpeakerNameFromAriaLabel,
+} = globalThis.MeetTranslatorShared;
+
 // ---------------------------------------------------------------------------
 // DOM selectors  (update these if Meet changes its markup)
 // ---------------------------------------------------------------------------
@@ -145,31 +150,6 @@ function sendRuntimeMessage(message) {
 // ---------------------------------------------------------------------------
 // Helper: detect the active speaker tile in the Meet main frame
 // ---------------------------------------------------------------------------
-function normalizeSpeakerName(name) {
-  return name ? name.replace(/\s+/g, ' ').trim() : '';
-}
-
-function parseSpeakerNameFromAriaLabel(label) {
-  const normalized = normalizeSpeakerName(label);
-  if (!normalized) return null;
-
-  const patterns = [
-    /^メイン画面の (.+?) さんの共有画面の固定を解除します$/,
-    /^(.+?) さんをメイン画面に固定します$/,
-    /^(.+?) さんの共有画面をミュート$/,
-    /^(.+?) さんのマイクをミュート$/,
-    /^Pin (.+?) to the main screen$/i,
-    /^Unpin (.+?) from the main screen$/i,
-    /^Mute (.+?)(?:['’]s)? microphone$/i,
-    /^Mute (.+?)(?:['’]s)? screen share$/i,
-  ];
-  for (const pattern of patterns) {
-    const match = normalized.match(pattern);
-    if (match) return normalizeSpeakerName(match[1]);
-  }
-  return null;
-}
-
 function extractSpeakerNameFromTile(tile) {
   if (!tile) return null;
 

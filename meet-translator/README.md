@@ -38,11 +38,13 @@ local server so all inference runs entirely on your machine.
 meet-translator/
 ├── extension/                Chrome / Edge extension
 │   ├── manifest.json         Manifest V3 configuration
+│   ├── shared.js             Shared pure helpers for runtime + tests
 │   ├── background.js         Service Worker: audio capture & translation control
 │   ├── offscreen.html/js     Offscreen Document: Web Audio API + WAV encoder
 │   ├── content.js            Content Script: Meet chat DOM operations
 │   ├── popup.html/js         Popup UI (start/stop + settings link)
 │   ├── options.html/js       Settings page (server URL, languages)
+│   ├── tests/                Node-based extension unit tests
 │   └── icons/                Icons (16 / 32 / 48 / 128 px)
 │
 └── server/                   Local inference server
@@ -120,6 +122,16 @@ make rebuild
 # Example: upgrading llama.cpp / whisper.cpp version
 make distclean
 make
+```
+
+### Testing
+
+```bash
+# extension unit tests
+node --test meet-translator/extension/tests/*.test.js
+
+# server tests
+cd meet-translator/server && make test
 ```
 
 ---

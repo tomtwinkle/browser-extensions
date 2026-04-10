@@ -38,11 +38,13 @@ Meet のチャット欄に自動投稿する Chrome / Edge 拡張機能（Manife
 meet-translator/
 ├── extension/                Chrome / Edge 拡張機能
 │   ├── manifest.json         Manifest V3 設定
+│   ├── shared.js             本体とテストで共有する純粋関数
 │   ├── background.js         Service Worker: 音声キャプチャ・翻訳制御
 │   ├── offscreen.html/js     Offscreen Document: Web Audio API + WAV エンコーダー
 │   ├── content.js            Content Script: Meet チャット DOM 操作
 │   ├── popup.html/js         ポップアップ UI (開始/停止 + 設定リンク)
 │   ├── options.html/js       設定ページ (サーバー URL・言語)
+│   ├── tests/                Node ベースの extension 単体テスト
 │   └── icons/                アイコン (16 / 32 / 48 / 128 px)
 │
 └── server/                   ローカル推論サーバー
@@ -120,6 +122,16 @@ make rebuild
 # 例: llama.cpp / whisper.cpp のバージョンを上げた場合
 make distclean
 make
+```
+
+### テスト
+
+```bash
+# extension の単体テスト
+node --test meet-translator/extension/tests/*.test.js
+
+# server のテスト
+cd meet-translator/server && make test
 ```
 
 ---
