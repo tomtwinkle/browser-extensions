@@ -16,6 +16,29 @@ defaults:
     shell: bash
 
 jobs:
+  extension-tests:
+    name: Extension Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+
+      - name: Check extension scripts
+        run: |
+          node --check meet-translator/extension/shared.js
+          node --check meet-translator/extension/background.js
+          node --check meet-translator/extension/content.js
+          node --check meet-translator/extension/offscreen.js
+          node --check meet-translator/extension/popup.js
+          node --check meet-translator/extension/options.js
+          node --check meet-translator/extension/i18n.js
+
+      - name: Run extension tests
+        run: node --test meet-translator/extension/tests/*.test.js
+
   test:
     name: Test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
