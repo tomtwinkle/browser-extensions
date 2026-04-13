@@ -567,7 +567,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // ---------------------------------------------------------------------------
 // Message router
 // ---------------------------------------------------------------------------
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
 
     // ---- Commands from the popup ----------------------------------------
@@ -603,6 +603,25 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     case 'SUBMIT_GLOSSARY_FEEDBACK':
       submitGlossaryFeedback(message.feedback)
         .then(() => sendResponse({ success: true }))
+        .catch((err) => sendResponse({ success: false, error: err.message }));
+      return true;
+
+    case 'RELAY_POST_TRANSLATION':
+      if (!sender.tab?.id) {
+        sendResponse({ success: false, error: 'active tab is unavailable' });
+        return false;
+      }
+      sendToContentScript(sender.tab.id, {
+        type: 'POST_TRANSLATION',
+        text: message.text,
+        target: 'embedded-chat',
+      })
+        .then((response) => {
+          if (!response?.success) {
+            throw new Error(response?.error || 'embedded Google Chat iframe is not ready');
+          }
+          sendResponse({ success: true });
+        })
         .catch((err) => sendResponse({ success: false, error: err.message }));
       return true;
 

@@ -130,6 +130,16 @@
     return parts.join(' | ');
   }
 
+  function resolveChatPostHandlingMode(hostname, isTopFrame, target) {
+    if (hostname === 'meet.google.com' && isTopFrame && target !== 'embedded-chat') {
+      return 'meet-top';
+    }
+    if (hostname === 'chat.google.com' && target === 'embedded-chat') {
+      return 'embedded-chat';
+    }
+    return 'ignore';
+  }
+
   function decodeBase64(base64) {
     if (typeof atob === 'function') return atob(base64);
     if (typeof Buffer !== 'undefined') {
@@ -253,6 +263,7 @@
     normalizeSpeakerName,
     parseSpeakerNameFromAriaLabel,
     readWavMetadata,
+    resolveChatPostHandlingMode,
     stripFillers,
     truncateForDescription,
     uint8ArrayToBase64,
