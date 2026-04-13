@@ -14,6 +14,7 @@ const {
   normalizeSpeakerName,
   parseSpeakerNameFromAriaLabel,
   readWavMetadata,
+  resolveChatPostHandlingMode,
   stripFillers,
 } = require('../shared.js');
 
@@ -93,6 +94,16 @@ test('formatChatMessage includes speaker and language label when available', () 
     formatChatMessage('', 'Original text', null),
     '[原文]\nOriginal text'
   );
+});
+
+test('resolveChatPostHandlingMode routes original and embedded-chat relay messages', () => {
+  assert.equal(resolveChatPostHandlingMode('meet.google.com', true, undefined), 'meet-top');
+  assert.equal(
+    resolveChatPostHandlingMode('chat.google.com', false, 'embedded-chat'),
+    'embedded-chat'
+  );
+  assert.equal(resolveChatPostHandlingMode('meet.google.com', true, 'embedded-chat'), 'ignore');
+  assert.equal(resolveChatPostHandlingMode('meet.google.com', false, undefined), 'ignore');
 });
 
 test('buildGlossaryFeedbackDescription keeps useful context and truncates long fields', () => {

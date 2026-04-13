@@ -32,6 +32,7 @@
 const {
   normalizeSpeakerName,
   parseSpeakerNameFromAriaLabel,
+  resolveChatPostHandlingMode,
 } = globalThis.MeetTranslatorShared;
 
 // ---------------------------------------------------------------------------
@@ -92,7 +93,12 @@ const SEL = {
     'button[jsname="c6xSqd"]',          // Mode A (internal attr)
     'button[aria-label="Send message"]', // en exact
     'button[aria-label="メッセージを送信"]', // ja exact
+    'button[aria-label*="Send"]',        // en partial fallback
     'button[aria-label*="送信"]',        // ja partial fallback
+    '[role="button"][aria-label="Send message"]',
+    '[role="button"][aria-label="メッセージを送信"]',
+    '[role="button"][aria-label*="Send"]',
+    '[role="button"][aria-label*="送信"]',
   ].join(', '),
 };
 
@@ -123,16 +129,11 @@ function isElementVisible(el) {
   return rect.width > 0 || rect.height > 0;
 }
 
-// ---------------------------------------------------------------------------
-// Helper: detect embedded Google Chat mode
-//
-// When Meet uses the embedded Google Chat ("履歴がオンになっています" / "History is on"),
-// the chat UI is loaded in a cross-origin iframe from chat.google.com.
-// The content script cannot reach it from the meet.google.com frame –
-// instead, the content script running INSIDE that iframe handles posting.
-// ---------------------------------------------------------------------------
-function isEmbeddedChatMode() {
-  return !!document.querySelector('iframe[src*="chat.google.com"]');
+function findVisibleEmbeddedChatFrame() {
+  for (const iframe of document.querySelectorAll('iframe[src*="chat.google.com"]')) {
+    if (isElementVisible(iframe)) return iframe;
+  }
+  return null;
 }
 
 function sendRuntimeMessage(message) {
@@ -222,19 +223,29 @@ function findMessageInput() {
 // ---------------------------------------------------------------------------
 // Helper: wait for findMessageInput() to return a non-null element
 // ---------------------------------------------------------------------------
-function waitForMessageInput(timeoutMs = 3000) {
+function waitForDomMatch(findFn, timeoutMs = 3000) {
   return new Promise((resolve) => {
-    const existing = findMessageInput();
+    const existing = findFn();
     if (existing) { resolve(existing); return; }
 
     const observer = new MutationObserver(() => {
-      const el = findMessageInput();
-      if (el) {
+      const match = findFn();
+      if (match) {
         observer.disconnect();
-        resolve(el);
+        resolve(match);
       }
     });
-    observer.observe(document.body, { childList: true, subtree: true });
+    const root = document.body || document.documentElement;
+    if (!root) {
+      resolve(null);
+      return;
+    }
+    observer.observe(root, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
+    });
 
     setTimeout(() => {
       observer.disconnect();
@@ -243,68 +254,153 @@ function waitForMessageInput(timeoutMs = 3000) {
   });
 }
 
+function waitForMessageInput(timeoutMs = 3000) {
+  return waitForDomMatch(findMessageInput, timeoutMs);
+}
+
+function getChatPostDestination() {
+  const input = findMessageInput();
+  if (input) return { kind: 'local-input', input };
+
+  if (location.hostname === 'meet.google.com' && window === window.top) {
+    const iframe = findVisibleEmbeddedChatFrame();
+    if (iframe) return { kind: 'embedded-chat', iframe };
+  }
+  return null;
+}
+
+function waitForChatPostDestination(timeoutMs = 3000) {
+  return waitForDomMatch(getChatPostDestination, timeoutMs);
+}
+
 // ---------------------------------------------------------------------------
 // Helper: ensure the chat panel is visible
 // ---------------------------------------------------------------------------
 async function ensureChatPanelOpen() {
-  // If the message input is already visible, no need to open the panel
-  if (findMessageInput()) return;
+  const existing = findMessageInput();
+  if (existing) return existing;
 
   const chatBtn = document.querySelector(SEL.chatPanelButton);
-  if (chatBtn) {
+  if (chatBtn && isElementVisible(chatBtn)) {
     chatBtn.click();
-    // Wait for the panel to render (covers both UI modes)
-    await waitForMessageInput(3000);
   }
+  return waitForMessageInput(3000);
+}
+
+async function ensureChatDestinationReady() {
+  const existing = getChatPostDestination();
+  if (existing) return existing;
+
+  const chatBtn = document.querySelector(SEL.chatPanelButton);
+  if (chatBtn && isElementVisible(chatBtn)) {
+    chatBtn.click();
+  }
+  return waitForChatPostDestination(3000);
+}
+
+function getInputSearchRoots(input, maxDepth = 6) {
+  const roots = [];
+  let node = input;
+  while (node && roots.length < maxDepth) {
+    roots.push(node);
+    node = node.parentElement;
+  }
+  roots.push(document);
+  return roots;
+}
+
+function findSendButton(input) {
+  const seen = new Set();
+  for (const root of getInputSearchRoots(input)) {
+    if (!root?.querySelectorAll) continue;
+    for (const btn of root.querySelectorAll(SEL.sendButton)) {
+      if (seen.has(btn) || !isElementVisible(btn)) continue;
+      seen.add(btn);
+      if (btn.getAttribute('aria-disabled') === 'true') continue;
+      if ('disabled' in btn && btn.disabled) continue;
+      return btn;
+    }
+  }
+  return null;
+}
+
+function fillMessageInput(input, text) {
+  input.focus();
+
+  if (input.isContentEditable) {
+    document.execCommand('selectAll', false, null);
+    const inserted = document.execCommand('insertText', false, text);
+    if (!inserted) {
+      input.textContent = text;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    return;
+  }
+
+  const nativeSetter = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    'value'
+  ).set;
+  nativeSetter.call(input, text);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function submitMessageInput(input) {
+  const sendBtn = findSendButton(input);
+  if (sendBtn) {
+    sendBtn.click();
+    return;
+  }
+
+  const form = input.form || input.closest('form');
+  if (form?.requestSubmit) {
+    form.requestSubmit();
+    return;
+  }
+
+  const opts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true };
+  input.dispatchEvent(new KeyboardEvent('keydown', opts));
+  input.dispatchEvent(new KeyboardEvent('keypress', opts));
+  input.dispatchEvent(new KeyboardEvent('keyup', opts));
+}
+
+async function postTextIntoInput(input, text) {
+  fillMessageInput(input, text);
+  await new Promise((r) => setTimeout(r, 150));
+  submitMessageInput(input);
+}
+
+async function relayPostToEmbeddedChat(text) {
+  const response = await sendRuntimeMessage({
+    type: 'RELAY_POST_TRANSLATION',
+    text,
+  });
+  if (!response?.success) {
+    throw new Error(response?.error || 'embedded Google Chat iframe is not ready');
+  }
+}
+
+async function postTranslationFromMeetFrame(text) {
+  const destination = await ensureChatDestinationReady();
+  if (!destination) {
+    throw new Error('チャット入力欄が見つかりませんでした。チャットパネルを開いてください。');
+  }
+  if (destination.kind === 'embedded-chat') {
+    await relayPostToEmbeddedChat(text);
+    return;
+  }
+  await postTextIntoInput(destination.input, text);
 }
 
 // ---------------------------------------------------------------------------
 // Core: post translated text to the Meet chat
 // ---------------------------------------------------------------------------
 async function postToChat(text) {
-  // 1. Make sure the chat panel is open
-  await ensureChatPanelOpen();
-
-  // 2. Locate the message input (handles both classic Meet and embedded Chat)
-  const input = findMessageInput();
+  const input = await ensureChatPanelOpen();
   if (!input) {
     throw new Error('チャット入力欄が見つかりませんでした。チャットパネルを開いてください。');
   }
-
-  // 3. Focus and fill the input
-  input.focus();
-
-  // isContentEditable is true for both contenteditable="true" and contenteditable=""
-  if (input.isContentEditable) {
-    // contenteditable div (Google Meet classic / embedded Google Chat)
-    // execCommand('insertText') triggers both native and Closure Library events.
-    input.focus();
-    document.execCommand('selectAll', false, null);
-    document.execCommand('insertText', false, text);
-  } else {
-    // Plain <textarea> (Google Chat history-off pattern: jsname="YPqjbf")
-    const nativeSetter = Object.getOwnPropertyDescriptor(
-      HTMLTextAreaElement.prototype,
-      'value'
-    ).set;
-    nativeSetter.call(input, text);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  }
-
-  // 4. Small delay so the UI can process the input event
-  await new Promise((r) => setTimeout(r, 150));
-
-  // 5. Click the send button (preferred) or press Enter
-  const sendBtn = document.querySelector(SEL.sendButton);
-  if (sendBtn && !sendBtn.disabled) {
-    sendBtn.click();
-  } else {
-    // Fallback: simulate Enter key (works in both classic Meet and embedded Google Chat)
-    const opts = { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true };
-    input.dispatchEvent(new KeyboardEvent('keydown', opts));
-    input.dispatchEvent(new KeyboardEvent('keypress', opts));
-    input.dispatchEvent(new KeyboardEvent('keyup', opts));
-  }
+  await postTextIntoInput(input, text);
 }
 
 // ---------------------------------------------------------------------------
@@ -326,22 +422,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return false;
 
     case 'POST_TRANSLATION': {
-      // With all_frames:true, this script runs in both the meet.google.com
-      // main frame AND the chat.google.com iframe.
-      //
-      // Embedded Chat mode: the input lives in the chat.google.com iframe.
-      //   • meet.google.com frame  → isEmbeddedChatMode()=true, no input here
-      //                              → return false (let iframe handle it)
-      //   • chat.google.com iframe → location.hostname='chat.google.com'
-      //                              → handle it here
-      //
-      // Classic Meet mode: input is in the meet.google.com frame itself.
-      //   • isEmbeddedChatMode()=false → handle it here
-      if (location.hostname !== 'chat.google.com' && isEmbeddedChatMode()) {
-        // Embedded Chat mode and we're in the main Meet frame – delegate to iframe
+      const mode = resolveChatPostHandlingMode(
+        location.hostname,
+        window === window.top,
+        message.target
+      );
+      if (mode === 'ignore') {
         return false;
       }
-      postToChat(message.text)
+
+      const post = mode === 'meet-top' ? postTranslationFromMeetFrame : postToChat;
+      post(message.text)
         .then(() => sendResponse({ success: true }))
         .catch((err) => {
           console.error('[Meet Translator] チャット投稿エラー:', err);
