@@ -100,7 +100,8 @@ make GPU=cuda     # force NVIDIA CUDA
 make GPU=cpu      # CPU only
 ```
 
-`make` automatically clones and cmake-builds whisper.cpp and llama.cpp on first run.
+`make` automatically clones and cmake-builds whisper.cpp and llama.cpp on first run,
+and refreshes those vendored checkouts when the pinned upstream versions change after a `git pull`.
 
 ### Rebuilding
 
@@ -108,9 +109,9 @@ After making changes, choose the appropriate command:
 
 | Command | When to use |
 |---|---|
-| `make build` | Only Go source changed – skips cmake, runs `go build` only |
-| `make rebuild` | Bridge C++ files changed (`whisper_bridge.cpp`, etc.) – re-runs cmake then `go build`; skips vendor clone |
-| `make distclean && make` | `LLAMA_VERSION` / `WHISPER_VERSION` changed – removes everything including vendor and rebuilds from scratch |
+| `make build` | Only Go source changed – reuses the current vendor checkout and runs `go build` |
+| `make rebuild` | Bridge C++ files changed (`whisper_bridge.cpp`, etc.) – re-runs cmake then `go build`; pinned vendor versions still auto-refresh if needed |
+| `make distclean && make` | Full reset when you want to re-clone vendor and rebuild everything from scratch |
 
 ```bash
 # Example: Go source changed (fastest)
@@ -119,7 +120,7 @@ make build
 # Example: bridge C++ updated (e.g. after git pull)
 make rebuild
 
-# Example: upgrading llama.cpp / whisper.cpp version
+# Example: full clean rebuild
 make distclean
 make
 ```
@@ -498,7 +499,7 @@ Two workflow types run across 4 platforms on every pull request:
 ## Third-Party Licenses
 
 This software embeds [whisper.cpp](https://github.com/ggerganov/whisper.cpp) **v1.8.4** and
-[llama.cpp](https://github.com/ggerganov/llama.cpp) **b8664**, both released under the MIT License.
+[llama.cpp](https://github.com/ggerganov/llama.cpp) **b8699**, both released under the MIT License.
 
 Models downloaded at runtime (Whisper, Qwen3.5, Qwen3, Qwen2.5-7B/14B, Gemma4) are released
 under MIT or Apache 2.0. Qwen2.5-3B is excluded from the registry as it carries a
