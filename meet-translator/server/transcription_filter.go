@@ -32,13 +32,17 @@ const (
 	minMeaningfulRunes = 2
 
 	// 長時間セッションで発生しやすい「同じフレーズのループ再生」を低リスクで弾く閾値。
-	// 短い単位は 4 回以上、十分に長い単位は 3 回以上の完全反復のみを hallucination とみなす。
+	// 短い単位は 4 回以上、十分に長い単位は 2 回以上の完全反復を hallucination とみなす。
 	minLoopUnitRunes      = 4
 	minLoopRepeats        = 4
 	minLongLoopUnitRunes  = 8
-	minLongLoopRepeats    = 3
+	minLongLoopRepeats    = 2
 	minHistoryLoopRunes   = 8
 	minHistoryLoopRepeats = 2
+
+	// 先頭/末尾に少量の別文が混ざっていても、本文の大半が長い反復なら hallucination とみなす。
+	dominantLoopCoverageNumerator   = 2
+	dominantLoopCoverageDenominator = 3
 )
 
 // ── ブロックリスト ──────────────────────────────────────────────────────────
@@ -68,9 +72,13 @@ var hallucinationExactPhrases = []string{
 	"おやすみなさい",
 	"おやすみ",
 	"またお会いしましょう",
+	"次の動画でお会いしましょう",
+	"また次の動画でお会いしましょう",
+	"次回の動画でお会いしましょう",
 	"次回もお楽しみに",
 	"またね",
 	"バイバイ",
+	"私たちのことを持っています",
 	// ── 日本語: チャンネル登録・高評価 ───────────────────────────────────
 	"チャンネル登録よろしくお願いします",
 	"チャンネル登録お願いします",
@@ -214,6 +222,36 @@ func isRepeatedNormalizedPattern(norm string, minUnitRunes, minRepeats int) bool
 	return false
 }
 
+// hasDominantRepeatedNormalizedRun は、norm 全体ではなく一部だけが長い反復でも、
+// その反復が本文の大半を占めるなら hallucination とみなす。
+func hasDominantRepeatedNormalizedRun(norm string, minUnitRunes, minRepeats int) bool {
+	normRunes := []rune(norm)
+	total := len(normRunes)
+	if total < minUnitRunes*minRepeats {
+		return false
+	}
+	for unitLen := minUnitRunes; unitLen <= total/minRepeats; unitLen++ {
+		maxStart := total - unitLen*minRepeats
+		for start := 0; start <= maxStart; start++ {
+			unit := normRunes[start : start+unitLen]
+			repeats := 1
+			next := start + unitLen
+			for next+unitLen <= total && runeSlicesEqual(normRunes[next:next+unitLen], unit) {
+				repeats++
+				next += unitLen
+			}
+			if repeats < minRepeats {
+				continue
+			}
+			repeatedRunes := unitLen * repeats
+			if repeatedRunes*dominantLoopCoverageDenominator >= total*dominantLoopCoverageNumerator {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // isKnownHallucination は text が Whisper の既知ハルシネーションフレーズかどうかを判定する。
 //
 // 判定ロジック:
@@ -247,7 +285,9 @@ func isRepeatTranscription(text string, history []contextEntry) bool {
 		return false
 	}
 	if isRepeatedNormalizedPattern(norm, minLongLoopUnitRunes, minLongLoopRepeats) ||
-		isRepeatedNormalizedPattern(norm, minLoopUnitRunes, minLoopRepeats) {
+		isRepeatedNormalizedPattern(norm, minLoopUnitRunes, minLoopRepeats) ||
+		hasDominantRepeatedNormalizedRun(norm, minLongLoopUnitRunes, minLongLoopRepeats) ||
+		hasDominantRepeatedNormalizedRun(norm, minLoopUnitRunes, minLoopRepeats) {
 		return true
 	}
 	for _, e := range history {

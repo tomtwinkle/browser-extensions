@@ -439,6 +439,90 @@ func TestHandleTranscribe_MicroLoopFiltered(t *testing.T) {
 	}
 }
 
+func TestHandleTranscribe_DoubleSentenceLoopFiltered(t *testing.T) {
+	s := newTestServer(t, mockFuncs{
+		transcribe: func(_ []byte, _ string) (string, string, error) {
+			return strings.Repeat("Project update starts now. ", 2), "", nil
+		},
+	})
+
+	req := buildAudioFormForPath(t, "/transcribe", nil, fakeWAV)
+	w := httptest.NewRecorder()
+	s.handleTranscribe(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["transcription"] != "" {
+		t.Errorf("double sentence loop should be filtered, got %q", resp["transcription"])
+	}
+}
+
+func TestHandleTranscribeAndTranslate_DominantRepeatedOutroFiltered(t *testing.T) {
+	translateCalled := false
+	s := newTestServer(t, mockFuncs{
+		transcribe: func(_ []byte, _ string) (string, string, error) {
+			return "お待ちしています。 次の動画でお会いしましょう。 次の動画でお会いしましょう。 次の動画でお会いしましょう。", "", nil
+		},
+		translate: func(string, string, string, ModelOptions, []contextEntry) (string, error) {
+			translateCalled = true
+			return "should not translate", nil
+		},
+	})
+
+	req := buildAudioForm(t, nil, fakeWAV)
+	w := httptest.NewRecorder()
+	s.handleTranscribeAndTranslate(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["transcription"] != "" || resp["translation"] != "" {
+		t.Errorf("dominant repeated outro should be filtered, got transcription=%q translation=%q",
+			resp["transcription"], resp["translation"])
+	}
+	if translateCalled {
+		t.Error("translation should not be called for filtered repeated outro hallucination")
+	}
+	if got := len(s.contextBuf.Entries()); got != 0 {
+		t.Errorf("filtered repeated outro should not be added to context buffer, got %d entries", got)
+	}
+}
+
+func TestHandleTranscribeAndTranslate_KnownHallucinationPhraseFiltered(t *testing.T) {
+	translateCalled := false
+	s := newTestServer(t, mockFuncs{
+		transcribe: func(_ []byte, _ string) (string, string, error) {
+			return "私たちのことを 持っています。", "", nil
+		},
+		translate: func(string, string, string, ModelOptions, []contextEntry) (string, error) {
+			translateCalled = true
+			return "should not translate", nil
+		},
+	})
+
+	req := buildAudioForm(t, nil, fakeWAV)
+	w := httptest.NewRecorder()
+	s.handleTranscribeAndTranslate(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d", w.Code)
+	}
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["transcription"] != "" || resp["translation"] != "" {
+		t.Errorf("known hallucination phrase should be filtered, got transcription=%q translation=%q",
+			resp["transcription"], resp["translation"])
+	}
+	if translateCalled {
+		t.Error("translation should not be called for filtered known hallucination phrase")
+	}
+}
+
 func TestHandleTranscribeAndTranslate_HistoryPassedToTranslate(t *testing.T) {
 	var capturedHistory []contextEntry
 	s := newTestServer(t, mockFuncs{

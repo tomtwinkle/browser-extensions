@@ -64,7 +64,10 @@ func TestIsRepeatTranscription(t *testing.T) {
 		{"empty input", "", false},
 		{"second entry match", "Good morning.", true},
 		{"history loop replay", "Let's move on to the next topic. Let's move on to the next topic.", true},
+		{"double long sentence loop", strings.Repeat("Project update starts now. ", 2), true},
 		{"long micro loop", strings.Repeat("Project update starts now. ", 3), true},
+		{"dominant repeated suffix with preamble", "お待ちしています。 次の動画でお会いしましょう。 次の動画でお会いしましょう。 次の動画でお会いしましょう。", true},
+		{"repeated suffix below dominant coverage", strings.Repeat("Actual agenda item discussion. ", 3) + strings.Repeat("Project update starts now. ", 3), false},
 		{"short repeated emphasis allowed", "yes yes yes yes", false},
 		{"repeated word in normal sentence", "This is very very important.", false},
 	}
@@ -103,7 +106,9 @@ func TestIsKnownHallucination(t *testing.T) {
 		{"ja exact: ご視聴ありがとうございました", "ご視聴ありがとうございました", true},
 		{"ja exact with punct", "ご視聴ありがとうございました。", true},
 		{"ja exact: おやすみなさい", "おやすみなさい", true},
+		{"ja exact: 次の動画でお会いしましょう", "次の動画でお会いしましょう。", true},
 		{"ja exact: チャンネル登録お願いします", "チャンネル登録お願いします", true},
+		{"ja exact: malformed phrase", "私たちのことを 持っています。", true},
 		{"ja substring: チャンネル登録", "チャンネル登録よろしくお願いします！", true},
 		{"ja substring: ご視聴", "今日もご視聴ありがとう", true},
 		{"ja exact: 字幕は自動生成されています", "字幕は自動生成されています", true},
@@ -120,6 +125,7 @@ func TestIsKnownHallucination(t *testing.T) {
 		// ── 通過: 正常な発話 ──────────────────────────────────────────────
 		{"real: hello", "こんにちは", false},
 		{"real: question", "次の議題に移りましょう", false},
+		{"real: next video in context", "次の動画で確認した内容を議事録にまとめます", false},
 		{"real: english", "Can you hear me?", false},
 		{"real: ありがとう alone", "ありがとう", false},
 		{"real: ありがとうございます alone", "ありがとうございます", false},
