@@ -130,6 +130,32 @@
     return parts.join(' | ');
   }
 
+  function cloneFeedbackContext(context) {
+    return {
+      speakerName: normalizeSpeakerName(context?.speakerName),
+      original: normalizeFeedbackText(context?.original),
+      translation: normalizeFeedbackText(context?.translation),
+    };
+  }
+
+  function hasFeedbackContext(context) {
+    const snapshot = cloneFeedbackContext(context);
+    return Boolean(snapshot.original || snapshot.translation);
+  }
+
+  function mergeFeedbackContext(previousContext, incomingContext) {
+    const previous = cloneFeedbackContext(previousContext);
+    const incoming = cloneFeedbackContext(incomingContext);
+    if (!incoming.original && !incoming.translation) {
+      return previous;
+    }
+    return {
+      speakerName: incoming.speakerName || previous.speakerName,
+      original: incoming.original || previous.original,
+      translation: incoming.translation || null,
+    };
+  }
+
   function resolveChatPostHandlingMode(hostname, isTopFrame, target) {
     if (hostname === 'meet.google.com' && isTopFrame && target !== 'embedded-chat') {
       return 'meet-top';
@@ -273,11 +299,14 @@
   return {
     base64ToUint8Array,
     buildGlossaryFeedbackDescription,
+    cloneFeedbackContext,
     detectTextLang,
     formatChatMessage,
     getWavDurationMs,
+    hasFeedbackContext,
     isFillerOnly,
     langLabel,
+    mergeFeedbackContext,
     mergeWavBase64Chunks,
     normalizeFeedbackText,
     normalizeSpeakerName,
