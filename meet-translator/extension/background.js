@@ -26,6 +26,7 @@ const {
   isFillerOnly,
   mergeWavBase64Chunks,
   normalizeSpeakerName,
+  resolveContentScriptFrame,
   stripFillers,
 } = globalThis.MeetTranslatorShared;
 
@@ -43,6 +44,7 @@ const state = {
   healthCheckTimer: null,
   serverInfo: null, // { whisperModel, llamaModel } – populated from /health
   pendingSpeakerBatch: null,
+  embeddedChatFrame: null, // { tabId, frameId }
   audioQueue: Promise.resolve(),
 };
 
@@ -212,7 +214,7 @@ async function processAudioChunk(wavB64, speakerName, tabId) {
 
   // チャット: 原文投稿
   if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'translation') {
-    await sendToContentScript(tabId, {
+    await dispatchToContentScript(tabId, {
       type: 'POST_TRANSLATION',
       text: formatChatMessage(translSourceLang || cfg.sourceLang, transcription, speakerName),
     });
@@ -229,7 +231,7 @@ async function processAudioChunk(wavB64, speakerName, tabId) {
 
   if (!needTranslation) {
     if (tabId && cfg.overlayEnabled && cfg.overlayFormat !== 'translation') {
-      await sendToContentScript(tabId, {
+      await dispatchToContentScript(tabId, {
         type:        'SHOW_OVERLAY',
         original:    transcription,
         translation: null,
@@ -253,7 +255,7 @@ async function processAudioChunk(wavB64, speakerName, tabId) {
 
   // チャット: 翻訳投稿
   if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'transcription') {
-    await sendToContentScript(tabId, {
+    await dispatchToContentScript(tabId, {
       type: 'POST_TRANSLATION',
       text: formatChatMessage(translTargetLang, translation, speakerName),
     });
@@ -261,7 +263,7 @@ async function processAudioChunk(wavB64, speakerName, tabId) {
 
   // オーバーレイ表示
   if (tabId && cfg.overlayEnabled) {
-    await sendToContentScript(tabId, {
+    await dispatchToContentScript(tabId, {
       type:        'SHOW_OVERLAY',
       original:    cfg.overlayFormat !== 'translation'   ? transcription : null,
       translation: cfg.overlayFormat !== 'transcription' ? translation   : null,
@@ -349,9 +351,35 @@ async function handleAudioData(wavB64) {
  * 「Receiving end does not exist」の場合は content.js を動的注入してリトライする。
  * 拡張機能の更新後に開いたままのタブでも確実に届くようにする。
  */
-async function sendToContentScript(tabId, message) {
+function getEmbeddedChatFrameId(tabId) {
+  if (state.embeddedChatFrame?.tabId === tabId) {
+    return state.embeddedChatFrame.frameId;
+  }
+  return null;
+}
+
+function rememberEmbeddedChatFrame(tabId, frameId) {
+  if (!state.isActive || tabId !== state.tabId || !Number.isInteger(frameId) || frameId === 0) {
+    return false;
+  }
+  state.embeddedChatFrame = { tabId, frameId };
+  return true;
+}
+
+function clearEmbeddedChatFrame(tabId = null) {
+  if (!state.embeddedChatFrame) return;
+  if (tabId === null || state.embeddedChatFrame.tabId === tabId) {
+    state.embeddedChatFrame = null;
+  }
+}
+
+function tabsSendMessage(tabId, message, options = null) {
+  return options ? chrome.tabs.sendMessage(tabId, message, options) : chrome.tabs.sendMessage(tabId, message);
+}
+
+async function sendToContentScript(tabId, message, options = null) {
   try {
-    return await chrome.tabs.sendMessage(tabId, message);
+    return await tabsSendMessage(tabId, message, options);
   } catch (err) {
     if (!err.message?.includes('Receiving end does not exist')) throw err;
 
@@ -362,7 +390,7 @@ async function sendToContentScript(tabId, message) {
         target: { tabId, allFrames: true },
         files: ['shared.js', 'content.js'],
       });
-      return await chrome.tabs.sendMessage(tabId, message);
+      return await tabsSendMessage(tabId, message, options);
     } catch (injectErr) {
       console.warn('[background] content script injection failed:', injectErr.message);
       return null;
@@ -370,15 +398,34 @@ async function sendToContentScript(tabId, message) {
   }
 }
 
+async function dispatchToContentScript(tabId, message) {
+  const frameId = resolveContentScriptFrame(
+    message.type,
+    message.target,
+    getEmbeddedChatFrameId(tabId)
+  );
+  const options = Number.isInteger(frameId) ? { frameId } : null;
+
+  try {
+    return await sendToContentScript(tabId, message, options);
+  } catch (err) {
+    if (message.target === 'embedded-chat' && Number.isInteger(frameId)) {
+      clearEmbeddedChatFrame(tabId);
+      return sendToContentScript(tabId, message);
+    }
+    throw err;
+  }
+}
+
 async function getActiveSpeaker(tabId) {
   if (!tabId) return null;
-  const response = await sendToContentScript(tabId, { type: 'GET_ACTIVE_SPEAKER' });
+  const response = await dispatchToContentScript(tabId, { type: 'GET_ACTIVE_SPEAKER' });
   return normalizeSpeakerName(response?.speakerName);
 }
 
 async function pushFeedbackContext(tabId, context) {
   if (!tabId) return null;
-  return sendToContentScript(tabId, {
+  return dispatchToContentScript(tabId, {
     type: 'UPDATE_FEEDBACK_CONTEXT',
     original: context.original || null,
     translation: context.translation || null,
@@ -470,6 +517,7 @@ async function startCapture(tabId) {
   state.lastError = null;
   state.serverInfo = { whisperModel: health.whisperModel, llamaModel: health.llamaModel };
   state.pendingSpeakerBatch = null;
+  state.embeddedChatFrame = null;
   state.audioQueue = Promise.resolve();
   cancelSpeakerBatchFlush();
 
@@ -547,13 +595,14 @@ async function stopCapture() {
 
   state.isActive = false;
   state.tabId = null;
+  clearEmbeddedChatFrame(tabId);
 
   await closeOffscreenDocument();
 
   // Notify the content script that translation has stopped
   if (tabId) {
     try {
-      await sendToContentScript(tabId, { type: 'TRANSLATION_STOPPED' });
+      await dispatchToContentScript(tabId, { type: 'TRANSLATION_STOPPED' });
     } catch (_) {}
   }
 }
@@ -606,12 +655,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .catch((err) => sendResponse({ success: false, error: err.message }));
       return true;
 
+    case 'REGISTER_EMBEDDED_CHAT_FRAME':
+      let registered = false;
+      if (sender.tab?.id && Number.isInteger(sender.frameId)) {
+        registered = rememberEmbeddedChatFrame(sender.tab.id, sender.frameId);
+      }
+      sendResponse({ success: true, registered });
+      return false;
+
     case 'RELAY_POST_TRANSLATION':
       if (!sender.tab?.id) {
         sendResponse({ success: false, error: 'active tab is unavailable' });
         return false;
       }
-      sendToContentScript(sender.tab.id, {
+      dispatchToContentScript(sender.tab.id, {
         type: 'POST_TRANSLATION',
         text: message.text,
         target: 'embedded-chat',

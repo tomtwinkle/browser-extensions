@@ -148,6 +148,16 @@ function sendRuntimeMessage(message) {
   });
 }
 
+let embeddedChatFrameRegistered = false;
+
+async function registerEmbeddedChatFrame() {
+  if (location.hostname !== 'chat.google.com' || embeddedChatFrameRegistered) return;
+  try {
+    const response = await sendRuntimeMessage({ type: 'REGISTER_EMBEDDED_CHAT_FRAME' });
+    embeddedChatFrameRegistered = response?.registered === true;
+  } catch (_) {}
+}
+
 // ---------------------------------------------------------------------------
 // Helper: detect the active speaker tile in the Meet main frame
 // ---------------------------------------------------------------------------
@@ -431,6 +441,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return false;
       }
 
+      if (mode === 'embedded-chat') {
+        registerEmbeddedChatFrame();
+      }
+
       const post = mode === 'meet-top' ? postTranslationFromMeetFrame : postToChat;
       post(message.text)
         .then(() => sendResponse({ success: true }))
@@ -462,6 +476,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 console.log('[Meet Translator] content script loaded on', location.href);
+registerEmbeddedChatFrame();
 
 // ---------------------------------------------------------------------------
 // Overlay display (subtitle mode / scroll mode)

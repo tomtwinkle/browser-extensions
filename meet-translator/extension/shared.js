@@ -140,6 +140,26 @@
     return 'ignore';
   }
 
+  function resolveContentScriptFrame(messageType, target, embeddedChatFrameId) {
+    if (messageType === 'POST_TRANSLATION') {
+      if (target === 'embedded-chat') {
+        return Number.isInteger(embeddedChatFrameId) ? embeddedChatFrameId : null;
+      }
+      return 0;
+    }
+
+    if (
+      messageType === 'GET_ACTIVE_SPEAKER' ||
+      messageType === 'UPDATE_FEEDBACK_CONTEXT' ||
+      messageType === 'SHOW_OVERLAY' ||
+      messageType === 'TRANSLATION_STOPPED'
+    ) {
+      return 0;
+    }
+
+    return null;
+  }
+
   function decodeBase64(base64) {
     if (typeof atob === 'function') return atob(base64);
     if (typeof Buffer !== 'undefined') {
@@ -264,6 +284,7 @@
     parseSpeakerNameFromAriaLabel,
     readWavMetadata,
     resolveChatPostHandlingMode,
+    resolveContentScriptFrame,
     stripFillers,
     truncateForDescription,
     uint8ArrayToBase64,
