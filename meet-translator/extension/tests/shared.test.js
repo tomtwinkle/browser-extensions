@@ -15,6 +15,7 @@ const {
   parseSpeakerNameFromAriaLabel,
   readWavMetadata,
   resolveChatPostHandlingMode,
+  resolveContentScriptFrame,
   stripFillers,
 } = require('../shared.js');
 
@@ -104,6 +105,15 @@ test('resolveChatPostHandlingMode routes original and embedded-chat relay messag
   );
   assert.equal(resolveChatPostHandlingMode('meet.google.com', true, 'embedded-chat'), 'ignore');
   assert.equal(resolveChatPostHandlingMode('meet.google.com', false, undefined), 'ignore');
+});
+
+test('resolveContentScriptFrame targets top frame and embedded chat frame correctly', () => {
+  assert.equal(resolveContentScriptFrame('POST_TRANSLATION', undefined, 23), 0);
+  assert.equal(resolveContentScriptFrame('POST_TRANSLATION', 'embedded-chat', 23), 23);
+  assert.equal(resolveContentScriptFrame('POST_TRANSLATION', 'embedded-chat', null), null);
+  assert.equal(resolveContentScriptFrame('SHOW_OVERLAY', undefined, 23), 0);
+  assert.equal(resolveContentScriptFrame('GET_ACTIVE_SPEAKER', undefined, 23), 0);
+  assert.equal(resolveContentScriptFrame('UNKNOWN_MESSAGE', undefined, 23), null);
 });
 
 test('buildGlossaryFeedbackDescription keeps useful context and truncates long fields', () => {
