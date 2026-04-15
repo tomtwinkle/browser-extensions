@@ -8,9 +8,9 @@
 #   make GPU=cpu           CPU only
 #   make prism             PrismML ビルド (bonsai-8b / Q1_0_g128 対応) → server-prism
 #   make all               両バリアント (server + server-prism) をビルド
-#   make rebuild           re-run cmake + go build (keep vendor clone)
-#   make clean             remove binary + cmake build
-#   make distclean         remove vendor as well
+#   make rebuild           re-run cmake + go build (vendor version pins auto-refresh)
+#   make clean             remove binary + cmake build (keep vendor clones)
+#   make distclean         remove vendor as well (full reset)
 # ──────────────────────────────────────────────────────────────────────────────
 
 # ── Standard build (official llama.cpp: gemma4 support) ──────────────────────
@@ -22,6 +22,7 @@ LLAMA_VERSION_PRISM := prism-b8201-ba7e817
 LLAMA_REPO_PRISM    := https://github.com/PrismML-Eng/llama.cpp.git
 
 WHISPER_VERSION := v1.8.4
+WHISPER_REPO    := https://github.com/ggerganov/whisper.cpp.git
 
 OS_NAME   := $(shell uname -s 2>/dev/null || echo Windows_NT)
 ARCH_NAME := $(shell uname -m 2>/dev/null || echo x86_64)
@@ -35,12 +36,16 @@ VENDOR_DIR       := vendor
 BUILD_DIR        := $(VENDOR_DIR)/build
 LLAMA_DIR        := $(VENDOR_DIR)/llama.cpp
 WHISPER_DIR      := $(VENDOR_DIR)/whisper.cpp
+LLAMA_STAMP      := $(BUILD_DIR)/.llama-version-$(LLAMA_VERSION)
+WHISPER_STAMP    := $(BUILD_DIR)/.whisper-version-$(WHISPER_VERSION)
 
 # PrismML バリアント用ディレクトリ (標準と共存)
 VENDOR_PRISM_DIR := vendor-prism
 BUILD_PRISM_DIR  := $(VENDOR_PRISM_DIR)/build
 LLAMA_PRISM_DIR  := $(VENDOR_PRISM_DIR)/llama.cpp
 WHISPER_PRISM_DIR := $(VENDOR_PRISM_DIR)/whisper.cpp
+LLAMA_PRISM_STAMP := $(BUILD_PRISM_DIR)/.llama-version-$(LLAMA_VERSION_PRISM)
+WHISPER_PRISM_STAMP := $(BUILD_PRISM_DIR)/.whisper-version-$(WHISPER_VERSION)
 
 # ── GPU target detection ──────────────────────────────────────────────────────
 GPU ?= auto
@@ -144,17 +149,35 @@ prism: deps-prism
 ## deps: 標準ビルド用ライブラリをクローン＆ビルド
 deps: $(BUILD_DIR)/.built
 
-$(LLAMA_DIR):
-	@echo "[deps] Cloning llama.cpp ($(LLAMA_VERSION))..."
-	git clone --depth=1 --branch $(LLAMA_VERSION) \
-	$(LLAMA_REPO) $(LLAMA_DIR)
+$(LLAMA_STAMP):
+	@mkdir -p $(VENDOR_DIR) $(BUILD_DIR)
+	@current_ref="$$(git -C $(LLAMA_DIR) describe --tags --exact-match HEAD 2>/dev/null || true)"; \
+	current_remote="$$(git -C $(LLAMA_DIR) remote get-url origin 2>/dev/null || true)"; \
+	if [ "$$current_ref" = "$(LLAMA_VERSION)" ] && [ "$$current_remote" = "$(LLAMA_REPO)" ]; then \
+		echo "[deps] llama.cpp already at $(LLAMA_VERSION)"; \
+	else \
+		echo "[deps] Syncing llama.cpp to $(LLAMA_VERSION)..."; \
+		rm -rf $(LLAMA_DIR); \
+		git clone --depth=1 --branch $(LLAMA_VERSION) $(LLAMA_REPO) $(LLAMA_DIR); \
+	fi
+	@rm -f $(BUILD_DIR)/.llama-version-*
+	@touch $@
 
-$(WHISPER_DIR):
-	@echo "[deps] Cloning whisper.cpp ($(WHISPER_VERSION))..."
-	git clone --depth=1 --branch $(WHISPER_VERSION) \
-	https://github.com/ggerganov/whisper.cpp.git $(WHISPER_DIR)
+$(WHISPER_STAMP):
+	@mkdir -p $(VENDOR_DIR) $(BUILD_DIR)
+	@current_ref="$$(git -C $(WHISPER_DIR) describe --tags --exact-match HEAD 2>/dev/null || true)"; \
+	current_remote="$$(git -C $(WHISPER_DIR) remote get-url origin 2>/dev/null || true)"; \
+	if [ "$$current_ref" = "$(WHISPER_VERSION)" ] && [ "$$current_remote" = "$(WHISPER_REPO)" ]; then \
+		echo "[deps] whisper.cpp already at $(WHISPER_VERSION)"; \
+	else \
+		echo "[deps] Syncing whisper.cpp to $(WHISPER_VERSION)..."; \
+		rm -rf $(WHISPER_DIR); \
+		git clone --depth=1 --branch $(WHISPER_VERSION) $(WHISPER_REPO) $(WHISPER_DIR); \
+	fi
+	@rm -f $(BUILD_DIR)/.whisper-version-*
+	@touch $@
 
-$(BUILD_DIR)/.built: $(LLAMA_DIR) $(WHISPER_DIR)
+$(BUILD_DIR)/.built: $(LLAMA_STAMP) $(WHISPER_STAMP)
 	@echo "[cmake] Building standard variant with GPU=$(GPU_TARGET)..."
 	cmake -S . -B $(BUILD_DIR) \
 	$(CMAKE_GENERATOR) \
@@ -177,17 +200,35 @@ $(BUILD_DIR)/.built: $(LLAMA_DIR) $(WHISPER_DIR)
 ## deps-prism: PrismML ビルド用ライブラリをクローン＆ビルド
 deps-prism: $(BUILD_PRISM_DIR)/.built
 
-$(LLAMA_PRISM_DIR):
-	@echo "[deps-prism] Cloning llama.cpp PrismML fork ($(LLAMA_VERSION_PRISM))..."
-	git clone --depth=1 --branch $(LLAMA_VERSION_PRISM) \
-	$(LLAMA_REPO_PRISM) $(LLAMA_PRISM_DIR)
+$(LLAMA_PRISM_STAMP):
+	@mkdir -p $(VENDOR_PRISM_DIR) $(BUILD_PRISM_DIR)
+	@current_ref="$$(git -C $(LLAMA_PRISM_DIR) describe --tags --exact-match HEAD 2>/dev/null || true)"; \
+	current_remote="$$(git -C $(LLAMA_PRISM_DIR) remote get-url origin 2>/dev/null || true)"; \
+	if [ "$$current_ref" = "$(LLAMA_VERSION_PRISM)" ] && [ "$$current_remote" = "$(LLAMA_REPO_PRISM)" ]; then \
+		echo "[deps-prism] llama.cpp already at $(LLAMA_VERSION_PRISM)"; \
+	else \
+		echo "[deps-prism] Syncing llama.cpp to $(LLAMA_VERSION_PRISM)..."; \
+		rm -rf $(LLAMA_PRISM_DIR); \
+		git clone --depth=1 --branch $(LLAMA_VERSION_PRISM) $(LLAMA_REPO_PRISM) $(LLAMA_PRISM_DIR); \
+	fi
+	@rm -f $(BUILD_PRISM_DIR)/.llama-version-*
+	@touch $@
 
-$(WHISPER_PRISM_DIR):
-	@echo "[deps-prism] Cloning whisper.cpp ($(WHISPER_VERSION))..."
-	git clone --depth=1 --branch $(WHISPER_VERSION) \
-	https://github.com/ggerganov/whisper.cpp.git $(WHISPER_PRISM_DIR)
+$(WHISPER_PRISM_STAMP):
+	@mkdir -p $(VENDOR_PRISM_DIR) $(BUILD_PRISM_DIR)
+	@current_ref="$$(git -C $(WHISPER_PRISM_DIR) describe --tags --exact-match HEAD 2>/dev/null || true)"; \
+	current_remote="$$(git -C $(WHISPER_PRISM_DIR) remote get-url origin 2>/dev/null || true)"; \
+	if [ "$$current_ref" = "$(WHISPER_VERSION)" ] && [ "$$current_remote" = "$(WHISPER_REPO)" ]; then \
+		echo "[deps-prism] whisper.cpp already at $(WHISPER_VERSION)"; \
+	else \
+		echo "[deps-prism] Syncing whisper.cpp to $(WHISPER_VERSION)..."; \
+		rm -rf $(WHISPER_PRISM_DIR); \
+		git clone --depth=1 --branch $(WHISPER_VERSION) $(WHISPER_REPO) $(WHISPER_PRISM_DIR); \
+	fi
+	@rm -f $(BUILD_PRISM_DIR)/.whisper-version-*
+	@touch $@
 
-$(BUILD_PRISM_DIR)/.built: $(LLAMA_PRISM_DIR) $(WHISPER_PRISM_DIR)
+$(BUILD_PRISM_DIR)/.built: $(LLAMA_PRISM_STAMP) $(WHISPER_PRISM_STAMP)
 	@echo "[cmake] Building PrismML variant with GPU=$(GPU_TARGET)..."
 	cmake -S . -B $(BUILD_PRISM_DIR) \
 	-DVENDOR_DIR=$(abspath $(VENDOR_PRISM_DIR)) \
@@ -232,8 +273,8 @@ clean:
 	rm -f $(BIN) $(BIN_PRISM)
 	rm -rf $(BUILD_DIR) $(BUILD_PRISM_DIR)
 
-## rebuild: force cmake rebuild + go build without re-cloning vendor
-##          use after: git pull changes bridge C++ files or cmake settings
+## rebuild: force cmake rebuild + go build while keeping vendor clones
+##          pinned upstream tags are still auto-refreshed if they changed
 rebuild:
 	rm -f $(BUILD_DIR)/.built $(BIN)
 	$(MAKE) build

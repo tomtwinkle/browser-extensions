@@ -100,7 +100,8 @@ make GPU=cuda     # NVIDIA CUDA を強制
 make GPU=cpu      # CPU のみ
 ```
 
-`make` は初回に whisper.cpp と llama.cpp を自動クローン・cmake ビルドします。
+`make` は初回に whisper.cpp と llama.cpp を自動クローン・cmake ビルドし、
+`git pull` 後に pin している upstream バージョンが変わっていれば vendor checkout も自動更新します。
 
 ### リビルド
 
@@ -108,9 +109,9 @@ make GPU=cpu      # CPU のみ
 
 | コマンド | 用途 |
 |---|---|
-| `make build` | Go ソースのみ変更した場合。cmake をスキップして `go build` のみ再実行 |
-| `make rebuild` | ブリッジ C++ ファイル（`whisper_bridge.cpp` 等）を変更した後。cmake を再実行してから `go build`。vendor のクローンはスキップ |
-| `make distclean && make` | `LLAMA_VERSION` / `WHISPER_VERSION` を変更した場合。vendor を含むすべてを削除して完全再構築 |
+| `make build` | Go ソースのみ変更した場合。現在の vendor checkout を再利用して `go build` を実行 |
+| `make rebuild` | ブリッジ C++ ファイル（`whisper_bridge.cpp` 等）を変更した後。cmake を再実行してから `go build`。必要なら pin 済み vendor バージョンも自動更新 |
+| `make distclean && make` | vendor を含めて全部取り直したいときの完全再構築 |
 
 ```bash
 # 例: Go ソースを変更した場合（最速）
@@ -119,7 +120,7 @@ make build
 # 例: git pull でブリッジ C++ が更新された場合
 make rebuild
 
-# 例: llama.cpp / whisper.cpp のバージョンを上げた場合
+# 例: 完全にクリーン再構築したい場合
 make distclean
 make
 ```
@@ -502,7 +503,7 @@ Score = quality×0.6 + speed×0.4  (speed = 1/(1 + latency/300ms))
 ## Third-Party Licenses
 
 本ソフトウェアは [whisper.cpp](https://github.com/ggerganov/whisper.cpp) **v1.8.4** および
-[llama.cpp](https://github.com/ggerganov/llama.cpp) **b8664** を組み込んでいます。いずれも MIT ライセンスで公開されています。
+[llama.cpp](https://github.com/ggerganov/llama.cpp) **b8699** を組み込んでいます。いずれも MIT ライセンスで公開されています。
 
 実行時にダウンロードされるモデル（Whisper、Qwen3.5、Qwen3、Qwen2.5-7B/14B、Gemma4）は
 MIT または Apache 2.0 で公開されています。Qwen2.5-3B は非商用限定ライセンスのためレジストリ対象外です。

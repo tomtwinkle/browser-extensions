@@ -55,7 +55,7 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu')
         run: sudo apt-get install -y cmake build-essential
 
-      # llama.cpp b8664 は多数のモデルファイルを含み大量メモリを消費するため、
+      # pin している llama.cpp checkout は多数のモデルファイルを含み大量メモリを消費するため、
       # Ubuntu ランナー (特に ARM 2-core/8GB) でスワップを追加して OOM を防ぐ。
       - name: Add swap space (Linux)
         if: startsWith(matrix.os, 'ubuntu')
