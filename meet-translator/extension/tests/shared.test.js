@@ -6,10 +6,13 @@ const assert = require('node:assert/strict');
 const {
   base64ToUint8Array,
   buildGlossaryFeedbackDescription,
+  cloneFeedbackContext,
   detectTextLang,
   formatChatMessage,
   getWavDurationMs,
+  hasFeedbackContext,
   isFillerOnly,
+  mergeFeedbackContext,
   mergeWavBase64Chunks,
   normalizeSpeakerName,
   parseSpeakerNameFromAriaLabel,
@@ -127,6 +130,47 @@ test('buildGlossaryFeedbackDescription keeps useful context and truncates long f
   assert.match(description, /^user-feedback \| speaker=Hikaru Harada \| original=/);
   assert.match(description, /translation=Translated text$/);
   assert.ok(description.includes(`${'a'.repeat(77)}...`));
+});
+
+test('feedback context helpers preserve a stable editable snapshot', () => {
+  assert.deepEqual(cloneFeedbackContext({ speakerName: '  Hikaru  ', original: ' hello ', translation: ' ' }), {
+    speakerName: 'Hikaru',
+    original: 'hello',
+    translation: null,
+  });
+  assert.equal(hasFeedbackContext({ original: 'hello' }), true);
+  assert.equal(hasFeedbackContext({ translation: 'translated' }), true);
+  assert.equal(hasFeedbackContext({ speakerName: 'Hikaru' }), false);
+
+  const transcriptionOnly = mergeFeedbackContext(null, {
+    speakerName: ' Hikaru Harada ',
+    original: 'Original text',
+  });
+  assert.deepEqual(transcriptionOnly, {
+    speakerName: 'Hikaru Harada',
+    original: 'Original text',
+    translation: null,
+  });
+
+  const withTranslation = mergeFeedbackContext(transcriptionOnly, {
+    speakerName: 'Hikaru Harada',
+    translation: 'Translated text',
+  });
+  assert.deepEqual(withTranslation, {
+    speakerName: 'Hikaru Harada',
+    original: 'Original text',
+    translation: 'Translated text',
+  });
+
+  const nextUtterance = mergeFeedbackContext(withTranslation, {
+    speakerName: 'Hikaru Harada',
+    original: 'Next original text',
+  });
+  assert.deepEqual(nextUtterance, {
+    speakerName: 'Hikaru Harada',
+    original: 'Next original text',
+    translation: null,
+  });
 });
 
 test('readWavMetadata and getWavDurationMs inspect standard PCM WAV payloads', () => {

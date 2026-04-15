@@ -30,6 +30,9 @@
 'use strict';
 
 const {
+  cloneFeedbackContext,
+  hasFeedbackContext,
+  mergeFeedbackContext,
   normalizeSpeakerName,
   parseSpeakerNameFromAriaLabel,
   resolveChatPostHandlingMode,
@@ -112,9 +115,9 @@ const feedbackState = {
   isOpen: false,
   statusText: '',
   statusError: false,
-  speakerName: '',
-  original: '',
-  translation: '',
+  latestContext: cloneFeedbackContext(null),
+  lockedContext: cloneFeedbackContext(null),
+  hasPendingUpdate: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -881,12 +884,15 @@ function getFeedbackRoot() {
     anchor.appendChild(root);
 
     root.querySelector('#mt-feedback-toggle')?.addEventListener('click', () => {
-      if (!(feedbackState.original || feedbackState.translation)) return;
-      feedbackState.isOpen = !feedbackState.isOpen;
+      if (feedbackState.isOpen) {
+        closeFeedbackEditor();
+      } else if (!openFeedbackEditor()) {
+        return;
+      }
       syncFeedbackUi();
     });
     root.querySelector('#mt-feedback-close')?.addEventListener('click', () => {
-      feedbackState.isOpen = false;
+      closeFeedbackEditor();
       syncFeedbackUi();
     });
     root.querySelector('#mt-feedback-kind')?.addEventListener('change', syncFeedbackFormCopy);
@@ -899,6 +905,29 @@ function getFeedbackRoot() {
   syncFeedbackFormCopy();
   syncFeedbackUi();
   return root;
+}
+
+function getVisibleFeedbackContext() {
+  if (feedbackState.isOpen && hasFeedbackContext(feedbackState.lockedContext)) {
+    return feedbackState.lockedContext;
+  }
+  return feedbackState.latestContext;
+}
+
+function openFeedbackEditor() {
+  if (!hasFeedbackContext(feedbackState.latestContext)) return false;
+  feedbackState.lockedContext = cloneFeedbackContext(feedbackState.latestContext);
+  feedbackState.isOpen = true;
+  feedbackState.hasPendingUpdate = false;
+  feedbackState.statusText = '';
+  feedbackState.statusError = false;
+  return true;
+}
+
+function closeFeedbackEditor() {
+  feedbackState.isOpen = false;
+  feedbackState.lockedContext = cloneFeedbackContext(null);
+  feedbackState.hasPendingUpdate = false;
 }
 
 function syncFeedbackFormCopy() {
@@ -932,36 +961,57 @@ function syncFeedbackUi() {
   const original = root.querySelector('#mt-feedback-original');
   const translation = root.querySelector('#mt-feedback-translation');
   const status = root.querySelector('#mt-feedback-status');
-  const hasContext = Boolean(feedbackState.original || feedbackState.translation);
+  const visibleContext = getVisibleFeedbackContext();
+  const hasLatestContext = hasFeedbackContext(feedbackState.latestContext);
+  const hasVisibleContext = hasFeedbackContext(visibleContext);
 
-  toggle.disabled = !hasContext;
-  widget.classList.toggle('mt-open', feedbackState.isOpen && hasContext);
-  meta.textContent = feedbackState.speakerName
-    ? `話者: ${feedbackState.speakerName}`
-    : '直近の発話から辞書へ反映します';
-  original.textContent = feedbackPreview(feedbackState.original);
-  translation.textContent = feedbackPreview(feedbackState.translation);
+  toggle.disabled = !hasLatestContext;
+  widget.classList.toggle('mt-open', feedbackState.isOpen && hasVisibleContext);
+
+  const metaParts = [];
+  if (visibleContext.speakerName) {
+    metaParts.push(`話者: ${visibleContext.speakerName}`);
+  } else if (feedbackState.isOpen) {
+    metaParts.push('表示中の発話を編集中です');
+  } else {
+    metaParts.push('直近の発話から辞書へ反映します');
+  }
+  if (feedbackState.isOpen) {
+    metaParts.push('編集中は内容を固定します');
+  }
+  if (feedbackState.isOpen && feedbackState.hasPendingUpdate) {
+    metaParts.push('新しい発話あり');
+  }
+  meta.textContent = metaParts.join(' · ');
+  original.textContent = feedbackPreview(visibleContext.original);
+  translation.textContent = feedbackPreview(visibleContext.translation);
   status.textContent = feedbackState.statusText || '';
   status.classList.toggle('error', feedbackState.statusError);
 }
 
 function updateFeedbackContext(message) {
-  if (!message.original && !message.translation) return;
-  feedbackState.speakerName = normalizeSpeakerName(message.speakerName);
-  feedbackState.original = message.original || feedbackState.original || '';
-  feedbackState.translation = message.translation || '';
-  feedbackState.statusText = '';
-  feedbackState.statusError = false;
+  const nextLatestContext = mergeFeedbackContext(feedbackState.latestContext, message);
+  if (!hasFeedbackContext(nextLatestContext)) return;
+  feedbackState.latestContext = nextLatestContext;
+  if (feedbackState.isOpen) {
+    if (!hasFeedbackContext(feedbackState.lockedContext)) {
+      feedbackState.lockedContext = cloneFeedbackContext(nextLatestContext);
+      feedbackState.hasPendingUpdate = false;
+    } else {
+      feedbackState.hasPendingUpdate = true;
+    }
+  } else {
+    feedbackState.statusText = '';
+    feedbackState.statusError = false;
+  }
   getFeedbackRoot();
 }
 
 function resetFeedbackState() {
-  feedbackState.isOpen = false;
+  closeFeedbackEditor();
   feedbackState.statusText = '';
   feedbackState.statusError = false;
-  feedbackState.speakerName = '';
-  feedbackState.original = '';
-  feedbackState.translation = '';
+  feedbackState.latestContext = cloneFeedbackContext(null);
 }
 
 function destroyFeedbackUi() {
@@ -1000,9 +1050,9 @@ async function submitGlossaryFeedback(event) {
         kind,
         source,
         target,
-        speakerName: feedbackState.speakerName || null,
-        original: feedbackState.original || null,
-        translation: feedbackState.translation || null,
+        speakerName: getVisibleFeedbackContext().speakerName || null,
+        original: getVisibleFeedbackContext().original || null,
+        translation: getVisibleFeedbackContext().translation || null,
       },
     });
     if (!response?.success) {
