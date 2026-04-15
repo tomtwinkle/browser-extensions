@@ -85,6 +85,9 @@ function createDocument({ queryAll = () => [], execCommand = () => true } = {}) 
     body: {},
     documentElement: {},
     execCommands,
+    getElementById() {
+      return null;
+    },
     querySelectorAll(selector) {
       return queryAll(selector);
     },
@@ -274,4 +277,33 @@ test('postTextIntoInput fills a contenteditable composer and clicks its send but
     ['insertText', false, 'translated text'],
   ]);
   assert.equal(sendButton.clickCount, 1);
+});
+
+test('feedback toggle stays open and keeps the locked utterance after new speech arrives', () => {
+  const context = loadContentScript();
+
+  assert.equal(context.handleFeedbackToggleClick(), false);
+  assert.equal(context.applyFeedbackContextUpdate({
+    speakerName: 'Hikaru Harada',
+    original: 'first original',
+    translation: 'first translation',
+  }), true);
+  assert.equal(context.handleFeedbackToggleClick(), true);
+  assert.deepEqual(context.getVisibleFeedbackContext(), {
+    speakerName: 'Hikaru Harada',
+    original: 'first original',
+    translation: 'first translation',
+  });
+
+  assert.equal(context.applyFeedbackContextUpdate({
+    speakerName: 'Hikaru Harada',
+    original: 'second original',
+    translation: 'second translation',
+  }), true);
+  assert.equal(context.handleFeedbackToggleClick(), true);
+  assert.deepEqual(context.getVisibleFeedbackContext(), {
+    speakerName: 'Hikaru Harada',
+    original: 'first original',
+    translation: 'first translation',
+  });
 });
