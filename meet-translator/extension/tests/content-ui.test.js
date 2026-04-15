@@ -284,25 +284,25 @@ test('feedback toggle stays open and keeps the locked utterance after new speech
 
   assert.equal(context.handleFeedbackToggleClick(), false);
   assert.equal(context.applyFeedbackContextUpdate({
-    speakerName: 'Hikaru Harada',
+    speakerName: 'Test Speaker',
     original: 'first original',
     translation: 'first translation',
   }), true);
   assert.equal(context.handleFeedbackToggleClick(), true);
   assert.deepEqual(context.getVisibleFeedbackContext(), {
-    speakerName: 'Hikaru Harada',
+    speakerName: 'Test Speaker',
     original: 'first original',
     translation: 'first translation',
   });
 
   assert.equal(context.applyFeedbackContextUpdate({
-    speakerName: 'Hikaru Harada',
+    speakerName: 'Test Speaker',
     original: 'second original',
     translation: 'second translation',
   }), true);
   assert.equal(context.handleFeedbackToggleClick(), true);
   assert.deepEqual(context.getVisibleFeedbackContext(), {
-    speakerName: 'Hikaru Harada',
+    speakerName: 'Test Speaker',
     original: 'first original',
     translation: 'first translation',
   });
