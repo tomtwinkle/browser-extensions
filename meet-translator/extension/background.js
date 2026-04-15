@@ -25,6 +25,7 @@ const {
   getWavDurationMs,
   isFillerOnly,
   mergeWavBase64Chunks,
+  normalizeFeedbackText,
   normalizeSpeakerName,
   resolveContentScriptFrame,
   stripFillers,

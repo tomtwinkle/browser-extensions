@@ -885,8 +885,10 @@ function getFeedbackRoot() {
 
     root.querySelector('#mt-feedback-toggle')?.addEventListener('click', () => {
       if (feedbackState.isOpen) {
-        closeFeedbackEditor();
-      } else if (!openFeedbackEditor()) {
+        syncFeedbackUi();
+        return;
+      }
+      if (!openFeedbackEditor()) {
         return;
       }
       syncFeedbackUi();
