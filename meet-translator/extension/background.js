@@ -33,6 +33,9 @@ const {
 const SPEAKER_BATCH_ALARM = 'speaker-audio-batch-flush';
 const SPEAKER_BATCH_IDLE_MS = 1200;
 const MAX_SPEAKER_BATCH_DURATION_MS = 20000;
+const HEALTH_CHECK_INTERVAL_MS = 30_000;
+const HEALTH_CHECK_TIMEOUT_MS = 5_000;
+const MAX_CONSECUTIVE_HEALTH_CHECK_FAILURES = 3;
 
 // ---------------------------------------------------------------------------
 // State
@@ -42,6 +45,8 @@ const state = {
   tabId: null,
   lastError: null,
   healthCheckTimer: null,
+  healthCheckFailures: 0,
+  healthCheckInFlight: false,
   serverInfo: null, // { whisperModel, llamaModel } – populated from /health
   pendingSpeakerBatch: null,
   embeddedChatFrame: null, // { tabId, frameId }
@@ -79,7 +84,7 @@ async function getSettings() {
 async function checkServerHealth() {
   const cfg = await getSettings();
   const controller = new AbortController();
-  const tid = setTimeout(() => controller.abort(), 5000);
+  const tid = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
   try {
     const res = await fetch(`${cfg.serverUrl}/health`, {
       signal: controller.signal,
@@ -101,6 +106,64 @@ async function checkServerHealth() {
     clearTimeout(tid);
     console.warn('[background] health check failed:', err?.message ?? String(err));
     return { ok: false };
+  }
+}
+
+function assessHealthCheckFailures(
+  previousFailures,
+  healthOk,
+  threshold = MAX_CONSECUTIVE_HEALTH_CHECK_FAILURES
+) {
+  const failureCount = healthOk ? 0 : previousFailures + 1;
+  return {
+    failureCount,
+    recovered: healthOk && previousFailures > 0,
+    shouldStop: !healthOk && failureCount >= threshold,
+  };
+}
+
+async function runPeriodicHealthCheck() {
+  if (!state.isActive || state.healthCheckInFlight) return;
+
+  state.healthCheckInFlight = true;
+  try {
+    const health = await checkServerHealth();
+    const assessment = assessHealthCheckFailures(state.healthCheckFailures, health.ok);
+    state.healthCheckFailures = assessment.failureCount;
+
+    if (health.ok) {
+      if (assessment.recovered) {
+        console.info('[background] health check recovered after transient failures.');
+      }
+      state.serverInfo = { whisperModel: health.whisperModel, llamaModel: health.llamaModel };
+      return;
+    }
+
+    if (!assessment.shouldStop) {
+      console.warn(
+        `[background] health check failed (${assessment.failureCount}/${MAX_CONSECUTIVE_HEALTH_CHECK_FAILURES}) – keeping capture active.`
+      );
+      return;
+    }
+
+    console.warn('[background] server health check failed repeatedly – confirming before stopping capture.');
+    const confirmation = await checkServerHealth();
+    if (confirmation.ok) {
+      state.healthCheckFailures = 0;
+      state.serverInfo = {
+        whisperModel: confirmation.whisperModel,
+        llamaModel: confirmation.llamaModel,
+      };
+      console.info('[background] health check recovered during confirmation – keeping capture active.');
+      return;
+    }
+
+    console.warn('[background] server health check failed repeatedly – stopping capture.');
+    state.lastError = 'サーバーへの接続が切断されました。';
+    await stopCapture();
+    chrome.runtime.sendMessage({ type: 'SERVER_UNREACHABLE' }).catch(() => {});
+  } finally {
+    state.healthCheckInFlight = false;
   }
 }
 
@@ -515,6 +578,8 @@ async function startCapture(tabId) {
   state.isActive = true;
   state.tabId    = tabId;
   state.lastError = null;
+  state.healthCheckFailures = 0;
+  state.healthCheckInFlight = false;
   state.serverInfo = { whisperModel: health.whisperModel, llamaModel: health.llamaModel };
   state.pendingSpeakerBatch = null;
   state.embeddedChatFrame = null;
@@ -522,18 +587,11 @@ async function startCapture(tabId) {
   cancelSpeakerBatchFlush();
 
   // 定期ヘルスチェック（30 秒ごと）- サーバーが落ちたら自動停止
-  state.healthCheckTimer = setInterval(async () => {
-    if (!state.isActive) return;
-    const h = await checkServerHealth();
-    if (!h.ok) {
-      console.warn('[background] server health check failed – stopping capture.');
-      state.lastError = 'サーバーへの接続が切断されました。';
-      await stopCapture();
-      chrome.runtime.sendMessage({ type: 'SERVER_UNREACHABLE' }).catch(() => {});
-      return;
-    }
-    state.serverInfo = { whisperModel: h.whisperModel, llamaModel: h.llamaModel };
-  }, 30_000);
+  state.healthCheckTimer = setInterval(() => {
+    runPeriodicHealthCheck().catch((err) => {
+      console.warn('[background] periodic health check failed unexpectedly:', err?.message ?? String(err));
+    });
+  }, HEALTH_CHECK_INTERVAL_MS);
 
   try {
     // Make sure the offscreen document is ready for audio processing
@@ -595,6 +653,8 @@ async function stopCapture() {
 
   state.isActive = false;
   state.tabId = null;
+  state.healthCheckFailures = 0;
+  state.healthCheckInFlight = false;
   clearEmbeddedChatFrame(tabId);
 
   await closeOffscreenDocument();
