@@ -125,7 +125,7 @@ test('submitGlossaryFeedback trims source and target before posting to the serve
     kind: 'correction',
     source: '  get hub  ',
     target: ' GitHub ',
-    speakerName: ' Hikaru Harada ',
+    speakerName: ' Test Speaker ',
     original: '  get hub  ',
     translation: '  translated  ',
   });
@@ -136,5 +136,5 @@ test('submitGlossaryFeedback trims source and target before posting to the serve
   const payload = JSON.parse(requests[0].options.body);
   assert.equal(payload.source, 'get hub');
   assert.equal(payload.target, 'GitHub');
-  assert.match(payload.description, /^user-feedback \| speaker=Hikaru Harada \| original=get hub \| translation=translated$/);
+  assert.match(payload.description, /^user-feedback \| speaker=Test Speaker \| original=get hub \| translation=translated$/);
 });

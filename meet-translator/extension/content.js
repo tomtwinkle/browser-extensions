@@ -884,14 +884,7 @@ function getFeedbackRoot() {
     anchor.appendChild(root);
 
     root.querySelector('#mt-feedback-toggle')?.addEventListener('click', () => {
-      if (feedbackState.isOpen) {
-        syncFeedbackUi();
-        return;
-      }
-      if (!openFeedbackEditor()) {
-        return;
-      }
-      syncFeedbackUi();
+      handleFeedbackToggleClick();
     });
     root.querySelector('#mt-feedback-close')?.addEventListener('click', () => {
       closeFeedbackEditor();
@@ -930,6 +923,15 @@ function closeFeedbackEditor() {
   feedbackState.isOpen = false;
   feedbackState.lockedContext = cloneFeedbackContext(null);
   feedbackState.hasPendingUpdate = false;
+}
+
+function handleFeedbackToggleClick() {
+  if (!feedbackState.isOpen && !openFeedbackEditor()) {
+    syncFeedbackUi();
+    return false;
+  }
+  syncFeedbackUi();
+  return feedbackState.isOpen;
 }
 
 function syncFeedbackFormCopy() {
@@ -991,9 +993,9 @@ function syncFeedbackUi() {
   status.classList.toggle('error', feedbackState.statusError);
 }
 
-function updateFeedbackContext(message) {
+function applyFeedbackContextUpdate(message) {
   const nextLatestContext = mergeFeedbackContext(feedbackState.latestContext, message);
-  if (!hasFeedbackContext(nextLatestContext)) return;
+  if (!hasFeedbackContext(nextLatestContext)) return false;
   feedbackState.latestContext = nextLatestContext;
   if (feedbackState.isOpen) {
     if (!hasFeedbackContext(feedbackState.lockedContext)) {
@@ -1006,6 +1008,11 @@ function updateFeedbackContext(message) {
     feedbackState.statusText = '';
     feedbackState.statusError = false;
   }
+  return true;
+}
+
+function updateFeedbackContext(message) {
+  if (!applyFeedbackContextUpdate(message)) return;
   getFeedbackRoot();
 }
 

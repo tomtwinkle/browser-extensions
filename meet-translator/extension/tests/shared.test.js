@@ -82,17 +82,17 @@ test('filler helpers distinguish pure filler from actual speech', () => {
 });
 
 test('speaker helpers normalize whitespace and parse aria labels', () => {
-  assert.equal(normalizeSpeakerName('  Hikaru   Harada  '), 'Hikaru Harada');
+  assert.equal(normalizeSpeakerName('  Test   Speaker  '), 'Test Speaker');
   assert.equal(normalizeSpeakerName('   '), null);
   assert.equal(parseSpeakerNameFromAriaLabel('山田 太郎 さんをメイン画面に固定します'), '山田 太郎');
-  assert.equal(parseSpeakerNameFromAriaLabel("Mute Hikaru's microphone"), 'Hikaru');
+  assert.equal(parseSpeakerNameFromAriaLabel("Mute Test's microphone"), 'Test');
   assert.equal(parseSpeakerNameFromAriaLabel('Not a speaker label'), null);
 });
 
 test('formatChatMessage includes speaker and language label when available', () => {
   assert.equal(
-    formatChatMessage('ja', '翻訳結果です', 'Hikaru'),
-    '[Hikaru · 日本語]\n翻訳結果です'
+    formatChatMessage('ja', '翻訳結果です', 'Test'),
+    '[Test · 日本語]\n翻訳結果です'
   );
   assert.equal(
     formatChatMessage('', 'Original text', null),
@@ -122,52 +122,52 @@ test('resolveContentScriptFrame targets top frame and embedded chat frame correc
 test('buildGlossaryFeedbackDescription keeps useful context and truncates long fields', () => {
   const longOriginal = 'a'.repeat(90);
   const description = buildGlossaryFeedbackDescription({
-    speakerName: ' Hikaru  Harada ',
+    speakerName: ' Test  Speaker ',
     original: longOriginal,
     translation: 'Translated text',
   });
 
-  assert.match(description, /^user-feedback \| speaker=Hikaru Harada \| original=/);
+  assert.match(description, /^user-feedback \| speaker=Test Speaker \| original=/);
   assert.match(description, /translation=Translated text$/);
   assert.ok(description.includes(`${'a'.repeat(77)}...`));
 });
 
 test('feedback context helpers preserve a stable editable snapshot', () => {
-  assert.deepEqual(cloneFeedbackContext({ speakerName: '  Hikaru  ', original: ' hello ', translation: ' ' }), {
-    speakerName: 'Hikaru',
+  assert.deepEqual(cloneFeedbackContext({ speakerName: '  Test  ', original: ' hello ', translation: ' ' }), {
+    speakerName: 'Test',
     original: 'hello',
     translation: null,
   });
   assert.equal(hasFeedbackContext({ original: 'hello' }), true);
   assert.equal(hasFeedbackContext({ translation: 'translated' }), true);
-  assert.equal(hasFeedbackContext({ speakerName: 'Hikaru' }), false);
+  assert.equal(hasFeedbackContext({ speakerName: 'Test' }), false);
 
   const transcriptionOnly = mergeFeedbackContext(null, {
-    speakerName: ' Hikaru Harada ',
+    speakerName: ' Test Speaker ',
     original: 'Original text',
   });
   assert.deepEqual(transcriptionOnly, {
-    speakerName: 'Hikaru Harada',
+    speakerName: 'Test Speaker',
     original: 'Original text',
     translation: null,
   });
 
   const withTranslation = mergeFeedbackContext(transcriptionOnly, {
-    speakerName: 'Hikaru Harada',
+    speakerName: 'Test Speaker',
     translation: 'Translated text',
   });
   assert.deepEqual(withTranslation, {
-    speakerName: 'Hikaru Harada',
+    speakerName: 'Test Speaker',
     original: 'Original text',
     translation: 'Translated text',
   });
 
   const nextUtterance = mergeFeedbackContext(withTranslation, {
-    speakerName: 'Hikaru Harada',
+    speakerName: 'Test Speaker',
     original: 'Next original text',
   });
   assert.deepEqual(nextUtterance, {
-    speakerName: 'Hikaru Harada',
+    speakerName: 'Test Speaker',
     original: 'Next original text',
     translation: null,
   });
