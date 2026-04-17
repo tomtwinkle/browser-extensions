@@ -111,6 +111,14 @@ const ACTIVE_SPEAKER_GLOW_SEL = `${ACTIVE_SPEAKER_BORDER_SEL}.v5h6Xc`;
 const ACTIVE_SPEAKER_VISIBLE_SEL = `${ACTIVE_SPEAKER_BORDER_SEL}.kssMZb`;
 const FEEDBACK_ROOT_ID = 'meet-translator-feedback';
 const FEEDBACK_FORM_ID = 'mt-feedback-form';
+const FEEDBACK_FOCUSABLE_IDS = new Set([
+  'mt-feedback-toggle',
+  'mt-feedback-kind',
+  'mt-feedback-source',
+  'mt-feedback-target',
+  'mt-feedback-close',
+  'mt-feedback-submit',
+]);
 const feedbackState = {
   isOpen: false,
   statusText: '',
@@ -155,6 +163,52 @@ function sendRuntimeMessage(message) {
 
 function normalizeUtteranceId(value) {
   return Number.isInteger(value) && value > 0 ? value : 0;
+}
+
+function captureFeedbackFocusSnapshot(activeElement = document.activeElement) {
+  const elementId = activeElement?.id || '';
+  if (!FEEDBACK_FOCUSABLE_IDS.has(elementId)) return null;
+  return {
+    elementId,
+    selectionStart: typeof activeElement.selectionStart === 'number' ? activeElement.selectionStart : null,
+    selectionEnd: typeof activeElement.selectionEnd === 'number' ? activeElement.selectionEnd : null,
+    selectionDirection: typeof activeElement.selectionDirection === 'string'
+      ? activeElement.selectionDirection
+      : null,
+  };
+}
+
+function restoreFeedbackFocusSnapshot(snapshot) {
+  if (!snapshot?.elementId) return;
+  const element = document.getElementById(snapshot.elementId);
+  if (!element?.focus) return;
+
+  try {
+    element.focus({ preventScroll: true });
+  } catch (_) {
+    element.focus();
+  }
+
+  if (
+    typeof element.setSelectionRange === 'function' &&
+    snapshot.selectionStart !== null &&
+    snapshot.selectionEnd !== null
+  ) {
+    element.setSelectionRange(
+      snapshot.selectionStart,
+      snapshot.selectionEnd,
+      snapshot.selectionDirection || undefined
+    );
+  }
+}
+
+async function withPreservedFeedbackFocus(task) {
+  const snapshot = captureFeedbackFocusSnapshot();
+  try {
+    return await task();
+  } finally {
+    restoreFeedbackFocusSnapshot(snapshot);
+  }
 }
 
 let embeddedChatFrameRegistered = false;
@@ -455,7 +509,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
 
       const post = mode === 'meet-top' ? postTranslationFromMeetFrame : postToChat;
-      post(message.text)
+      withPreservedFeedbackFocus(() => post(message.text))
         .then(() => sendResponse({ success: true }))
         .catch((err) => {
           console.error('[Meet Translator] チャット投稿エラー:', err);
@@ -841,7 +895,9 @@ function feedbackPreview(text) {
 }
 
 function getFeedbackAnchor() {
-  return document.querySelector(VIDEO_AREA_SEL) || document.body;
+  // Keep the feedback UI on a stable viewport anchor so Meet stage/chat rerenders
+  // do not move the widget or make its inputs lose interactivity mid-edit.
+  return document.body || document.documentElement;
 }
 
 function getFeedbackRoot() {
@@ -906,10 +962,12 @@ function getFeedbackRoot() {
     root.querySelector('#mt-feedback-kind')?.addEventListener('change', syncFeedbackFormCopy);
     root.querySelector(`#${FEEDBACK_FORM_ID}`)?.addEventListener('submit', submitGlossaryFeedback);
   } else if (root.parentElement !== anchor) {
+    const focusSnapshot = captureFeedbackFocusSnapshot();
     anchor.appendChild(root);
+    restoreFeedbackFocusSnapshot(focusSnapshot);
   }
 
-  root.classList.toggle('mt-body-anchor', anchor === document.body);
+  root.classList.toggle('mt-body-anchor', anchor === document.body || anchor === document.documentElement);
   syncFeedbackFormCopy();
   syncFeedbackUi();
   return root;
