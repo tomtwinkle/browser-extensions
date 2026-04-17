@@ -52,6 +52,8 @@ const state = {
   pendingSpeakerBatch: null,
   embeddedChatFrame: null, // { tabId, frameId }
   audioQueue: Promise.resolve(),
+  translationTasks: new Set(),
+  nextUtteranceId: 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -244,6 +246,34 @@ function enqueueAudioTask(task) {
   return next;
 }
 
+function startTranslationTask(task) {
+  const tracked = Promise.resolve()
+    .then(task)
+    .catch((err) => {
+      console.error('[background] translation processing error:', err);
+    });
+
+  state.translationTasks.add(tracked);
+  tracked.finally(() => {
+    state.translationTasks.delete(tracked);
+  });
+  return tracked;
+}
+
+async function waitForQueuedAudioTasks() {
+  while (true) {
+    const queuedTask = state.audioQueue;
+    await queuedTask;
+    if (queuedTask === state.audioQueue) return;
+  }
+}
+
+async function waitForTranslationTasks() {
+  while (state.translationTasks.size > 0) {
+    await Promise.all(Array.from(state.translationTasks));
+  }
+}
+
 async function processAudioChunk(wavB64, speakerName, tabId) {
   const cfg = await getSettings();
 
@@ -257,7 +287,9 @@ async function processAudioChunk(wavB64, speakerName, tabId) {
   }
 
   console.info('[background] transcription:', transcription.slice(0, 100));
+  const utteranceId = ++state.nextUtteranceId;
   await pushFeedbackContext(tabId, {
+    utteranceId,
     original: transcription,
     translation: null,
     speakerName,
@@ -297,6 +329,7 @@ async function processAudioChunk(wavB64, speakerName, tabId) {
     if (tabId && cfg.overlayEnabled && cfg.overlayFormat !== 'translation') {
       await dispatchToContentScript(tabId, {
         type:        'SHOW_OVERLAY',
+        utteranceId,
         original:    transcription,
         translation: null,
         scroll:      cfg.overlayScroll,
@@ -307,34 +340,39 @@ async function processAudioChunk(wavB64, speakerName, tabId) {
   }
 
   // Step 2: LLM 翻訳
-  const translation = await translateOnly(textToTranslate, translSourceLang, translTargetLang, cfg);
-  if (!translation) return;
+  // 翻訳は音声キューから切り離して並列実行し、後続の音声を早く backend に送れるようにする。
+  startTranslationTask(async () => {
+    const translation = await translateOnly(textToTranslate, translSourceLang, translTargetLang, cfg);
+    if (!translation) return;
 
-  console.info('[background] translation:', translation.slice(0, 100));
-  await pushFeedbackContext(tabId, {
-    original: transcription,
-    translation,
-    speakerName,
-  });
-
-  // チャット: 翻訳投稿
-  if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'transcription') {
-    await dispatchToContentScript(tabId, {
-      type: 'POST_TRANSLATION',
-      text: formatChatMessage(translTargetLang, translation, speakerName),
-    });
-  }
-
-  // オーバーレイ表示
-  if (tabId && cfg.overlayEnabled) {
-    await dispatchToContentScript(tabId, {
-      type:        'SHOW_OVERLAY',
-      original:    cfg.overlayFormat !== 'translation'   ? transcription : null,
-      translation: cfg.overlayFormat !== 'transcription' ? translation   : null,
-      scroll:      cfg.overlayScroll,
+    console.info('[background] translation:', translation.slice(0, 100));
+    await pushFeedbackContext(tabId, {
+      utteranceId,
+      original: transcription,
+      translation,
       speakerName,
     });
-  }
+
+    // チャット: 翻訳投稿
+    if (tabId && cfg.chatEnabled && cfg.chatFormat !== 'transcription') {
+      await dispatchToContentScript(tabId, {
+        type: 'POST_TRANSLATION',
+        text: formatChatMessage(translTargetLang, translation, speakerName),
+      });
+    }
+
+    // オーバーレイ表示
+    if (tabId && cfg.overlayEnabled) {
+      await dispatchToContentScript(tabId, {
+        type:        'SHOW_OVERLAY',
+        utteranceId,
+        original:    cfg.overlayFormat !== 'translation'   ? transcription : null,
+        translation: cfg.overlayFormat !== 'transcription' ? translation   : null,
+        scroll:      cfg.overlayScroll,
+        speakerName,
+      });
+    }
+  });
 }
 
 async function flushPendingSpeakerBatch(reason, tabId = state.tabId) {
@@ -491,6 +529,7 @@ async function pushFeedbackContext(tabId, context) {
   if (!tabId) return null;
   return dispatchToContentScript(tabId, {
     type: 'UPDATE_FEEDBACK_CONTEXT',
+    utteranceId: Number.isInteger(context.utteranceId) ? context.utteranceId : null,
     original: context.original || null,
     translation: context.translation || null,
     speakerName: context.speakerName || null,
@@ -585,6 +624,8 @@ async function startCapture(tabId) {
   state.pendingSpeakerBatch = null;
   state.embeddedChatFrame = null;
   state.audioQueue = Promise.resolve();
+  state.translationTasks.clear();
+  state.nextUtteranceId = 0;
   cancelSpeakerBatchFlush();
 
   // 定期ヘルスチェック（30 秒ごと）- サーバーが落ちたら自動停止
@@ -649,8 +690,9 @@ async function stopCapture() {
     await chrome.runtime.sendMessage({ type: 'OFFSCREEN_STOP_AUDIO' });
   } catch (_) {}
 
-  await state.audioQueue;
+  await waitForQueuedAudioTasks();
   await flushPendingSpeakerBatch('stop', tabId);
+  await waitForTranslationTasks();
 
   state.isActive = false;
   state.tabId = null;

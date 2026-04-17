@@ -307,3 +307,61 @@ test('feedback toggle stays open and keeps the locked utterance after new speech
     translation: 'first translation',
   });
 });
+
+test('feedback context ignores late translations for older utterances', () => {
+  const context = loadContentScript();
+
+  assert.equal(context.applyFeedbackContextUpdate({
+    utteranceId: 1,
+    speakerName: 'Test Speaker',
+    original: 'first original',
+  }), true);
+  assert.equal(context.applyFeedbackContextUpdate({
+    utteranceId: 2,
+    speakerName: 'Test Speaker',
+    original: 'second original',
+  }), true);
+  assert.equal(context.applyFeedbackContextUpdate({
+    utteranceId: 1,
+    speakerName: 'Test Speaker',
+    translation: 'first translation',
+  }), false);
+
+  assert.deepEqual(context.getVisibleFeedbackContext(), {
+    speakerName: 'Test Speaker',
+    original: 'second original',
+    translation: null,
+  });
+});
+
+test('feedback toggle refreshes the locked utterance when its translation arrives late', () => {
+  const context = loadContentScript();
+
+  assert.equal(context.applyFeedbackContextUpdate({
+    utteranceId: 1,
+    speakerName: 'Test Speaker',
+    original: 'first original',
+  }), true);
+  assert.equal(context.handleFeedbackToggleClick(), true);
+  assert.equal(context.applyFeedbackContextUpdate({
+    utteranceId: 2,
+    speakerName: 'Test Speaker',
+    original: 'second original',
+  }), true);
+  assert.deepEqual(context.getVisibleFeedbackContext(), {
+    speakerName: 'Test Speaker',
+    original: 'first original',
+    translation: null,
+  });
+
+  assert.equal(context.applyFeedbackContextUpdate({
+    utteranceId: 1,
+    speakerName: 'Test Speaker',
+    translation: 'first translation',
+  }), true);
+  assert.deepEqual(context.getVisibleFeedbackContext(), {
+    speakerName: 'Test Speaker',
+    original: 'first original',
+    translation: 'first translation',
+  });
+});
