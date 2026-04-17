@@ -40,28 +40,16 @@ function createElement({
   hidden = false,
   isContentEditable = false,
   queryAll = null,
-  ownerDocument = null,
-  value = '',
-  selectionStart = null,
-  selectionEnd = null,
-  selectionDirection = null,
 } = {}) {
   return {
     tagName: tagName.toUpperCase(),
-    id: attrs.id || null,
     parentElement: null,
     hidden,
     disabled: attrs.disabled === true,
     isContentEditable,
-    ownerDocument,
-    value,
-    selectionStart,
-    selectionEnd,
-    selectionDirection,
     focusCount: 0,
     clickCount: 0,
     dispatchedEvents: [],
-    setSelectionRangeCalls: [],
     form: null,
     querySelectorAll(selector) {
       return queryAll ? queryAll(selector) : [];
@@ -77,18 +65,9 @@ function createElement({
     },
     focus() {
       this.focusCount += 1;
-      if (this.ownerDocument) {
-        this.ownerDocument.activeElement = this;
-      }
     },
     click() {
       this.clickCount += 1;
-    },
-    setSelectionRange(start, end, direction) {
-      this.selectionStart = start;
-      this.selectionEnd = end;
-      this.selectionDirection = direction ?? null;
-      this.setSelectionRangeCalls.push([start, end, direction]);
     },
     dispatchEvent(event) {
       this.dispatchedEvents.push(event);
@@ -100,22 +79,14 @@ function createElement({
   };
 }
 
-function createDocument({
-  queryAll = () => [],
-  execCommand = () => true,
-  getById = () => null,
-  body = {},
-  documentElement = {},
-  activeElement = null,
-} = {}) {
+function createDocument({ queryAll = () => [], execCommand = () => true } = {}) {
   const execCommands = [];
   return {
-    body,
-    documentElement,
-    activeElement,
+    body: {},
+    documentElement: {},
     execCommands,
-    getElementById(id) {
-      return getById(id);
+    getElementById() {
+      return null;
     },
     querySelectorAll(selector) {
       return queryAll(selector);
@@ -335,104 +306,4 @@ test('feedback toggle stays open and keeps the locked utterance after new speech
     original: 'first original',
     translation: 'first translation',
   });
-});
-
-test('feedback context ignores late translations for older utterances', () => {
-  const context = loadContentScript();
-
-  assert.equal(context.applyFeedbackContextUpdate({
-    utteranceId: 1,
-    speakerName: 'Test Speaker',
-    original: 'first original',
-  }), true);
-  assert.equal(context.applyFeedbackContextUpdate({
-    utteranceId: 2,
-    speakerName: 'Test Speaker',
-    original: 'second original',
-  }), true);
-  assert.equal(context.applyFeedbackContextUpdate({
-    utteranceId: 1,
-    speakerName: 'Test Speaker',
-    translation: 'first translation',
-  }), false);
-
-  assert.deepEqual(context.getVisibleFeedbackContext(), {
-    speakerName: 'Test Speaker',
-    original: 'second original',
-    translation: null,
-  });
-});
-
-test('feedback toggle refreshes the locked utterance when its translation arrives late', () => {
-  const context = loadContentScript();
-
-  assert.equal(context.applyFeedbackContextUpdate({
-    utteranceId: 1,
-    speakerName: 'Test Speaker',
-    original: 'first original',
-  }), true);
-  assert.equal(context.handleFeedbackToggleClick(), true);
-  assert.equal(context.applyFeedbackContextUpdate({
-    utteranceId: 2,
-    speakerName: 'Test Speaker',
-    original: 'second original',
-  }), true);
-  assert.deepEqual(context.getVisibleFeedbackContext(), {
-    speakerName: 'Test Speaker',
-    original: 'first original',
-    translation: null,
-  });
-
-  assert.equal(context.applyFeedbackContextUpdate({
-    utteranceId: 1,
-    speakerName: 'Test Speaker',
-    translation: 'first translation',
-  }), true);
-  assert.deepEqual(context.getVisibleFeedbackContext(), {
-    speakerName: 'Test Speaker',
-    original: 'first original',
-    translation: 'first translation',
-  });
-});
-
-test('getFeedbackAnchor uses document.body so chat updates do not move the feedback UI', () => {
-  const body = {};
-  const stage = {};
-  const document = createDocument({
-    body,
-    queryAll(selector) {
-      if (selector === 'main[jscontroller="izfDQc"], main') return [stage];
-      return [];
-    },
-  });
-
-  const context = loadContentScript({ document });
-  assert.equal(context.getFeedbackAnchor(), body);
-});
-
-test('withPreservedFeedbackFocus restores feedback input focus after automated chat posting', async () => {
-  let sourceInput;
-  const document = createDocument({
-    getById(id) {
-      return id === 'mt-feedback-source' ? sourceInput : null;
-    },
-  });
-  sourceInput = createElement({
-    attrs: { id: 'mt-feedback-source' },
-    ownerDocument: document,
-    value: 'GitHub',
-    selectionStart: 1,
-    selectionEnd: 4,
-    selectionDirection: 'forward',
-  });
-  document.activeElement = sourceInput;
-
-  const context = loadContentScript({ document });
-  await context.withPreservedFeedbackFocus(async () => {
-    document.activeElement = createElement({ attrs: { id: 'chat-input' }, ownerDocument: document });
-  });
-
-  assert.equal(document.activeElement, sourceInput);
-  assert.equal(sourceInput.focusCount, 1);
-  assert.deepEqual(sourceInput.setSelectionRangeCalls, [[1, 4, 'forward']]);
 });

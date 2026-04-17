@@ -7,8 +7,8 @@
 //
 // CLI フラグ:
 //   --port              リスンポート                    (デフォルト: 7070)
-//   --whisper-model     whisper モデル名またはパス       (例: base)
-//   --llama-model       llama モデル名またはパス         (例: qwen3:8b-q4_k_m)
+//   --whisper-model     whisper モデル名またはパス       (既定 floor: large-v3-turbo)
+//   --llama-model       llama モデル名またはパス         (既定 floor: qwen3.5:0.8b-q4_k_m)
 //   --llama-gpu-layers  GPU にオフロードするレイヤ数     (デフォルト: -1 = 全レイヤ)
 //   --whisper-gpu-layers 同上 whisper 用
 //   --model-cache-dir   model cache directory
@@ -57,6 +57,7 @@ type config struct {
 	llamaGPULayers   int
 	whisperGPULayers int
 	verbose          bool
+	autoSelectModels bool
 }
 
 func loadConfig() config {
@@ -75,17 +76,27 @@ func loadConfig() config {
 		return def
 	}
 
-	// ── Step 1: デフォルト値 ────────────────────────────────────────────────────
+	// ── Step 1: デフォルト値 (初回 floor) ──────────────────────────────────────
 	cfg := config{
 		port:             "7070",
+		whisperModel:     firstRunWhisperModel,
+		llamaModel:       firstRunLlamaModel,
 		llamaGPULayers:   -1,
 		whisperGPULayers: -1,
 	}
+	hadConfigFile := configFileExists()
+	modelOverrides := false
 
 	// ── Step 2: 環境変数で上書き (後方互換) ────────────────────────────────────
 	cfg.port = env("PORT", cfg.port)
-	cfg.whisperModel = os.Getenv("WHISPER_MODEL")
-	cfg.llamaModel = os.Getenv("LLAMA_MODEL")
+	if v := os.Getenv("WHISPER_MODEL"); v != "" {
+		cfg.whisperModel = v
+		modelOverrides = true
+	}
+	if v := os.Getenv("LLAMA_MODEL"); v != "" {
+		cfg.llamaModel = v
+		modelOverrides = true
+	}
 	cfg.llamaGPULayers = envInt("LLAMA_GPU_LAYERS", cfg.llamaGPULayers)
 	cfg.whisperGPULayers = envInt("WHISPER_GPU_LAYERS", cfg.whisperGPULayers)
 	// verbose は CLI フラグ (--verbose) でのみ有効化する
@@ -100,9 +111,11 @@ func loadConfig() config {
 		}
 		if fileCfg.WhisperModel != "" {
 			cfg.whisperModel = fileCfg.WhisperModel
+			modelOverrides = true
 		}
 		if fileCfg.LlamaModel != "" {
 			cfg.llamaModel = fileCfg.LlamaModel
+			modelOverrides = true
 		}
 		if fileCfg.LlamaGPULayers != nil {
 			cfg.llamaGPULayers = *fileCfg.LlamaGPULayers
@@ -117,8 +130,8 @@ func loadConfig() config {
 
 	// ── Step 4: CLI フラグで上書き (最高優先度) ───────────────────────────────
 	fPort := flag.String("port", "", "listen port (default: 7070)")
-	fWhisperModel := flag.String("whisper-model", "", "whisper model name or path (e.g. base, small)")
-	fLlamaModel := flag.String("llama-model", "", "llama model name or path (e.g. qwen3.5:4b-q4_k_m)")
+	fWhisperModel := flag.String("whisper-model", firstRunWhisperModel, "whisper model name or path (first-run floor; may auto-upgrade when omitted)")
+	fLlamaModel := flag.String("llama-model", firstRunLlamaModel, "llama model name or path (first-run floor; may auto-upgrade when omitted)")
 	fLlamaGPU := flag.Int("llama-gpu-layers", -999, "llama GPU layers (-1=all, 0=CPU only)")
 	fWhisperGPU := flag.Int("whisper-gpu-layers", -999, "whisper GPU layers")
 	fModelCacheDir := flag.String("model-cache-dir", "", "model cache directory")
@@ -129,6 +142,8 @@ func loadConfig() config {
 		w := flag.CommandLine.Output()
 		fmt.Fprintf(w, "Usage: meet-translator-server [options]\n\n")
 		fmt.Fprintf(w, "Settings are saved to config file and can be omitted on next run.\n")
+		fmt.Fprintf(w, "First-run floor: whisper=%s  llama=%s\n", firstRunWhisperModel, firstRunLlamaModel)
+		fmt.Fprintf(w, "When RAM/GPU allow, first launch can step up to bonsai-8b and larger models.\n")
 		fmt.Fprintf(w, "Config file: %s\n\n", configFilePath())
 		fmt.Fprintf(w, "Options:\n")
 		flag.PrintDefaults()
@@ -144,9 +159,11 @@ func loadConfig() config {
 	}
 	if explicitFlags["whisper-model"] {
 		cfg.whisperModel = *fWhisperModel
+		modelOverrides = true
 	}
 	if explicitFlags["llama-model"] {
 		cfg.llamaModel = *fLlamaModel
+		modelOverrides = true
 	}
 	if explicitFlags["llama-gpu-layers"] {
 		cfg.llamaGPULayers = *fLlamaGPU
@@ -163,6 +180,7 @@ func loadConfig() config {
 	if explicitFlags["config"] {
 		os.Setenv("MEET_TRANSLATOR_CONFIG", flag.Lookup("config").Value.String())
 	}
+	cfg.autoSelectModels = !hadConfigFile && !modelOverrides
 
 	// ── Step 5: フラグが明示指定されていれば config ファイルに保存 ──────────────
 	if len(explicitFlags) > 0 {
@@ -192,14 +210,14 @@ func loadConfig() config {
 // ---------------------------------------------------------------------------
 
 type server struct {
-	cfg        config
-	mux        *http.ServeMux
-	whisperCtx *C.whisper_context
+	cfg         config
+	mux         *http.ServeMux
+	transcriber transcriber
 
 	// 起動時に指定されたオリジナルのモデルスペック（パス解決前）
 	whisperModelSpec string
 
-	// whisper コンテキスト保護 (非スレッドセーフなため直列化必須)
+	// 音声認識バックエンド保護 (whisper.cpp / Python worker ともに直列化)
 	whisperMu sync.Mutex
 
 	// llama モデル管理 (modelMu で保護)
@@ -226,11 +244,11 @@ type server struct {
 	rawGenerateFn func(prompt string) (string, error)
 }
 
-func newServer(cfg config, whisperCtx *C.whisper_context, llamaModel C.llama_bridge_model, whisperSpec, llamaSpec string, glossary *Glossary) *server {
+func newServer(cfg config, transcriber transcriber, llamaModel C.llama_bridge_model, whisperSpec, llamaSpec string, glossary *Glossary) *server {
 	s := &server{
 		cfg:              cfg,
 		mux:              http.NewServeMux(),
-		whisperCtx:       whisperCtx,
+		transcriber:      transcriber,
 		whisperModelSpec: whisperSpec,
 		llamaModel:       llamaModel,
 		loadedModelSpec:  llamaSpec,
@@ -401,7 +419,7 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 			len(audioData), audioData[:hdrLen], targetLang, sourceLang, requestedModel, rawOpts)
 	}
 
-	// Whisper は非スレッドセーフ – whisperMu で直列化
+	// ASR バックエンドは直列化して扱う。
 	s.whisperMu.Lock()
 	transcription, detectedLang, transcribeErr := s.transcribeFn(audioData, sourceLang)
 	s.whisperMu.Unlock()
@@ -648,7 +666,7 @@ func main() {
 	// モデル名解決 (自動ダウンロード・Ollama キャッシュ共有)
 	originalWhisperSpec := cfg.whisperModel
 	originalModelSpec := cfg.llamaModel
-	runPreflight(&cfg)
+	resolvedWhisper := runPreflight(&cfg)
 
 	// verbose フラグをパッケージレベル変数に反映（model_manager.go 等で使用）
 	verboseEnabled.Store(cfg.verbose)
@@ -657,14 +675,18 @@ func main() {
 	initLlamaBackend()
 	defer freeLlamaBackend()
 
-	// whisper モデルをロード
-	logV("loading whisper model: %s", cfg.whisperModel)
-	whisperCtx, err := loadWhisperModel(cfg.whisperModel)
+	// 音声認識バックエンドをロード
+	logV("loading ASR backend: backend=%s spec=%s", resolvedWhisper.Backend, cfg.whisperModel)
+	asrTranscriber, err := newTranscriber(resolvedWhisper)
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
-	defer C.whisper_bridge_free(whisperCtx)
-	log.Printf("whisper ready: %s", originalWhisperSpec)
+	defer func() {
+		if err := asrTranscriber.Close(); err != nil {
+			log.Printf("[asr] shutdown warning: %v", err)
+		}
+	}()
+	log.Printf("asr ready: %s (%s)", originalWhisperSpec, resolvedWhisper.Backend)
 
 	// llama モデルをロード
 	logV("loading llama model: %s (GPU layers=%d)", cfg.llamaModel, cfg.llamaGPULayers)
@@ -681,7 +703,7 @@ func main() {
 	log.Printf("[glossary] loaded: %d corrections, %d terms  (path: %s)",
 		len(glossary.GetData().Corrections), len(glossary.GetData().Terms), glossaryFilePath())
 
-	srv := newServer(cfg, whisperCtx, llamaModel, originalWhisperSpec, originalModelSpec, glossary)
+	srv := newServer(cfg, asrTranscriber, llamaModel, originalWhisperSpec, originalModelSpec, glossary)
 
 	// llamaModel の解放責任を server に委譲する。
 	// シャットダウン開始後は新規 llama 処理を止め、進行中の CGo 呼び出しが終わってから

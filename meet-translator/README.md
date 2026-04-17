@@ -94,14 +94,17 @@ Download and extract the archive for your OS from
 ```bash
 cd meet-translator/server/
 
-make              # auto-detects GPU (macOS → Metal / NVIDIA detected → CUDA / else → CPU)
-make GPU=metal    # force Apple Metal
-make GPU=cuda     # force NVIDIA CUDA
-make GPU=cpu      # CPU only
+make                  # auto-detects GPU and builds both server + server-prism
+make all GPU=metal    # force Apple Metal and build both variants
+make all GPU=cuda     # force NVIDIA CUDA and build both variants
+make all GPU=cpu      # CPU-only build for both variants
+make build GPU=cpu    # standard binary only
+make prism GPU=cpu    # PrismML binary only (needed for bonsai-8b / server-prism)
 ```
 
 `make` automatically clones and cmake-builds whisper.cpp and llama.cpp on first run,
-and refreshes those vendored checkouts when the pinned upstream versions change after a `git pull`.
+refreshes those vendored checkouts when the pinned upstream versions change after a `git pull`,
+and produces both `server` and `server-prism`.
 
 ### Rebuilding
 
@@ -109,13 +112,15 @@ After making changes, choose the appropriate command:
 
 | Command | When to use |
 |---|---|
-| `make build` | Only Go source changed – reuses the current vendor checkout and runs `go build` |
+| `make build` | Rebuild only the standard binary (`server`) |
+| `make prism` | Rebuild only the PrismML binary (`server-prism`) for `bonsai-8b` |
+| `make` / `make all` | Rebuild both binaries so autoconfig and release-like setups can step into `bonsai-8b` automatically |
 | `make rebuild` | Bridge C++ files changed (`whisper_bridge.cpp`, etc.) – re-runs cmake then `go build`; pinned vendor versions still auto-refresh if needed |
 | `make distclean && make` | Full reset when you want to re-clone vendor and rebuild everything from scratch |
 
 ```bash
-# Example: Go source changed (fastest)
-make build
+# Example: Go source changed and you want both binaries refreshed
+make all
 
 # Example: bridge C++ updated (e.g. after git pull)
 make rebuild
@@ -141,30 +146,38 @@ cd meet-translator/server && make test
 
 ### First run (automatic model selection)
 
-Running without arguments **automatically selects the best models based on your machine's RAM and GPU** and saves the choice to a config file.
+Running without model overrides starts from the conservative floor
+`large-v3-turbo` + `qwen3.5:0.8b-q4_k_m`, then **steps up to `bonsai-8b` and larger models when RAM/GPU allow**, and saves the chosen pair to a config file.
 
 ```bash
 ./meet-translator-server
 ```
 
+Release archives and `make` bundle the standard binary plus the PrismML companion binary side by side, so `bonsai-8b` can switch automatically when selected.
+
 Auto-selected models (with GPU):
 
 | RAM | whisper | llama |
 |---|---|---|
-| ≥ 64 GB | `large-v3-turbo` | `calm3:22b-q4_k_m` |
-| ≥ 32 GB | `medium` | `calm3:22b-q4_k_m` |
-| ≥  8 GB | `small` | `qwen3:8b-q4_k_m` (best quality: 0.833) |
-| ≥  4 GB | `small` | `qwen3:4b-q4_k_m` (best combined: 0.605) |
-| < 4 GB  | `base`  | `qwen3.5:0.8b-q4_k_m` (speed-first: combined 0.608) |
+| ≥ 64 GB | `large-v3` | `calm3:22b-q4_k_m` |
+| ≥ 32 GB | `large-v3-turbo` | `calm3:22b-q4_k_m` |
+| ≥ 16 GB | `large-v3-turbo` | `qwen3:8b-q4_k_m` |
+| ≥  8 GB | `large-v3-turbo` | `bonsai-8b` |
+| < 8 GB  | `large-v3-turbo` | `qwen3.5:0.8b-q4_k_m` |
 
-CPU-only: `qwen3.5:0.8b-q4_k_m` (≥ 4 GB) / `bonsai-8b` (< 4 GB).
+CPU-only:
+
+| RAM | whisper | llama |
+|---|---|---|
+| ≥ 8 GB | `large-v3-turbo` | `bonsai-8b` |
+| < 8 GB | `large-v3-turbo` | `qwen3.5:0.8b-q4_k_m` |
 
 ### Specifying models manually
 
 ```bash
 ./meet-translator-server \
-  --whisper-model base \
-  --llama-model gemma4:e4b-q4_k_m
+  --whisper-model large-v3-turbo \
+  --llama-model qwen3.5:0.8b-q4_k_m
 ```
 
 If the model is not present locally it is **downloaded automatically from HuggingFace**.
@@ -183,8 +196,8 @@ If you already have GGUF models fetched via Ollama, the server detects and uses 
 | Flag | Env var | Default | Description |
 |---|---|---|---|
 | `--port` | `PORT` | `7070` | Listen port |
-| `--whisper-model` | `WHISPER_MODEL` | *(required)* | Whisper model name or file path |
-| `--llama-model` | `LLAMA_MODEL` | *(required)* | LLM model name or file path |
+| `--whisper-model` | `WHISPER_MODEL` | `auto` (`large-v3-turbo` floor) | Whisper model name or file path |
+| `--llama-model` | `LLAMA_MODEL` | `auto` (`qwen3.5:0.8b-q4_k_m` floor) | LLM model name or file path |
 | `--llama-gpu-layers` | `LLAMA_GPU_LAYERS` | `-1` | GPU offload layers (`0`=CPU, `-1`=all) |
 | `--whisper-gpu-layers` | `WHISPER_GPU_LAYERS` | `-1` | Same for Whisper |
 | `--model-cache-dir` | `MODEL_CACHE_DIR` | OS default | Model cache directory |
@@ -217,11 +230,24 @@ Specify a model name with `--whisper-model` and it will be downloaded automatica
 | Model | Size | Accuracy |
 |---|---|---|
 | `tiny` | 75 MB | △ |
-| `base` | 142 MB | ○ **recommended** |
+| `base` | 142 MB | ○ |
 | `small` | 466 MB | ○ |
 | `medium` | 1.5 GB | ◎ |
 | `large-v3` | 3.1 GB | ◎◎ |
-| `large-v3-turbo` | 809 MB | ◎ (fast) |
+| `large-v3-turbo` | 809 MB | ◎ **default floor** (fast) |
+| `kotoba-whisper` | 3.1 GB | ◎◎ Japanese-focused Kotoba-Whisper v2.0 |
+| `kotoba-whisper-q5_0` | ≈ 1.0 GB | ◎ Quantized Kotoba-Whisper v2.0 |
+| `sensevoice` | model-managed | ◎ Fast multilingual ASR via local Python worker |
+| `whisperx` | model-managed | ◎ WhisperX large-v3 via local Python worker |
+
+Advanced forms are also supported: `sensevoice:<model-ref>` and `whisperx:<model-name>`.
+
+For SenseVoice / WhisperX, install the local Python dependencies first and make sure `ffmpeg` is available on your `PATH`:
+
+```bash
+cd server
+python3 -m pip install -r ./python/requirements-asr.txt
+```
 
 ### LLM models (translation)
 
@@ -229,25 +255,26 @@ Specify a model name with `--llama-model` and it will be downloaded automaticall
 
 | Model | Size | License | Notes |
 |---|---|---|---|
-| `bonsai-8b` | ≈ 1.15 GB | Apache 2.0 | **Recommended**, 1-bit 8B (PrismML), Thinking-capable |
+| `qwen3.5:0.8b-q4_k_m` | ≈ 0.6 GB | Apache 2.0 | **Default floor**, Thinking-capable |
+| `bonsai-8b` | ≈ 1.15 GB | Apache 2.0 | **First step-up**, 1-bit 8B (PrismML), Thinking-capable |
+| `qwen3:8b-q4_k_m` | ≈ 5.2 GB | Apache 2.0 | Higher tier, Thinking-capable |
+| `calm3:22b-q4_k_m` | ≈ 13 GB | Apache 2.0 | Top tier, Japanese/English specialist, requires 16 GB VRAM |
 | `gemma4:e4b-q4_k_m` | ≈ 2.6 GB | Apache 2.0 | Fast & lightweight (Google Gemma 4) |
 | `gemma4:e2b-q4_k_m` | ≈ 1.3 GB | Apache 2.0 | Lightest (Google Gemma 4) |
 | `gemma4:26b-q4_k_m` | ≈ 16 GB | Apache 2.0 | High accuracy (Google Gemma 4) |
-| `calm3:22b-q4_k_m` | ≈ 13 GB | Apache 2.0 | Japanese/English specialist (CyberAgent), requires 16 GB VRAM |
+| `qwen3.5:2b-q4_k_m` | ≈ 1.4 GB | Apache 2.0 | Thinking-capable |
 | `qwen3.5:4b-q4_k_m` | ≈ 3.2 GB | Apache 2.0 | Thinking-capable |
 | `qwen3.5:9b-q4_k_m` | ≈ 5.3 GB | Apache 2.0 | High accuracy, Thinking-capable |
-| `qwen3.5:0.8b-q4_k_m` | ≈ 0.6 GB | Apache 2.0 | Lightest, Thinking-capable |
-| `qwen3.5:2b-q4_k_m` | ≈ 1.4 GB | Apache 2.0 | Thinking-capable |
 | `qwen3:0.6b-q4_k_m` | ≈ 0.4 GB | Apache 2.0 | Thinking-capable |
 | `qwen3:1.7b-q4_k_m` | ≈ 1.1 GB | Apache 2.0 | Thinking-capable |
 | `qwen3:4b-q4_k_m` | ≈ 2.6 GB | Apache 2.0 | Thinking-capable |
-| `qwen3:8b-q4_k_m` | ≈ 5.2 GB | Apache 2.0 | Thinking-capable |
 | `qwen2.5:7b-instruct-q4_k_m` | ≈ 4.7 GB | Apache 2.0 | Stable |
 | `qwen2.5:14b-instruct-q4_k_m` | ≈ 8.7 GB | Apache 2.0 | High accuracy |
 
 > **Note**: `bonsai-8b` uses the Q1_0_g128 format and requires the
 > [PrismML fork of llama.cpp](https://github.com/PrismML-Eng/llama.cpp).
-> Release builds include it automatically.
+> Release archives and `make` bundle the required companion binary automatically.
+> If you build only the standard binary, run `make prism` before using `bonsai-8b`.
 
 You can also specify a file path directly:
 
@@ -335,7 +362,7 @@ For the full API reference see [server/README.md](server/README.md).
 
 ## LLM Translation Benchmark
 
-`cmd/benchmark` measures translation quality and speed and determines model priority for autoconfig.
+`cmd/benchmark` measures translation quality and speed and provides reference data for the autoconfig ladder.
 
 ### Test cases
 
@@ -404,8 +431,10 @@ Score = quality×0.6 + speed×0.4  (speed = 1/(1 + latency/300ms))
 ```
 
 > **Notes:**
+> - `qwen3.5:0.8b-q4_k_m` tops this speed-weighted benchmark, but autoconfig uses a staged ladder rather than raw rank:
+>   floor → `bonsai-8b` → larger models.
 > - `bonsai-8b` scored low in the GPU benchmark due to frequent thinking-mode timeouts.
->   It is useful as a 1-bit compressed model (~1.15 GB) for CPU / low-VRAM (< 4 GB) environments.
+>   It is still kept as the first step-up because it preserves a small download/footprint before jumping to much larger models.
 > - `gemma4:e4b` performs poorly on EN↔JA translation tasks (quality 0.256) and is excluded from autoconfig.
 > - Actual numbers vary depending on the execution environment and GPU availability.
 

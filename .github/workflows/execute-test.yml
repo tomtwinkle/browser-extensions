@@ -11,7 +11,8 @@ on:
 #  execute ジョブ: checkout/Go/cmake 一切なしのクリーンなランナーで
 #                  バイナリをダウンロードして起動・HTTP エンドポイントを検証
 #
-# execute ジョブが通ること = ビルド成果物が外部ランタイム依存なしで動作すること。
+# execute ジョブが通ること = ビルド成果物がクリーンなランナー上で動作すること。
+# Python-backed ASR のケースのみ、必要な実行時依存 (Python / ffmpeg / pip packages) を追加で入れる。
 # モデルファイルはキャッシュして再ダウンロードを回避する。
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -105,10 +106,11 @@ jobs:
           retention-days: 1
 
   # ── execute: クリーンな別ランナーでバイナリを実行して動作を検証 ─────────────
-  # checkout / Go / cmake / ビルドツール を一切インストールしない。
+  # checkout / Go / cmake / ビルドツール は入れず、
+  # Python-backed ASR ケースのみ実行時依存を追加セットアップする。
   # build ジョブのアーティファクト (バイナリのみ) をダウンロードして実行する。
   execute:
-    name: Execute Test (${{ matrix.name }} / ${{ matrix.llama_model }})
+    name: Execute Test (${{ matrix.name }} / ${{ matrix.whisper_model }} / ${{ matrix.llama_model }})
     needs: build
     runs-on: ${{ matrix.os }}
     strategy:
@@ -157,10 +159,33 @@ jobs:
             bin: server.exe
             whisper_model: tiny
             llama_model: bonsai-8b
+          # ── 新規: 追加 LLM アーキテクチャ smoke test (Linux only) ───────────────
+          - os: ubuntu-latest
+            name: ubuntu-amd64
+            bin: server
+            whisper_model: tiny
+            llama_model: gemma4:e2b-q4_k_m
+          # ── 新規: ASR backend smoke tests (Linux only) ─────────────────────────
+          - os: ubuntu-latest
+            name: ubuntu-amd64
+            bin: server
+            whisper_model: kotoba-whisper-q5_0
+            llama_model: qwen3:0.6b-q4_k_m
+          - os: ubuntu-latest
+            name: ubuntu-amd64
+            bin: server
+            whisper_model: sensevoice
+            llama_model: qwen3:0.6b-q4_k_m
+          - os: ubuntu-latest
+            name: ubuntu-amd64
+            bin: server
+            whisper_model: whisperx:small
+            llama_model: qwen3:0.6b-q4_k_m
 
     env:
       WHISPER_MODEL: ${{ matrix.whisper_model }}
       LLAMA_MODEL: ${{ matrix.llama_model }}
+      ASR_PYTHON_DEVICE: cpu
 
     steps:
       # ── ビルド成果物 (バイナリのみ) をダウンロード ──────────────────────────
@@ -183,6 +208,43 @@ jobs:
         with:
           path: ${{ github.workspace }}/model-cache
           key: models-v1-${{ runner.os }}-${{ runner.arch }}-whisper-${{ matrix.whisper_model }}-${{ matrix.llama_model }}
+
+      - name: Set Python ASR cache paths
+        if: startsWith(matrix.whisper_model, 'sensevoice') || startsWith(matrix.whisper_model, 'whisperx')
+        run: |
+          echo "HF_HOME=$GITHUB_WORKSPACE/hf-home" >> $GITHUB_ENV
+          echo "MODELSCOPE_CACHE=$GITHUB_WORKSPACE/modelscope-cache" >> $GITHUB_ENV
+
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        if: startsWith(matrix.whisper_model, 'sensevoice') || startsWith(matrix.whisper_model, 'whisperx')
+        with:
+          path: |
+            ${{ github.workspace }}/hf-home
+            ${{ github.workspace }}/modelscope-cache
+          key: py-asr-cache-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.whisper_model }}
+
+      - name: Setup Python (Python-backed ASR only)
+        if: startsWith(matrix.whisper_model, 'sensevoice') || startsWith(matrix.whisper_model, 'whisperx')
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ASR runtime dependencies
+        if: startsWith(matrix.whisper_model, 'sensevoice') || startsWith(matrix.whisper_model, 'whisperx')
+        run: |
+          python -m pip install --upgrade pip
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+          case "${{ matrix.whisper_model }}" in
+            sensevoice*)
+              python -m pip install torch torchaudio funasr modelscope
+              ;;
+            whisperx*)
+              python -m pip install torch whisperx
+              ;;
+          esac
 
       # ── テスト用音声ファイルの生成 ─────────────────────────────────────────
       # Node.js で 1 秒の無音 WAV を生成する (全ランナーで利用可能)。
@@ -214,7 +276,7 @@ jobs:
           JSEOF
 
       # ── llama モデルの事前ダウンロード ───────────────────────────────────
-      # 大きなモデル (例: bonsai-8b ~1.15GB) はダウンロードに時間がかかるため、
+      # 大きなモデル (例: bonsai-8b / gemma4:e2b-q4_k_m) はダウンロードに時間がかかるため、
       # サーバー起動前に明示的にダウンロードする。
       # キャッシュがある場合はスキップ。タイムアウトは最大 20 分。
       - name: Pre-download llama model
@@ -227,6 +289,10 @@ jobs:
               DEST="$MODEL_CACHE_DIR/llama/Bonsai-8B.gguf"
               URL="https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/f708df14d9e83594af9564fb4c9c345a571c481c/Bonsai-8B.gguf"
               ;;
+            gemma4:e2b-q4_k_m)
+              DEST="$MODEL_CACHE_DIR/llama/google_gemma-4-E2B-it-Q4_K_M.gguf"
+              URL="https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/2b078a823b3180e03bcbe6c2dfc96afde936857b/google_gemma-4-E2B-it-Q4_K_M.gguf"
+              ;;
             *)
               # その他のモデルはサーバー起動時に自動ダウンロード
               echo "Model '${{ matrix.llama_model }}' will be downloaded by server on startup"
@@ -238,6 +304,28 @@ jobs:
           else
             mkdir -p "$(dirname "$DEST")"
             echo "Downloading ${{ matrix.llama_model }}..."
+            curl -L --retry 3 --retry-delay 5 --progress-bar -o "$DEST" "$URL"
+            echo "Download complete: $(du -sh "$DEST" | cut -f1)"
+          fi
+
+      - name: Pre-download whisper model
+        timeout-minutes: 20
+        run: |
+          case "${{ matrix.whisper_model }}" in
+            kotoba-whisper-q5_0)
+              DEST="$MODEL_CACHE_DIR/whisper/ggml-kotoba-whisper-v2.0-q5_0.bin"
+              URL="https://huggingface.co/kotoba-tech/kotoba-whisper-v2.0-ggml/resolve/e3a0cf6a62b95911703cfb97d819292e058f12c3/ggml-kotoba-whisper-v2.0-q5_0.bin"
+              ;;
+            *)
+              echo "Model '${{ matrix.whisper_model }}' will be downloaded by server on startup"
+              exit 0
+              ;;
+          esac
+          if [ -f "$DEST" ]; then
+            echo "Cache hit: $DEST"
+          else
+            mkdir -p "$(dirname "$DEST")"
+            echo "Downloading ${{ matrix.whisper_model }}..."
             curl -L --retry 3 --retry-delay 5 --progress-bar -o "$DEST" "$URL"
             echo "Download complete: $(du -sh "$DEST" | cut -f1)"
           fi
@@ -256,16 +344,20 @@ jobs:
       # ── サーバー起動を待機 (最大 5 分) ───────────────────────────────────
       - name: Wait for server ready
         run: |
-          echo "Waiting for server to become ready (up to 5 minutes)..."
-          for i in $(seq 1 60); do
+          attempts=60
+          case "${{ matrix.whisper_model }}" in
+            kotoba-whisper*|sensevoice*|whisperx*) attempts=120 ;;
+          esac
+          echo "Waiting for server to become ready (up to $((attempts * 5 / 60)) minutes)..."
+          for i in $(seq 1 "$attempts"); do
             if curl -sf http://localhost:7070/health > /dev/null 2>&1; then
-              echo "Server ready (attempt ${i}/60)"
+              echo "Server ready (attempt ${i}/${attempts})"
               exit 0
             fi
-            echo "  attempt ${i}/60..."
+            echo "  attempt ${i}/${attempts}..."
             sleep 5
           done
-          echo "ERROR: server failed to start within 5 minutes"
+          echo "ERROR: server failed to start within $((attempts * 5 / 60)) minutes"
           exit 1
 
       # ── GET /health ───────────────────────────────────────────────────────

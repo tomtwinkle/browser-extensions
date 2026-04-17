@@ -19,6 +19,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -27,19 +28,93 @@ import (
 
 // ─── Whisper レジストリ ───────────────────────────────────────────────────────
 
-var whisperRegistry = map[string]string{
-	"tiny":           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
-	"tiny.en":        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
-	"base":           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
-	"base.en":        "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
-	"small":          "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
-	"small.en":       "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
-	"medium":         "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
-	"medium.en":      "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin",
-	"large-v1":       "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v1.bin",
-	"large-v2":       "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v2.bin",
-	"large-v3":       "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
-	"large-v3-turbo": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+var whisperRegistry = map[string]WhisperEntry{
+	"tiny": {
+		Backend:       asrBackendWhisperCPP,
+		URL:           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+		CacheFilename: "ggml-tiny.bin",
+	},
+	"tiny.en": {
+		Backend:       asrBackendWhisperCPP,
+		URL:           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+		CacheFilename: "ggml-tiny.en.bin",
+	},
+	"base": {
+		Backend:       asrBackendWhisperCPP,
+		URL:           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+		CacheFilename: "ggml-base.bin",
+	},
+	"base.en": {
+		Backend:       asrBackendWhisperCPP,
+		URL:           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+		CacheFilename: "ggml-base.en.bin",
+	},
+	"small": {
+		Backend:       asrBackendWhisperCPP,
+		URL:           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+		CacheFilename: "ggml-small.bin",
+	},
+	"small.en": {
+		Backend:       asrBackendWhisperCPP,
+		URL:           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
+		CacheFilename: "ggml-small.en.bin",
+	},
+	"medium": {
+		Backend:       asrBackendWhisperCPP,
+		URL:           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
+		CacheFilename: "ggml-medium.bin",
+	},
+	"medium.en": {
+		Backend:       asrBackendWhisperCPP,
+		URL:           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin",
+		CacheFilename: "ggml-medium.en.bin",
+	},
+	"large-v1": {
+		Backend:       asrBackendWhisperCPP,
+		URL:           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v1.bin",
+		CacheFilename: "ggml-large-v1.bin",
+	},
+	"large-v2": {
+		Backend:       asrBackendWhisperCPP,
+		URL:           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v2.bin",
+		CacheFilename: "ggml-large-v2.bin",
+	},
+	"large-v3": {
+		Backend:       asrBackendWhisperCPP,
+		URL:           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+		CacheFilename: "ggml-large-v3.bin",
+	},
+	"large-v3-turbo": {
+		Backend:       asrBackendWhisperCPP,
+		URL:           "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+		CacheFilename: "ggml-large-v3-turbo.bin",
+	},
+	"kotoba-whisper": {
+		Backend:       asrBackendWhisperCPP,
+		URL:           "https://huggingface.co/kotoba-tech/kotoba-whisper-v2.0-ggml/resolve/main/ggml-kotoba-whisper-v2.0.bin",
+		CacheFilename: "ggml-kotoba-whisper-v2.0.bin",
+	},
+	"kotoba-whisper-q5_0": {
+		Backend:       asrBackendWhisperCPP,
+		URL:           "https://huggingface.co/kotoba-tech/kotoba-whisper-v2.0-ggml/resolve/main/ggml-kotoba-whisper-v2.0-q5_0.bin",
+		CacheFilename: "ggml-kotoba-whisper-v2.0-q5_0.bin",
+	},
+	"sensevoice": {
+		Backend:  asrBackendSenseVoice,
+		ModelRef: "iic/SenseVoiceSmall",
+	},
+	"sensevoice-small": {
+		Backend:  asrBackendSenseVoice,
+		ModelRef: "iic/SenseVoiceSmall",
+	},
+	"whisperx": {
+		Backend:  asrBackendWhisperX,
+		ModelRef: "large-v3",
+	},
+	"whisperx-large-v3": {
+		Backend:  asrBackendWhisperX,
+		ModelRef: "large-v3",
+	},
 }
 
 // ─── Llama レジストリ ─────────────────────────────────────────────────────────
@@ -186,34 +261,58 @@ func modelCacheDir() string {
 
 // ─── モデル解決 ───────────────────────────────────────────────────────────────
 
-// resolveWhisperModel はモデル名またはファイルパスを実際のパスに解決する。
-func resolveWhisperModel(spec string) (string, error) {
+// resolveWhisperModel はモデル名またはファイルパスを実際のバックエンド設定に解決する。
+func resolveWhisperModel(spec string) (ResolvedWhisperModel, error) {
 	if spec == "" {
-		return "", fmt.Errorf("whisper model not specified\n  available models: %s", sortedKeys(whisperRegistry))
+		return ResolvedWhisperModel{}, fmt.Errorf("whisper model not specified\n  available models: %s", sortedWhisperKeys())
 	}
 	if _, err := os.Stat(spec); err == nil {
-		return spec, nil
+		return ResolvedWhisperModel{
+			Backend:      asrBackendWhisperCPP,
+			Spec:         spec,
+			ResolvedSpec: spec,
+		}, nil
+	}
+
+	if resolved, ok, err := resolveSpecialWhisperSpec(spec); ok || err != nil {
+		return resolved, err
 	}
 	if strings.ContainsAny(spec, "/\\") {
-		return "", fmt.Errorf("file not found: %s", spec)
+		return ResolvedWhisperModel{}, fmt.Errorf("file not found: %s", spec)
 	}
 
-	url, ok := whisperRegistry[spec]
+	entry, ok := whisperRegistry[spec]
 	if !ok {
-		return "", fmt.Errorf("unknown whisper model: %q\n  available: %s", spec, sortedKeys(whisperRegistry))
+		return ResolvedWhisperModel{}, fmt.Errorf("unknown whisper model: %q\n  available: %s", spec, sortedWhisperKeys())
 	}
 
-	dest := filepath.Join(modelCacheDir(), "whisper", "ggml-"+spec+".bin")
+	if entry.Backend != asrBackendWhisperCPP {
+		return ResolvedWhisperModel{
+			Backend:      entry.Backend,
+			Spec:         spec,
+			ResolvedSpec: entry.ModelRef,
+		}, nil
+	}
+
+	dest := filepath.Join(modelCacheDir(), "whisper", cacheFilenameForWhisperEntry(spec, entry))
 	if _, err := os.Stat(dest); err == nil {
 		logV("whisper/%s: using cache %s", spec, dest)
-		return dest, nil
+		return ResolvedWhisperModel{
+			Backend:      asrBackendWhisperCPP,
+			Spec:         spec,
+			ResolvedSpec: dest,
+		}, nil
 	}
 
-	fmt.Printf("[model] downloading whisper/%s...\n  %s\n", spec, url)
-	if err := downloadModel(url, dest); err != nil {
-		return "", fmt.Errorf("download failed (%s): %w", spec, err)
+	fmt.Printf("[model] downloading whisper/%s...\n  %s\n", spec, entry.URL)
+	if err := downloadModel(entry.URL, dest); err != nil {
+		return ResolvedWhisperModel{}, fmt.Errorf("download failed (%s): %w", spec, err)
 	}
-	return dest, nil
+	return ResolvedWhisperModel{
+		Backend:      asrBackendWhisperCPP,
+		Spec:         spec,
+		ResolvedSpec: dest,
+	}, nil
 }
 
 // resolveLlamaModel はモデル名またはファイルパスを実際のパスに解決する。
@@ -255,12 +354,13 @@ func resolveLlamaModel(spec string) (string, error) {
 	return dest, nil
 }
 
-func sortedKeys(m map[string]string) string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
+func sortedWhisperKeys() string {
+	keys := make([]string, 0, len(whisperRegistry)+2)
+	for k := range whisperRegistry {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+	keys = append(keys, "sensevoice:<model-ref>", "whisperx:<model-name>")
 	return strings.Join(keys, ", ")
 }
 
@@ -271,4 +371,53 @@ func sortedLlamaKeys() string {
 	}
 	sort.Strings(keys)
 	return strings.Join(keys, ", ")
+}
+
+func resolveSpecialWhisperSpec(spec string) (ResolvedWhisperModel, bool, error) {
+	if strings.HasPrefix(spec, "sensevoice:") {
+		ref := strings.TrimSpace(strings.TrimPrefix(spec, "sensevoice:"))
+		if ref == "" {
+			return ResolvedWhisperModel{}, true, fmt.Errorf("sensevoice backend requires a model ref after sensevoice:")
+		}
+		return ResolvedWhisperModel{
+			Backend:      asrBackendSenseVoice,
+			Spec:         spec,
+			ResolvedSpec: normalizeSenseVoiceModelRef(ref),
+		}, true, nil
+	}
+
+	if strings.HasPrefix(spec, "whisperx:") {
+		ref := strings.TrimSpace(strings.TrimPrefix(spec, "whisperx:"))
+		if ref == "" {
+			return ResolvedWhisperModel{}, true, fmt.Errorf("whisperx backend requires a model name after whisperx:")
+		}
+		return ResolvedWhisperModel{
+			Backend:      asrBackendWhisperX,
+			Spec:         spec,
+			ResolvedSpec: ref,
+		}, true, nil
+	}
+
+	return ResolvedWhisperModel{}, false, nil
+}
+
+func normalizeSenseVoiceModelRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ref
+	}
+	if strings.Contains(ref, "/") || strings.Contains(ref, "\\") {
+		return ref
+	}
+	return "iic/" + ref
+}
+
+func cacheFilenameForWhisperEntry(spec string, entry WhisperEntry) string {
+	if entry.CacheFilename != "" {
+		return entry.CacheFilename
+	}
+	if entry.URL != "" {
+		return path.Base(strings.Split(entry.URL, "?")[0])
+	}
+	return "ggml-" + spec + ".bin"
 }
