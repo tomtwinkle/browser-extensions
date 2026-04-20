@@ -22,7 +22,11 @@ func setTestModelCacheDir(t *testing.T) string {
 // setupWhisperCache は指定モデル名に対応するキャッシュファイルを事前作成する。
 func setupWhisperCache(t *testing.T, cacheDir, modelName string) string {
 	t.Helper()
-	dest := filepath.Join(cacheDir, "whisper", "ggml-"+modelName+".bin")
+	entry, ok := whisperRegistry[modelName]
+	if !ok {
+		entry = WhisperEntry{URL: "https://example.invalid/ggml-" + modelName + ".bin"}
+	}
+	dest := filepath.Join(cacheDir, "whisper", cacheFilenameForWhisperEntry(modelName, entry))
 	os.MkdirAll(filepath.Dir(dest), 0o755)
 	os.WriteFile(dest, []byte("cached whisper model"), 0o644)
 	return dest
@@ -47,7 +51,7 @@ func startFakeModelServer(t *testing.T, content string) *httptest.Server {
 }
 
 // patchWhisperRegistry はテスト中だけ whisperRegistry を差し替える。
-func patchWhisperRegistry(t *testing.T, m map[string]string) {
+func patchWhisperRegistry(t *testing.T, m map[string]WhisperEntry) {
 	t.Helper()
 	orig := whisperRegistry
 	whisperRegistry = m
@@ -75,24 +79,34 @@ func TestResolveWhisperModel_ExistingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != f.Name() {
-		t.Errorf("got %q, want %q", got, f.Name())
+	if got.Backend != asrBackendWhisperCPP {
+		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendWhisperCPP)
+	}
+	if got.ResolvedSpec != f.Name() {
+		t.Errorf("got %q, want %q", got.ResolvedSpec, f.Name())
 	}
 }
 
 func TestResolveWhisperModel_CacheHit(t *testing.T) {
 	cacheDir := setTestModelCacheDir(t)
 	cachedPath := setupWhisperCache(t, cacheDir, "base")
-	patchWhisperRegistry(t, map[string]string{
-		"base": "http://should-not-be-called/ggml-base.bin",
+	patchWhisperRegistry(t, map[string]WhisperEntry{
+		"base": {
+			Backend:       asrBackendWhisperCPP,
+			URL:           "http://should-not-be-called/ggml-base.bin",
+			CacheFilename: "ggml-base.bin",
+		},
 	})
 
 	got, err := resolveWhisperModel("base")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != cachedPath {
-		t.Errorf("got %q, want %q", got, cachedPath)
+	if got.Backend != asrBackendWhisperCPP {
+		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendWhisperCPP)
+	}
+	if got.ResolvedSpec != cachedPath {
+		t.Errorf("got %q, want %q", got.ResolvedSpec, cachedPath)
 	}
 }
 
@@ -101,22 +115,34 @@ func TestResolveWhisperModel_Download(t *testing.T) {
 	defer srv.Close()
 
 	setTestModelCacheDir(t)
-	patchWhisperRegistry(t, map[string]string{
-		"tiny-test": srv.URL + "/ggml-tiny-test.bin",
+	patchWhisperRegistry(t, map[string]WhisperEntry{
+		"tiny-test": {
+			Backend:       asrBackendWhisperCPP,
+			URL:           srv.URL + "/ggml-tiny-test.bin",
+			CacheFilename: "ggml-tiny-test.bin",
+		},
 	})
 
 	got, err := resolveWhisperModel("tiny-test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, err := os.Stat(got); err != nil {
+	if got.Backend != asrBackendWhisperCPP {
+		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendWhisperCPP)
+	}
+	if _, err := os.Stat(got.ResolvedSpec); err != nil {
 		t.Errorf("downloaded file not found: %v", err)
 	}
 }
 
 func TestResolveWhisperModel_UnknownName(t *testing.T) {
 	setTestModelCacheDir(t)
-	patchWhisperRegistry(t, map[string]string{"base": "http://example.com"})
+	patchWhisperRegistry(t, map[string]WhisperEntry{
+		"base": {
+			Backend: asrBackendWhisperCPP,
+			URL:     "http://example.com",
+		},
+	})
 
 	_, err := resolveWhisperModel("not-a-real-model")
 	if err == nil {
@@ -135,6 +161,58 @@ func TestResolveWhisperModel_BrokenPath(t *testing.T) {
 	_, err := resolveWhisperModel("/nonexistent/path/to/model.bin")
 	if err == nil {
 		t.Fatal("expected error for non-existent file path")
+	}
+}
+
+func TestResolveWhisperModel_SenseVoiceAlias(t *testing.T) {
+	got, err := resolveWhisperModel("sensevoice")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != asrBackendSenseVoice {
+		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendSenseVoice)
+	}
+	if got.ResolvedSpec != "iic/SenseVoiceSmall" {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, "iic/SenseVoiceSmall")
+	}
+}
+
+func TestResolveWhisperModel_SenseVoicePrefix(t *testing.T) {
+	got, err := resolveWhisperModel("sensevoice:SenseVoiceSmall")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != asrBackendSenseVoice {
+		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendSenseVoice)
+	}
+	if got.ResolvedSpec != "iic/SenseVoiceSmall" {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, "iic/SenseVoiceSmall")
+	}
+}
+
+func TestResolveWhisperModel_WhisperXAlias(t *testing.T) {
+	got, err := resolveWhisperModel("whisperx")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != asrBackendWhisperX {
+		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendWhisperX)
+	}
+	if got.ResolvedSpec != "large-v3" {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, "large-v3")
+	}
+}
+
+func TestResolveWhisperModel_WhisperXPrefix(t *testing.T) {
+	got, err := resolveWhisperModel("whisperx:small")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != asrBackendWhisperX {
+		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendWhisperX)
+	}
+	if got.ResolvedSpec != "small" {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, "small")
 	}
 }
 

@@ -1,0 +1,6 @@
+# External dependency: ffmpeg must also be installed and available on PATH.
+torch
+torchaudio
+funasr
+modelscope
+whisperx

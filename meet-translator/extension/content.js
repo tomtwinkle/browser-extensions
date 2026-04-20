@@ -111,22 +111,12 @@ const ACTIVE_SPEAKER_GLOW_SEL = `${ACTIVE_SPEAKER_BORDER_SEL}.v5h6Xc`;
 const ACTIVE_SPEAKER_VISIBLE_SEL = `${ACTIVE_SPEAKER_BORDER_SEL}.kssMZb`;
 const FEEDBACK_ROOT_ID = 'meet-translator-feedback';
 const FEEDBACK_FORM_ID = 'mt-feedback-form';
-const FEEDBACK_FOCUSABLE_IDS = new Set([
-  'mt-feedback-toggle',
-  'mt-feedback-kind',
-  'mt-feedback-source',
-  'mt-feedback-target',
-  'mt-feedback-close',
-  'mt-feedback-submit',
-]);
 const feedbackState = {
   isOpen: false,
   statusText: '',
   statusError: false,
   latestContext: cloneFeedbackContext(null),
-  latestContextUtteranceId: 0,
   lockedContext: cloneFeedbackContext(null),
-  lockedContextUtteranceId: 0,
   hasPendingUpdate: false,
 };
 
@@ -159,56 +149,6 @@ function sendRuntimeMessage(message) {
       resolve(response);
     });
   });
-}
-
-function normalizeUtteranceId(value) {
-  return Number.isInteger(value) && value > 0 ? value : 0;
-}
-
-function captureFeedbackFocusSnapshot(activeElement = document.activeElement) {
-  const elementId = activeElement?.id || '';
-  if (!FEEDBACK_FOCUSABLE_IDS.has(elementId)) return null;
-  return {
-    elementId,
-    selectionStart: typeof activeElement.selectionStart === 'number' ? activeElement.selectionStart : null,
-    selectionEnd: typeof activeElement.selectionEnd === 'number' ? activeElement.selectionEnd : null,
-    selectionDirection: typeof activeElement.selectionDirection === 'string'
-      ? activeElement.selectionDirection
-      : null,
-  };
-}
-
-function restoreFeedbackFocusSnapshot(snapshot) {
-  if (!snapshot?.elementId) return;
-  const element = document.getElementById(snapshot.elementId);
-  if (!element?.focus) return;
-
-  try {
-    element.focus({ preventScroll: true });
-  } catch (_) {
-    element.focus();
-  }
-
-  if (
-    typeof element.setSelectionRange === 'function' &&
-    snapshot.selectionStart !== null &&
-    snapshot.selectionEnd !== null
-  ) {
-    element.setSelectionRange(
-      snapshot.selectionStart,
-      snapshot.selectionEnd,
-      snapshot.selectionDirection || undefined
-    );
-  }
-}
-
-async function withPreservedFeedbackFocus(task) {
-  const snapshot = captureFeedbackFocusSnapshot();
-  try {
-    return await task();
-  } finally {
-    restoreFeedbackFocusSnapshot(snapshot);
-  }
 }
 
 let embeddedChatFrameRegistered = false;
@@ -509,7 +449,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
 
       const post = mode === 'meet-top' ? postTranslationFromMeetFrame : postToChat;
-      withPreservedFeedbackFocus(() => post(message.text))
+      post(message.text)
         .then(() => sendResponse({ success: true }))
         .catch((err) => {
           console.error('[Meet Translator] チャット投稿エラー:', err);
@@ -528,13 +468,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     case 'SHOW_OVERLAY':
       // Only the meet.google.com top frame renders the overlay.
       if (location.hostname === 'meet.google.com' && window === window.top) {
-        showOverlay(
-          message.original,
-          message.translation,
-          message.scroll,
-          message.speakerName || null,
-          normalizeUtteranceId(message.utteranceId)
-        );
+        showOverlay(message.original, message.translation, message.scroll, message.speakerName || null);
       }
       sendResponse({ success: true });
       return false;
@@ -595,7 +529,6 @@ let lanePointer = 0; // round-robin pointer
 
 // --- Subtitle mode state --------------------------------------------------
 let subtitleHideTimer = null;
-let latestSubtitleUtteranceId = 0;
 
 // ResizeObserver that keeps --mt-cw in sync with the video container width.
 // Disconnected in destroyOverlay().
@@ -895,9 +828,7 @@ function feedbackPreview(text) {
 }
 
 function getFeedbackAnchor() {
-  // Keep the feedback UI on a stable viewport anchor so Meet stage/chat rerenders
-  // do not move the widget or make its inputs lose interactivity mid-edit.
-  return document.body || document.documentElement;
+  return document.querySelector(VIDEO_AREA_SEL) || document.body;
 }
 
 function getFeedbackRoot() {
@@ -962,12 +893,10 @@ function getFeedbackRoot() {
     root.querySelector('#mt-feedback-kind')?.addEventListener('change', syncFeedbackFormCopy);
     root.querySelector(`#${FEEDBACK_FORM_ID}`)?.addEventListener('submit', submitGlossaryFeedback);
   } else if (root.parentElement !== anchor) {
-    const focusSnapshot = captureFeedbackFocusSnapshot();
     anchor.appendChild(root);
-    restoreFeedbackFocusSnapshot(focusSnapshot);
   }
 
-  root.classList.toggle('mt-body-anchor', anchor === document.body || anchor === document.documentElement);
+  root.classList.toggle('mt-body-anchor', anchor === document.body);
   syncFeedbackFormCopy();
   syncFeedbackUi();
   return root;
@@ -983,7 +912,6 @@ function getVisibleFeedbackContext() {
 function openFeedbackEditor() {
   if (!hasFeedbackContext(feedbackState.latestContext)) return false;
   feedbackState.lockedContext = cloneFeedbackContext(feedbackState.latestContext);
-  feedbackState.lockedContextUtteranceId = feedbackState.latestContextUtteranceId;
   feedbackState.isOpen = true;
   feedbackState.hasPendingUpdate = false;
   feedbackState.statusText = '';
@@ -994,7 +922,6 @@ function openFeedbackEditor() {
 function closeFeedbackEditor() {
   feedbackState.isOpen = false;
   feedbackState.lockedContext = cloneFeedbackContext(null);
-  feedbackState.lockedContextUtteranceId = 0;
   feedbackState.hasPendingUpdate = false;
 }
 
@@ -1067,51 +994,13 @@ function syncFeedbackUi() {
 }
 
 function applyFeedbackContextUpdate(message) {
-  const incomingUtteranceId = normalizeUtteranceId(message?.utteranceId);
-
-  if (
-    incomingUtteranceId > 0 &&
-    feedbackState.latestContextUtteranceId > incomingUtteranceId
-  ) {
-    if (
-      feedbackState.isOpen &&
-      feedbackState.lockedContextUtteranceId === incomingUtteranceId
-    ) {
-      const nextLockedContext = mergeFeedbackContext(feedbackState.lockedContext, message);
-      if (!hasFeedbackContext(nextLockedContext)) return false;
-      feedbackState.lockedContext = nextLockedContext;
-      feedbackState.hasPendingUpdate =
-        feedbackState.latestContextUtteranceId !== feedbackState.lockedContextUtteranceId;
-      return true;
-    }
-    return false;
-  }
-
-  const nextLatestContext = (
-    incomingUtteranceId > 0 &&
-    feedbackState.latestContextUtteranceId > 0 &&
-    feedbackState.latestContextUtteranceId !== incomingUtteranceId
-  )
-    ? cloneFeedbackContext(message)
-    : mergeFeedbackContext(feedbackState.latestContext, message);
+  const nextLatestContext = mergeFeedbackContext(feedbackState.latestContext, message);
   if (!hasFeedbackContext(nextLatestContext)) return false;
-
   feedbackState.latestContext = nextLatestContext;
-  if (incomingUtteranceId > 0) {
-    feedbackState.latestContextUtteranceId = incomingUtteranceId;
-  }
   if (feedbackState.isOpen) {
     if (!hasFeedbackContext(feedbackState.lockedContext)) {
       feedbackState.lockedContext = cloneFeedbackContext(nextLatestContext);
-      feedbackState.lockedContextUtteranceId = feedbackState.latestContextUtteranceId;
       feedbackState.hasPendingUpdate = false;
-    } else if (
-      incomingUtteranceId > 0 &&
-      feedbackState.lockedContextUtteranceId === incomingUtteranceId
-    ) {
-      feedbackState.lockedContext = cloneFeedbackContext(nextLatestContext);
-      feedbackState.hasPendingUpdate =
-        feedbackState.latestContextUtteranceId !== feedbackState.lockedContextUtteranceId;
     } else {
       feedbackState.hasPendingUpdate = true;
     }
@@ -1132,7 +1021,6 @@ function resetFeedbackState() {
   feedbackState.statusText = '';
   feedbackState.statusError = false;
   feedbackState.latestContext = cloneFeedbackContext(null);
-  feedbackState.latestContextUtteranceId = 0;
 }
 
 function destroyFeedbackUi() {
@@ -1207,7 +1095,6 @@ function destroyOverlay() {
   }
   laneOccupied.fill(false);
   lanePointer = 0;
-  latestSubtitleUtteranceId = 0;
   if (subtitleHideTimer) { clearTimeout(subtitleHideTimer); subtitleHideTimer = null; }
 }
 
@@ -1243,12 +1130,7 @@ function makeSpeakerSpan(speakerName) {
  * Show overlay in fixed subtitle mode (default).
  * Content is replaced with each new utterance and auto-hides after SUBTITLE_HIDE_MS.
  */
-function showSubtitle(original, translation, speakerName, utteranceId) {
-  if (utteranceId > 0 && utteranceId < latestSubtitleUtteranceId) return;
-  if (utteranceId > 0) {
-    latestSubtitleUtteranceId = utteranceId;
-  }
-
+function showSubtitle(original, translation, speakerName) {
   const container = getOverlayContainer();
 
   let panel = document.getElementById('mt-subtitle-panel');
@@ -1318,12 +1200,12 @@ function showScrolling(original, translation, speakerName) {
  * @param {boolean} scroll
  * @param {string|null} speakerName
  */
-function showOverlay(original, translation, scroll, speakerName, utteranceId = 0) {
+function showOverlay(original, translation, scroll, speakerName) {
   if (!original && !translation) return;
   ensureOverlayStyles();
   if (scroll) {
     showScrolling(original, translation, speakerName);
   } else {
-    showSubtitle(original, translation, speakerName, utteranceId);
+    showSubtitle(original, translation, speakerName);
   }
 }

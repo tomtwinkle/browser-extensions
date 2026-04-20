@@ -32,12 +32,28 @@ func loadWhisperModel(modelPath string) (*C.whisper_context, error) {
 	return ctx, nil
 }
 
-// transcribeInternal は WAV バイト列を文字起こしして返す。
-// Whisper への initial_prompt にはグロッサリーヒントのみを渡す。
-// 過去の発話テキストを initial_prompt に含めると Whisper が無音時に
-// 前回発話を幻覚再生（hallucination）し翻訳連鎖を引き起こすため除外する。
-func (s *server) transcribeInternal(audioData []byte, lang string) (string, string, error) {
-	if s.whisperCtx == nil {
+type nativeWhisperTranscriber struct {
+	ctx *C.whisper_context
+}
+
+func newNativeWhisperTranscriber(modelPath string) (transcriber, error) {
+	ctx, err := loadWhisperModel(modelPath)
+	if err != nil {
+		return nil, err
+	}
+	return &nativeWhisperTranscriber{ctx: ctx}, nil
+}
+
+func (t *nativeWhisperTranscriber) Close() error {
+	if t.ctx != nil {
+		C.whisper_bridge_free(t.ctx)
+		t.ctx = nil
+	}
+	return nil
+}
+
+func (t *nativeWhisperTranscriber) Transcribe(audioData []byte, lang, prompt string, logf func(string, ...any)) (string, string, error) {
+	if t.ctx == nil {
 		return "", "", fmt.Errorf("whisper context not initialized")
 	}
 
@@ -46,9 +62,11 @@ func (s *server) transcribeInternal(audioData []byte, lang string) (string, stri
 	if err != nil {
 		return "", "", fmt.Errorf("failed to parse WAV: %w", err)
 	}
-	s.logVerbose("WAV: sampleRate=%d, channels=%d, samples=%d, duration=%.2fs",
-		wav.sampleRate, wav.channels, len(wav.samples),
-		float64(len(wav.samples))/float64(wav.sampleRate))
+	if logf != nil {
+		logf("WAV: sampleRate=%d, channels=%d, samples=%d, duration=%.2fs",
+			wav.sampleRate, wav.channels, len(wav.samples),
+			float64(len(wav.samples))/float64(wav.sampleRate))
+	}
 	samples := resampleTo16k(wav.samples, wav.sampleRate)
 	if len(samples) == 0 {
 		return "", "", nil
@@ -61,9 +79,11 @@ func (s *server) transcribeInternal(audioData []byte, lang string) (string, stri
 
 	// グロッサリーヒントのみを initial_prompt として使用する。
 	// 過去の発話テキストは含めない（Whisper の無音時 hallucination を防ぐため）。
-	combinedPrompt := strings.TrimSpace(s.glossary.WhisperHints())
-	s.logVerbose("whisper initial_prompt: %q", combinedPrompt)
-	cPrompt := C.CString(combinedPrompt)
+	prompt = strings.TrimSpace(prompt)
+	if logf != nil {
+		logf("whisper initial_prompt: %q", prompt)
+	}
+	cPrompt := C.CString(prompt)
 	defer C.free(unsafe.Pointer(cPrompt))
 
 	const outSize = 8192
@@ -79,7 +99,7 @@ func (s *server) transcribeInternal(audioData []byte, lang string) (string, stri
 	defer C.free(unsafe.Pointer(errBuf))
 
 	ret := C.whisper_bridge_transcribe(
-		s.whisperCtx,
+		t.ctx,
 		cSamples, C.int(len(samples)),
 		cLang,
 		cPrompt,
@@ -93,8 +113,26 @@ func (s *server) transcribeInternal(audioData []byte, lang string) (string, stri
 
 	result := strings.TrimSpace(C.GoString(outBuf))
 	detectedLang := strings.TrimSpace(C.GoString(langBuf))
-	s.logVerbose("whisper raw output: %q, detected_lang: %q", result, detectedLang)
-	// 辞書の修正テーブルを適用 (ASR 誤認識を既知のパターンで修正)
+	if logf != nil {
+		logf("whisper raw output: %q, detected_lang: %q", result, detectedLang)
+	}
+	return result, detectedLang, nil
+}
+
+// transcribeInternal は選択された ASR バックエンドで文字起こしして返す。
+// Whisper 系の initial_prompt にはグロッサリーヒントのみを渡す。
+func (s *server) transcribeInternal(audioData []byte, lang string) (string, string, error) {
+	if s.transcriber == nil {
+		return "", "", fmt.Errorf("transcriber not initialized")
+	}
+
+	prompt := strings.TrimSpace(s.glossary.WhisperHints())
+	result, detectedLang, err := s.transcriber.Transcribe(audioData, lang, prompt, s.logVerbose)
+	if err != nil {
+		return "", "", err
+	}
+
+	result = strings.TrimSpace(result)
 	result = s.glossary.ApplyCorrections(result)
 	return result, detectedLang, nil
 }
