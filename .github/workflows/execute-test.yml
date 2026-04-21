@@ -298,11 +298,41 @@ jobs:
               exit 0
               ;;
           esac
-          printf '{"action":"shutdown"}\n' | python meet-translator/server/python/asr_worker.py \
-            --backend "$backend" \
-            --model "$model_ref" \
-            --device "${ASR_PYTHON_DEVICE:-cpu}" \
-            --requirements-path meet-translator/server/python/requirements-asr.txt
+          export ASR_WARMUP_BACKEND="$backend"
+          export ASR_WARMUP_MODEL="$model_ref"
+          export HF_HUB_DISABLE_PROGRESS_BARS=1
+          python - <<'PY'
+          import os
+
+          backend = os.environ["ASR_WARMUP_BACKEND"]
+          model_ref = os.environ["ASR_WARMUP_MODEL"]
+          device = os.environ.get("ASR_PYTHON_DEVICE", "cpu")
+
+          if backend == "sensevoice":
+              from funasr import AutoModel
+
+              AutoModel(
+                  model=model_ref,
+                  vad_model="fsmn-vad",
+                  vad_kwargs={"max_single_segment_time": 30000},
+                  device=device,
+              )
+          elif backend == "whisperx":
+              import whisperx
+
+              compute_type = "int8" if device == "cpu" else "float16"
+              whisperx.load_model(
+                  model_ref,
+                  device=device,
+                  compute_type=compute_type,
+                  vad_method="silero",
+                  asr_options={"condition_on_previous_text": False},
+              )
+          else:
+              raise SystemExit(f"unsupported ASR warmup backend: {backend}")
+
+          print(f"Python ASR cache ready for {backend}:{model_ref}")
+          PY
 
       - name: Install MLX runtime dependencies
         if: matrix.os == 'macos-latest'
