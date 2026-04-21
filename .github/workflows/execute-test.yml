@@ -271,6 +271,39 @@ jobs:
               ;;
           esac
 
+      - name: Warm Python ASR model cache
+        if: startsWith(matrix.whisper_model, 'sensevoice') || startsWith(matrix.whisper_model, 'whisperx')
+        timeout-minutes: 30
+        run: |
+          spec="${{ matrix.whisper_model }}"
+          case "$spec" in
+            sensevoice|sensevoice-small)
+              backend="sensevoice"
+              model_ref="iic/SenseVoiceSmall"
+              ;;
+            sensevoice:*)
+              backend="sensevoice"
+              model_ref="${spec#sensevoice:}"
+              ;;
+            whisperx|whisperx-large-v3)
+              backend="whisperx"
+              model_ref="large-v3"
+              ;;
+            whisperx:*)
+              backend="whisperx"
+              model_ref="${spec#whisperx:}"
+              ;;
+            *)
+              echo "Skipping Python ASR warmup for ${spec}"
+              exit 0
+              ;;
+          esac
+          printf '{"action":"shutdown"}\n' | python meet-translator/server/python/asr_worker.py \
+            --backend "$backend" \
+            --model "$model_ref" \
+            --device "${ASR_PYTHON_DEVICE:-cpu}" \
+            --requirements-path meet-translator/server/python/requirements-asr.txt
+
       - name: Install MLX runtime dependencies
         if: matrix.os == 'macos-latest'
         run: |
