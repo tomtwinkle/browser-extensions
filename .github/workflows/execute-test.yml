@@ -347,8 +347,7 @@ jobs:
           JSEOF
 
       # ── llama モデルの事前ダウンロード ───────────────────────────────────
-      # 大きなモデル (例: bonsai-8b / gemma4:e2b-q4_k_m) はダウンロードに時間がかかるため、
-      # サーバー起動前に明示的にダウンロードする。
+      # 起動待ちの budget を食い潰しやすいモデルは、サーバー起動前に明示的にダウンロードする。
       # キャッシュがある場合はスキップ。タイムアウトは最大 20 分。
       - name: Pre-download llama model
         timeout-minutes: 20
@@ -367,6 +366,10 @@ jobs:
             bonsai-8b)
               DEST="$MODEL_CACHE_DIR/llama/Bonsai-8B.gguf"
               URL="https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/f708df14d9e83594af9564fb4c9c345a571c481c/Bonsai-8B.gguf"
+              ;;
+            qwen3:0.6b-q4_k_m)
+              DEST="$MODEL_CACHE_DIR/llama/Qwen3-0.6B-Q4_K_M.gguf"
+              URL="https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/50968a4468ef4233ed78cd7c3de230dd1d61a56b/Qwen3-0.6B-Q4_K_M.gguf"
               ;;
             gemma4:e2b-q4_k_m)
               DEST="$MODEL_CACHE_DIR/llama/google_gemma-4-E2B-it-Q4_K_M.gguf"
@@ -420,7 +423,7 @@ jobs:
           echo $! > server.pid
           echo "Server started (PID: $(cat server.pid))"
 
-      # ── サーバー起動を待機 (最大 5 分) ───────────────────────────────────
+      # ── サーバー起動を待機 ────────────────────────────────────────────────
       - name: Wait for server ready
         run: |
           attempts=60
@@ -428,7 +431,7 @@ jobs:
             attempts=120
           fi
           case "${{ matrix.whisper_model }}" in
-            kotoba-whisper*|sensevoice*|whisperx*) attempts=120 ;;
+            kotoba-whisper*|sensevoice*|whisperx*) attempts=180 ;;
           esac
           echo "Waiting for server to become ready (up to $((attempts * 5 / 60)) minutes)..."
           for i in $(seq 1 "$attempts"); do
