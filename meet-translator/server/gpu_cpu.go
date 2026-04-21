@@ -9,6 +9,9 @@ package main
 // そのため OS 別に分離し、Windows は -lstdc++ を省略して
 // -static-libstdc++ だけで C++ ランタイムを静的に組み込む。
 // これによりビルド済みバイナリは MinGW ランタイム DLL への依存がゼロになる。
+// darwin は package 内の C++ bridge (*.cpp) により cgo が C++ リンカを使うため、
+// libc++ が自動解決される。-lstdc++ を明示すると Apple linker で -lc++ に
+// 正規化され duplicate library warning になるため、darwin では付けない。
 
 /*
 #cgo LDFLAGS: -L${SRCDIR}/vendor/build/vendor/llama.cpp/src
@@ -16,7 +19,7 @@ package main
 #cgo LDFLAGS: -L${SRCDIR}/vendor/build/vendor/llama.cpp/ggml/src
 
 #cgo linux   LDFLAGS: -lllama -lwhisper -lggml -lggml-base -lggml-cpu -lm -lstdc++ -fopenmp
-#cgo darwin  LDFLAGS: -lllama -lwhisper -lggml -lggml-base -lggml-cpu -lm -lstdc++ -framework Accelerate
+#cgo darwin  LDFLAGS: -lllama -lwhisper -lggml -lggml-base -lggml-cpu -lm -framework Accelerate
 
 #cgo windows LDFLAGS: -lllama -lwhisper -lggml -lggml-base -lggml-cpu -lm
 #cgo windows LDFLAGS: -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic
