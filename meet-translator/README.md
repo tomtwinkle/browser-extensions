@@ -256,7 +256,9 @@ Specify a model name with `--llama-model` and it will be downloaded automaticall
 | Model | Size | License | Notes |
 |---|---|---|---|
 | `qwen3.5:0.8b-q4_k_m` | ≈ 0.6 GB | Apache 2.0 | **Default floor**, Thinking-capable |
-| `bonsai-8b` | ≈ 1.15 GB | Apache 2.0 | **First step-up**, 1-bit 8B (PrismML), Thinking-capable |
+| `bonsai-8b` | ≈ 1.15 GB / MLX repo | Apache 2.0 | **First step-up**, Thinking-capable, MLX on Apple Silicon, PrismML elsewhere |
+| `bonsai-4b` | MLX repo | Apache 2.0 | Apple Silicon-only MLX Bonsai, Thinking-capable |
+| `bonsai-1.7b` | MLX repo | Apache 2.0 | Apple Silicon-only MLX Bonsai, Thinking-capable |
 | `qwen3:8b-q4_k_m` | ≈ 5.2 GB | Apache 2.0 | Higher tier, Thinking-capable |
 | `calm3:22b-q4_k_m` | ≈ 13 GB | Apache 2.0 | Top tier, Japanese/English specialist, requires 16 GB VRAM |
 | `gemma4:e4b-q4_k_m` | ≈ 2.6 GB | Apache 2.0 | Fast & lightweight (Google Gemma 4) |
@@ -271,10 +273,17 @@ Specify a model name with `--llama-model` and it will be downloaded automaticall
 | `qwen2.5:7b-instruct-q4_k_m` | ≈ 4.7 GB | Apache 2.0 | Stable |
 | `qwen2.5:14b-instruct-q4_k_m` | ≈ 8.7 GB | Apache 2.0 | High accuracy |
 
-> **Note**: `bonsai-8b` uses the Q1_0_g128 format and requires the
-> [PrismML fork of llama.cpp](https://github.com/PrismML-Eng/llama.cpp).
+> **Note**: On Apple Silicon (`darwin/arm64`), models with a known MLX counterpart
+> (`bonsai-*`, `qwen2.5:*`, `qwen3:*`, `qwen3.5:*`, `calm3:*`, `gemma4:*`)
+> automatically switch to the local MLX backend. Install it first with
+> `python3 -m pip install -r ./python/requirements-llm.txt`.
+> On other platforms, `bonsai-8b` still uses the
+> [PrismML fork of llama.cpp](https://github.com/PrismML-Eng/llama.cpp),
+> while `bonsai-4b` and `bonsai-1.7b` are unavailable.
 > Release archives and `make` bundle the required companion binary automatically.
 > If you build only the standard binary, run `make prism` before using `bonsai-8b`.
+> Known MLX repo IDs are also accepted directly, for example
+> `prism-ml/Ternary-Bonsai-8B-mlx-2bit` or `mlx-community/Qwen3-0.6B-4bit`.
 
 You can also specify a file path directly:
 

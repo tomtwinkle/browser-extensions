@@ -55,7 +55,17 @@ func TestParseModelOptions_RoundTrip(t *testing.T) {
 // ─── defaultModelOptions ─────────────────────────────────────────────────────
 
 func TestDefaultModelOptions_Qwen3_ThinkingTrue(t *testing.T) {
-	for _, name := range []string{"qwen3:0.6b-q4_k_m", "qwen3:1.7b-q4_k_m", "qwen3:4b-q4_k_m", "qwen3:8b-q4_k_m"} {
+	for _, name := range []string{
+		"qwen3:0.6b-q4_k_m",
+		"qwen3:1.7b-q4_k_m",
+		"qwen3:4b-q4_k_m",
+		"qwen3:8b-q4_k_m",
+		"mlx-community/Qwen3-0.6B-4bit",
+		"bonsai-1.7b",
+		"bonsai-4b",
+		"bonsai-8b",
+		bonsai8BMLXModelRef,
+	} {
 		opts := defaultModelOptions(name)
 		if !opts.Thinking {
 			t.Errorf("%s: expected Thinking=true", name)
@@ -73,7 +83,12 @@ func TestDefaultModelOptions_Qwen25_ThinkingFalse(t *testing.T) {
 }
 
 func TestDefaultModelOptions_Gemma4_ThinkingFalse(t *testing.T) {
-	for _, name := range []string{"gemma4:e2b-q4_k_m", "gemma4:e4b-q4_k_m", "gemma4:26b-q4_k_m"} {
+	for _, name := range []string{
+		"gemma4:e2b-q4_k_m",
+		"gemma4:e4b-q4_k_m",
+		"gemma4:26b-q4_k_m",
+		"mlx-community/gemma-4-e2b-it-4bit",
+	} {
 		opts := defaultModelOptions(name)
 		if opts.Thinking {
 			t.Errorf("%s: expected Thinking=false", name)

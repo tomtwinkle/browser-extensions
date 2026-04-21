@@ -31,9 +31,12 @@ func redirectIfNeeded(llamaSpec string) {
 		return
 	}
 
-	entry, ok := llamaRegistry[llamaSpec]
+	entry, ok := llamaRegistry[canonicalLlamaSpec(llamaSpec)]
 	if !ok {
 		// 未知のモデル名 (ファイルパス等) はスキップ
+		return
+	}
+	if prefersMLX(entry) {
 		return
 	}
 
@@ -42,15 +45,7 @@ func redirectIfNeeded(llamaSpec string) {
 		return // 現在のバイナリで対応可能
 	}
 
-	// 切り替え先バイナリ名を決定
-	var targetBin string
-	if needsPrism {
-		// 標準ビルドで PrismML 専用モデルが要求された → server-prism へ
-		targetBin = "server-prism"
-	} else {
-		// PrismML ビルドで標準モデル (gemma4 等) が要求された → server へ
-		targetBin = "server"
-	}
+	targetBin := targetBinaryName(needsPrism)
 
 	// 実行ファイルと同じディレクトリを検索
 	exe, err := os.Executable()
@@ -94,4 +89,11 @@ func binaryDesc(prism bool) string {
 		return "PrismML (Q1_0_g128)"
 	}
 	return "standard (official llama.cpp)"
+}
+
+func targetBinaryName(needsPrism bool) string {
+	if needsPrism {
+		return "server-prism"
+	}
+	return "server"
 }

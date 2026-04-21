@@ -26,6 +26,17 @@ import (
 	"strings"
 )
 
+var (
+	currentGOOS   = runtime.GOOS
+	currentGOARCH = runtime.GOARCH
+)
+
+const (
+	bonsai8BMLXModelRef  = "prism-ml/Ternary-Bonsai-8B-mlx-2bit"
+	bonsai4BMLXModelRef  = "prism-ml/Ternary-Bonsai-4B-mlx-2bit"
+	bonsai17BMLXModelRef = "prism-ml/Ternary-Bonsai-1.7B-mlx-2bit"
+)
+
 // ─── Whisper レジストリ ───────────────────────────────────────────────────────
 
 var whisperRegistry = map[string]WhisperEntry{
@@ -122,6 +133,7 @@ var whisperRegistry = map[string]WhisperEntry{
 // LlamaEntry はレジストリ内の各モデルのメタデータ。
 type LlamaEntry struct {
 	URL         string
+	MLXModelRef string
 	Template    string // "qwen" | "qwen3" | "gemma"
 	HasThinking bool   // Qwen3 の thinking モードに対応しているか
 	NeedsPrism  bool   // PrismML ビルドが必要 (Q1_0_g128 量子化を使用するモデル)
@@ -132,32 +144,38 @@ var llamaRegistry = map[string]LlamaEntry{
 	// NOTE: qwen2.5:3b は Qwen Research License（非商用専用）のため除外。
 	//       Qwen2.5-7B 以上および Qwen3 全サイズは Apache 2.0。
 	"qwen2.5:7b-instruct-q4_k_m": {
-		URL:      "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf",
-		Template: "qwen",
+		URL:         "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf",
+		MLXModelRef: "mlx-community/Qwen2.5-7B-Instruct-4bit",
+		Template:    "qwen",
 	},
 	"qwen2.5:14b-instruct-q4_k_m": {
-		URL:      "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/qwen2.5-14b-instruct-q4_k_m.gguf",
-		Template: "qwen",
+		URL:         "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/qwen2.5-14b-instruct-q4_k_m.gguf",
+		MLXModelRef: "mlx-community/Qwen2.5-14B-Instruct-4bit",
+		Template:    "qwen",
 	},
 
 	// ── Qwen3 (thinking 対応) ────────────────────────────────────────────────
 	"qwen3:0.6b-q4_k_m": {
 		URL:         "https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_K_M.gguf",
+		MLXModelRef: "mlx-community/Qwen3-0.6B-4bit",
 		Template:    "qwen3",
 		HasThinking: true,
 	},
 	"qwen3:1.7b-q4_k_m": {
 		URL:         "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf",
+		MLXModelRef: "mlx-community/Qwen3-1.7B-4bit",
 		Template:    "qwen3",
 		HasThinking: true,
 	},
 	"qwen3:4b-q4_k_m": {
 		URL:         "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf",
+		MLXModelRef: "mlx-community/Qwen3-4B-4bit",
 		Template:    "qwen3",
 		HasThinking: true,
 	},
 	"qwen3:8b-q4_k_m": {
 		URL:         "https://huggingface.co/unsloth/Qwen3-8B-GGUF/resolve/main/Qwen3-8B-Q4_K_M.gguf",
+		MLXModelRef: "mlx-community/Qwen3-8B-4bit",
 		Template:    "qwen3",
 		HasThinking: true,
 	},
@@ -165,29 +183,34 @@ var llamaRegistry = map[string]LlamaEntry{
 	// ── Qwen3.5 (thinking 対応, Unsloth GGUF) ────────────────────────────────
 	"qwen3.5:0.8b-q4_k_m": {
 		URL:         "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf",
+		MLXModelRef: "mlx-community/Qwen3.5-0.8B-MLX-4bit",
 		Template:    "qwen3",
 		HasThinking: true,
 	},
 	"qwen3.5:2b-q4_k_m": {
 		URL:         "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf",
+		MLXModelRef: "mlx-community/Qwen3.5-2B-MLX-4bit",
 		Template:    "qwen3",
 		HasThinking: true,
 	},
 	"qwen3.5:4b-q4_k_m": {
 		URL:         "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
+		MLXModelRef: "mlx-community/Qwen3.5-4B-MLX-4bit",
 		Template:    "qwen3",
 		HasThinking: true,
 	},
 	"qwen3.5:9b-q4_k_m": {
 		URL:         "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
+		MLXModelRef: "mlx-community/Qwen3.5-9B-MLX-4bit",
 		Template:    "qwen3",
 		HasThinking: true,
 	},
 
 	// ── CALM3 (日英特化, CyberAgent, Apache 2.0) ──────────────────────────────
 	"calm3:22b-q4_k_m": {
-		URL:      "https://huggingface.co/grapevine-AI/CALM3-22B-Chat-GGUF/resolve/main/calm3-22b-chat-Q4_K_M.gguf",
-		Template: "qwen",
+		URL:         "https://huggingface.co/grapevine-AI/CALM3-22B-Chat-GGUF/resolve/main/calm3-22b-chat-Q4_K_M.gguf",
+		MLXModelRef: "mlx-community/calm3-22b-chat-4bit",
+		Template:    "qwen",
 	},
 
 	// ── Bonsai 8B (PrismML 1-bit, Qwen3-8B ベース, Apache 2.0) ──────────────
@@ -196,30 +219,44 @@ var llamaRegistry = map[string]LlamaEntry{
 	// Bonsai-8B は llama_model_load 時に "unsupported quantization type" エラーで失敗する。
 	"bonsai-8b": {
 		URL:         "https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B.gguf",
+		MLXModelRef: bonsai8BMLXModelRef,
 		Template:    "qwen3",
 		HasThinking: true,
 		NeedsPrism:  true, // Q1_0_g128 quantization requires PrismML build (make prism)
 	},
+	"bonsai-4b": {
+		MLXModelRef: bonsai4BMLXModelRef,
+		Template:    "qwen3",
+		HasThinking: true,
+	},
+	"bonsai-1.7b": {
+		MLXModelRef: bonsai17BMLXModelRef,
+		Template:    "qwen3",
+		HasThinking: true,
+	},
 
 	// ── Gemma 4 ──────────────────────────────────────────────────────────────
 	"gemma4:e2b-q4_k_m": {
-		URL:      "https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/main/google_gemma-4-E2B-it-Q4_K_M.gguf",
-		Template: "gemma",
+		URL:         "https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/main/google_gemma-4-E2B-it-Q4_K_M.gguf",
+		MLXModelRef: "mlx-community/gemma-4-e2b-it-4bit",
+		Template:    "gemma",
 	},
 	"gemma4:e4b-q4_k_m": {
-		URL:      "https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF/resolve/main/google_gemma-4-E4B-it-Q4_K_M.gguf",
-		Template: "gemma",
+		URL:         "https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF/resolve/main/google_gemma-4-E4B-it-Q4_K_M.gguf",
+		MLXModelRef: "mlx-community/gemma-4-e4b-it-4bit",
+		Template:    "gemma",
 	},
 	"gemma4:26b-q4_k_m": {
-		URL:      "https://huggingface.co/bartowski/google_gemma-4-26b-it-GGUF/resolve/main/google_gemma-4-26b-it-Q4_K_M.gguf",
-		Template: "gemma",
+		URL:         "https://huggingface.co/bartowski/google_gemma-4-26b-it-GGUF/resolve/main/google_gemma-4-26b-it-Q4_K_M.gguf",
+		MLXModelRef: "mlx-community/gemma-4-26b-a4b-it-4bit",
+		Template:    "gemma",
 	},
 }
 
 // templateFor はモデル名からチャットテンプレート識別子を返す。
 // レジストリに存在しない場合はデフォルト "qwen" を返す。
 func templateFor(modelName string) string {
-	if e, ok := llamaRegistry[modelName]; ok {
+	if e, ok := llamaRegistry[canonicalLlamaSpec(modelName)]; ok {
 		return e.Template
 	}
 	return "qwen"
@@ -227,8 +264,25 @@ func templateFor(modelName string) string {
 
 // hasThinkingSupport はモデルが thinking モードに対応しているか返す。
 func hasThinkingSupport(modelName string) bool {
-	e, ok := llamaRegistry[modelName]
+	e, ok := llamaRegistry[canonicalLlamaSpec(modelName)]
 	return ok && e.HasThinking
+}
+
+func canonicalLlamaSpec(spec string) string {
+	spec = strings.TrimSpace(spec)
+	if _, ok := llamaRegistry[spec]; ok {
+		return spec
+	}
+	for alias, entry := range llamaRegistry {
+		if entry.MLXModelRef == spec {
+			return alias
+		}
+	}
+	return spec
+}
+
+func prefersMLX(entry LlamaEntry) bool {
+	return entry.MLXModelRef != "" && currentGOOS == "darwin" && currentGOARCH == "arm64"
 }
 
 // ─── キャッシュディレクトリ ────────────────────────────────────────────────────
@@ -315,43 +369,73 @@ func resolveWhisperModel(spec string) (ResolvedWhisperModel, error) {
 	}, nil
 }
 
-// resolveLlamaModel はモデル名またはファイルパスを実際のパスに解決する。
-// 優先順位: 既存ファイル → Ollama キャッシュ → ローカルキャッシュ → ダウンロード
-func resolveLlamaModel(spec string) (string, error) {
+// resolveLlamaModel はモデル名またはファイルパスを実際のバックエンド設定に解決する。
+// 優先順位: 既存ファイル → Ollama キャッシュ → ローカルキャッシュ → ダウンロード。
+// Apple Silicon では MLX 対応モデルを優先する。
+func resolveLlamaModel(spec string) (ResolvedLlamaModel, error) {
 	if spec == "" {
-		return "", fmt.Errorf("llama model not specified\n  available models: %s", sortedLlamaKeys())
+		return ResolvedLlamaModel{}, fmt.Errorf("llama model not specified\n  available models: %s", sortedLlamaKeys())
 	}
 	if _, err := os.Stat(spec); err == nil {
-		return spec, nil
+		return ResolvedLlamaModel{
+			Backend:      llmBackendLlamaCPP,
+			Spec:         spec,
+			ResolvedSpec: spec,
+		}, nil
 	}
-	if strings.ContainsAny(spec, "/\\") {
-		return "", fmt.Errorf("file not found: %s", spec)
+
+	canonicalSpec := canonicalLlamaSpec(spec)
+	entry, ok := llamaRegistry[canonicalSpec]
+	if ok && prefersMLX(entry) {
+		return ResolvedLlamaModel{
+			Backend:      llmBackendMLX,
+			Spec:         spec,
+			ResolvedSpec: entry.MLXModelRef,
+		}, nil
 	}
 
 	// Ollama キャッシュを優先確認
-	if path, ok := findInOllamaCache(spec); ok {
-		logV("llama/%s: using Ollama cache %s", spec, path)
-		return path, nil
+	if path, ok := findInOllamaCache(canonicalSpec); ok {
+		logV("llama/%s: using Ollama cache %s", canonicalSpec, path)
+		return ResolvedLlamaModel{
+			Backend:      llmBackendLlamaCPP,
+			Spec:         spec,
+			ResolvedSpec: path,
+		}, nil
 	}
 
-	entry, ok := llamaRegistry[spec]
 	if !ok {
-		return "", fmt.Errorf("unknown llama model: %q\n  available: %s", spec, sortedLlamaKeys())
+		if strings.ContainsAny(spec, "/\\") {
+			return ResolvedLlamaModel{}, fmt.Errorf("file not found: %s", spec)
+		}
+		return ResolvedLlamaModel{}, fmt.Errorf("unknown llama model: %q\n  available: %s", spec, sortedLlamaKeys())
+	}
+
+	if entry.URL == "" {
+		return ResolvedLlamaModel{}, fmt.Errorf("model %q requires Apple Silicon MLX (darwin/arm64)", spec)
 	}
 
 	parts := strings.Split(entry.URL, "/")
 	filename := parts[len(parts)-1]
 	dest := filepath.Join(modelCacheDir(), "llama", filename)
 	if _, err := os.Stat(dest); err == nil {
-		logV("llama/%s: using cache %s", spec, dest)
-		return dest, nil
+		logV("llama/%s: using cache %s", canonicalSpec, dest)
+		return ResolvedLlamaModel{
+			Backend:      llmBackendLlamaCPP,
+			Spec:         spec,
+			ResolvedSpec: dest,
+		}, nil
 	}
 
-	fmt.Printf("[model] downloading llama/%s (large file)...\n  %s\n", spec, entry.URL)
+	fmt.Printf("[model] downloading llama/%s (large file)...\n  %s\n", canonicalSpec, entry.URL)
 	if err := downloadModel(entry.URL, dest); err != nil {
-		return "", fmt.Errorf("download failed (%s): %w", spec, err)
+		return ResolvedLlamaModel{}, fmt.Errorf("download failed (%s): %w", canonicalSpec, err)
 	}
-	return dest, nil
+	return ResolvedLlamaModel{
+		Backend:      llmBackendLlamaCPP,
+		Spec:         spec,
+		ResolvedSpec: dest,
+	}, nil
 }
 
 func sortedWhisperKeys() string {

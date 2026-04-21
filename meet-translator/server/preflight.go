@@ -23,7 +23,7 @@ const (
 
 // runPreflight はモデルスペックを実バックエンド設定に解決し cfg を更新する。
 // 解決に失敗した場合はヘルプを表示してプロセスを終了する。
-func runPreflight(cfg *config) ResolvedWhisperModel {
+func runPreflight(cfg *config) (ResolvedWhisperModel, ResolvedLlamaModel) {
 	whisperModel, err := resolveWhisperModel(cfg.whisperModel)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\n%s[ERROR] failed to resolve whisper model: %v%s\n", colorRed, err, colorReset)
@@ -35,7 +35,7 @@ func runPreflight(cfg *config) ResolvedWhisperModel {
 	}
 	cfg.whisperModel = whisperModel.ResolvedSpec
 
-	llamaPath, err := resolveLlamaModel(cfg.llamaModel)
+	llamaModel, err := resolveLlamaModel(cfg.llamaModel)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\n%s[ERROR] failed to resolve llama model: %v%s\n", colorRed, err, colorReset)
 		fmt.Fprintln(os.Stderr)
@@ -44,8 +44,8 @@ func runPreflight(cfg *config) ResolvedWhisperModel {
 		fmt.Fprintf(os.Stderr, "%sPlease fix the above issue and restart.%s\n", colorRed, colorReset)
 		os.Exit(1)
 	}
-	cfg.llamaModel = llamaPath
-	return whisperModel
+	cfg.llamaModel = llamaModel.ResolvedSpec
+	return whisperModel, llamaModel
 }
 
 // printFullHelp はパラメーター未指定時のフルヘルプを標準出力に表示する。
@@ -92,9 +92,14 @@ func printLlamaHelp(w io.Writer) {
 	fmt.Fprintf(w, "    %s--llama-model bonsai-8b%s            (next step, 1-bit 8B, 1.15GB, Thinking)\n", colorCyan, colorReset)
 	fmt.Fprintf(w, "    %s--llama-model qwen3:8b-q4_k_m%s     (higher tier, 5.2GB, Thinking)\n", colorCyan, colorReset)
 	fmt.Fprintf(w, "    %s--llama-model calm3:22b-q4_k_m%s    (top tier, JA/EN specialist, 13GB, needs ~16GB VRAM)\n", colorCyan, colorReset)
-	fmt.Fprintf(w, "  Also available manually: qwen3.5:2b/4b/9b, qwen3:0.6b/1.7b/4b, qwen2.5:7b/14b, gemma4:e2b/e4b/26b.\n")
-	fmt.Fprintf(w, "  bonsai-8b requires the PrismML build. If server-prism is beside the standard binary,\n")
-	fmt.Fprintf(w, "  the switch is automatic; otherwise build it with: make prism\n")
+	fmt.Fprintf(w, "  Also available manually: bonsai-4b, bonsai-1.7b, qwen3.5:2b/4b/9b, qwen3:0.6b/1.7b/4b, qwen2.5:7b/14b, gemma4:e2b/e4b/26b.\n")
+	fmt.Fprintf(w, "  Apple Silicon (darwin/arm64): models with a known MLX variant use MLX automatically.\n")
+	fmt.Fprintf(w, "    current coverage: bonsai, qwen2.5, qwen3/3.5, gemma4, calm3\n")
+	fmt.Fprintf(w, "    python3 -m pip install -r ./python/requirements-llm.txt\n")
+	fmt.Fprintf(w, "  Other platforms: bonsai-8b falls back to the PrismML build; bonsai-4b / bonsai-1.7b are unavailable.\n")
+	fmt.Fprintf(w, "  If server-prism is beside the standard binary, the bonsai-8b switch is automatic;\n")
+	fmt.Fprintf(w, "  otherwise build it with: make prism\n")
+	fmt.Fprintf(w, "  Known MLX refs are also accepted directly (for example %s or mlx-community/Qwen3-0.6B-4bit).\n", bonsai8BMLXModelRef)
 	fmt.Fprintf(w, "  Models downloaded via Ollama are shared automatically.\n")
 	fmt.Fprintf(w, "  To use an existing file directly:\n")
 	if runtime.GOOS == "windows" {

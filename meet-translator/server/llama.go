@@ -1,8 +1,7 @@
-// llama.go – llama.cpp CGo ブリッジを使った翻訳
+// llama.go – llama.cpp CGo ブリッジを使った LLM バックエンド
 //
 // Ollama の代わりに llama.cpp を Go バイナリに直接組み込む。
-// モデルは起動時に一度だけロードし、server 構造体で保持する。
-// リクエスト毎に llama_model フィールドでモデルをホットスワップ可能。
+// MLX など他バックエンドと同じ llmBackend インターフェースで扱う。
 
 package main
 
@@ -30,9 +29,13 @@ func freeLlamaBackend() {
 	C.llama_bridge_backend_free()
 }
 
-// loadLlamaModel は GGUF モデルをロードしてハンドルを返す。
+type llamaCPPBackend struct {
+	model C.llama_bridge_model
+}
+
+// newLlamaCPPBackend は GGUF モデルをロードして llama.cpp バックエンドを返す。
 // nGPULayers: 0 = CPU only, -1 = 全レイヤを GPU にオフロード
-func loadLlamaModel(modelPath string, nGPULayers int) (C.llama_bridge_model, error) {
+func newLlamaCPPBackend(modelPath string, nGPULayers int) (llmBackend, error) {
 	cpath := C.CString(modelPath)
 	defer C.free(unsafe.Pointer(cpath))
 
@@ -40,23 +43,13 @@ func loadLlamaModel(modelPath string, nGPULayers int) (C.llama_bridge_model, err
 	if h == nil {
 		return nil, fmt.Errorf("failed to load llama model: %s", modelPath)
 	}
-	return h, nil
+	return &llamaCPPBackend{model: h}, nil
 }
 
-// translateInternal は llama.cpp でテキストを翻訳して返す。
-// opts にモデル固有のオプション (thinking 等) を指定する。
-// history に直前の発話ペアを渡すと few-shot context として翻訳精度が向上する。
-func (s *server) translateInternal(text, sourceLang, targetLang string, opts ModelOptions, history []contextEntry) (string, error) {
-	if s.llamaModel == nil {
+func (b *llamaCPPBackend) Generate(prompt string, maxTokens int, temperature float32) (string, error) {
+	if b == nil || b.model == nil {
 		return "", fmt.Errorf("llama model not initialized")
 	}
-
-	template := templateFor(s.loadedModelSpec)
-	// 用語マッピングをプロンプトに注入する
-	termsHint := s.glossary.TermsForPrompt()
-	prompt := buildTranslationPrompt(text, sourceLang, targetLang, template, opts, history, termsHint)
-	s.logVerbose("translate input: %q (model=%s, template=%s, thinking=%v, history=%d, terms=%q)",
-		text, s.loadedModelSpec, template, opts.Thinking, len(history), termsHint)
 
 	cPrompt := C.CString(prompt)
 	defer C.free(unsafe.Pointer(cPrompt))
@@ -70,18 +63,47 @@ func (s *server) translateInternal(text, sourceLang, targetLang string, opts Mod
 	defer C.free(unsafe.Pointer(errBuf))
 
 	ret := C.llama_bridge_generate(
-		s.llamaModel,
+		b.model,
 		cPrompt,
-		C.int(512),   // max_tokens
-		C.float(0.1), // temperature
+		C.int(maxTokens),
+		C.float(temperature),
 		outBuf, C.int(outSize),
 		errBuf, C.int(errSize),
 	)
 	if ret != 0 {
 		return "", fmt.Errorf("llama_bridge_generate failed (code=%d): %s", int(ret), C.GoString(errBuf))
 	}
+	return strings.TrimSpace(C.GoString(outBuf)), nil
+}
 
-	result := strings.TrimSpace(C.GoString(outBuf))
+func (b *llamaCPPBackend) Close() error {
+	if b == nil || b.model == nil {
+		return nil
+	}
+	C.llama_bridge_free_model(b.model)
+	b.model = nil
+	return nil
+}
+
+// translateInternal はアクティブな LLM バックエンドでテキストを翻訳して返す。
+// opts にモデル固有のオプション (thinking 等) を指定する。
+// history に直前の発話ペアを渡すと few-shot context として翻訳精度が向上する。
+func (s *server) translateInternal(text, sourceLang, targetLang string, opts ModelOptions, history []contextEntry) (string, error) {
+	if s.llmBackend == nil {
+		return "", fmt.Errorf("llama model not initialized")
+	}
+
+	template := templateFor(s.loadedModelSpec)
+	// 用語マッピングをプロンプトに注入する
+	termsHint := s.glossary.TermsForPrompt()
+	prompt := buildTranslationPrompt(text, sourceLang, targetLang, template, opts, history, termsHint)
+	s.logVerbose("translate input: %q (model=%s, template=%s, thinking=%v, history=%d, terms=%q)",
+		text, s.loadedModelSpec, template, opts.Thinking, len(history), termsHint)
+
+	result, err := s.llmBackend.Generate(prompt, 512, 0.1)
+	if err != nil {
+		return "", err
+	}
 	s.logVerbose("llama raw output: %q", result)
 	// <think>...</think> ブロックは opts.Thinking に関わらず常に除去する。
 	// /no-think を指定しても一部モデルが thinking を出力する場合があるため。
@@ -100,32 +122,9 @@ func (s *server) generateRaw(prompt string) (string, error) {
 	}
 	defer s.endLlamaOp()
 
-	if s.llamaModel == nil {
+	if s.llmBackend == nil {
 		return "", fmt.Errorf("llama model not initialized")
 	}
 	s.logVerbose("generateRaw: prompt len=%d", len(prompt))
-
-	cPrompt := C.CString(prompt)
-	defer C.free(unsafe.Pointer(cPrompt))
-
-	const outSize = 4096
-	outBuf := (*C.char)(C.malloc(outSize))
-	defer C.free(unsafe.Pointer(outBuf))
-
-	const errSize = 512
-	errBuf := (*C.char)(C.malloc(errSize))
-	defer C.free(unsafe.Pointer(errBuf))
-
-	ret := C.llama_bridge_generate(
-		s.llamaModel,
-		cPrompt,
-		C.int(1024),  // max_tokens (解析レスポンスは長くなる可能性があるため多め)
-		C.float(0.1), // temperature (低め = 決定論的 JSON)
-		outBuf, C.int(outSize),
-		errBuf, C.int(errSize),
-	)
-	if ret != 0 {
-		return "", fmt.Errorf("llama_bridge_generate failed: %s", C.GoString(errBuf))
-	}
-	return strings.TrimSpace(C.GoString(outBuf)), nil
+	return s.llmBackend.Generate(prompt, 1024, 0.1)
 }
