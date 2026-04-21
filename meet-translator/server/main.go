@@ -19,14 +19,6 @@
 
 package main
 
-/*
-#cgo CFLAGS:   -I./vendor/llama.cpp/include -I./vendor/whisper.cpp/include -I./vendor/llama.cpp/ggml/include
-#cgo CXXFLAGS: -I./vendor/llama.cpp/include -I./vendor/whisper.cpp/include -I./vendor/llama.cpp/ggml/include
-#include "llama_bridge.h"
-#include "whisper_bridge.h"
-*/
-import "C"
-
 import (
 	"context"
 	"encoding/json"
@@ -222,7 +214,7 @@ type server struct {
 
 	// llama モデル管理 (modelMu で保護)
 	modelMu         sync.Mutex
-	llamaModel      C.llama_bridge_model
+	llmBackend      llmBackend
 	loadedModelSpec string // 現在ロード中のモデル名またはパス
 	llamaOps        sync.WaitGroup
 	shuttingDown    atomic.Bool
@@ -244,13 +236,13 @@ type server struct {
 	rawGenerateFn func(prompt string) (string, error)
 }
 
-func newServer(cfg config, transcriber transcriber, llamaModel C.llama_bridge_model, whisperSpec, llamaSpec string, glossary *Glossary) *server {
+func newServer(cfg config, transcriber transcriber, llm llmBackend, whisperSpec, llamaSpec string, glossary *Glossary) *server {
 	s := &server{
 		cfg:              cfg,
 		mux:              http.NewServeMux(),
 		transcriber:      transcriber,
 		whisperModelSpec: whisperSpec,
-		llamaModel:       llamaModel,
+		llmBackend:       llm,
 		loadedModelSpec:  llamaSpec,
 		contextBuf:       newContextBuffer(3),
 		glossary:         glossary,
@@ -353,11 +345,13 @@ func (s *server) releaseLlamaModel() {
 	s.waitForLlamaIdle()
 
 	s.modelMu.Lock()
-	m := s.llamaModel
-	s.llamaModel = nil
+	backend := s.llmBackend
+	s.llmBackend = nil
 	s.modelMu.Unlock()
-	if m != nil {
-		C.llama_bridge_free_model(m)
+	if backend != nil {
+		if err := backend.Close(); err != nil {
+			log.Printf("[llm] shutdown warning: %v", err)
+		}
 	}
 }
 
@@ -623,20 +617,22 @@ func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 func (s *server) swapModel(spec string) error {
 	log.Printf("[model] swapping llama model: %s -> %s", s.loadedModelSpec, spec)
 
-	path, err := resolveLlamaModel(spec)
+	resolved, err := resolveLlamaModel(spec)
 	if err != nil {
 		return err
 	}
 
-	newModel, err := loadLlamaModel(path, s.cfg.llamaGPULayers)
+	newBackend, err := newLLMBackend(resolved, s.cfg.llamaGPULayers)
 	if err != nil {
 		return err
 	}
 
-	if s.llamaModel != nil {
-		C.llama_bridge_free_model(s.llamaModel)
+	if s.llmBackend != nil {
+		if err := s.llmBackend.Close(); err != nil {
+			log.Printf("[llm] swap warning: %v", err)
+		}
 	}
-	s.llamaModel = newModel
+	s.llmBackend = newBackend
 	s.loadedModelSpec = spec
 	log.Printf("[model] llama model swapped: %s", spec)
 	return nil
@@ -666,7 +662,7 @@ func main() {
 	// モデル名解決 (自動ダウンロード・Ollama キャッシュ共有)
 	originalWhisperSpec := cfg.whisperModel
 	originalModelSpec := cfg.llamaModel
-	resolvedWhisper := runPreflight(&cfg)
+	resolvedWhisper, resolvedLlama := runPreflight(&cfg)
 
 	// verbose フラグをパッケージレベル変数に反映（model_manager.go 等で使用）
 	verboseEnabled.Store(cfg.verbose)
@@ -689,21 +685,19 @@ func main() {
 	log.Printf("asr ready: %s (%s)", originalWhisperSpec, resolvedWhisper.Backend)
 
 	// llama モデルをロード
-	logV("loading llama model: %s (GPU layers=%d)", cfg.llamaModel, cfg.llamaGPULayers)
-	llamaModel, err := loadLlamaModel(cfg.llamaModel, cfg.llamaGPULayers)
+	logV("loading llama model: backend=%s spec=%s resolved=%s GPU layers=%d", resolvedLlama.Backend, originalModelSpec, cfg.llamaModel, cfg.llamaGPULayers)
+	llm, err := newLLMBackend(resolvedLlama, cfg.llamaGPULayers)
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
-	// モデル解放は srv 生成後に defer で行う（swapModel との double-free を防ぐため）。
-	// ※ defer C.llama_bridge_free_model(llamaModel) はここでは登録しない。
-	log.Printf("llama ready: %s", originalModelSpec)
+	log.Printf("llama ready: %s (%s)", originalModelSpec, resolvedLlama.Backend)
 
 	// 辞書ロード
 	glossary := loadGlossary()
 	log.Printf("[glossary] loaded: %d corrections, %d terms  (path: %s)",
 		len(glossary.GetData().Corrections), len(glossary.GetData().Terms), glossaryFilePath())
 
-	srv := newServer(cfg, asrTranscriber, llamaModel, originalWhisperSpec, originalModelSpec, glossary)
+	srv := newServer(cfg, asrTranscriber, llm, originalWhisperSpec, originalModelSpec, glossary)
 
 	// llamaModel の解放責任を server に委譲する。
 	// シャットダウン開始後は新規 llama 処理を止め、進行中の CGo 呼び出しが終わってから

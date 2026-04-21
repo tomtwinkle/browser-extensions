@@ -259,7 +259,9 @@ python3 -m pip install -r ./python/requirements-asr.txt
 | モデル名 | サイズ | ライセンス | 備考 |
 |---|---|---|---|
 | `qwen3.5:0.8b-q4_k_m` | ≈ 0.6 GB | Apache 2.0 | **default floor**、Thinking 対応 |
-| `bonsai-8b` | ≈ 1.15 GB | Apache 2.0 | **最初の step-up**、1-bit 8B (PrismML)、Thinking 対応 |
+| `bonsai-8b` | ≈ 1.15 GB / MLX repo | Apache 2.0 | **最初の step-up**、Thinking 対応、Apple Silicon は MLX、その他は PrismML |
+| `bonsai-4b` | MLX repo | Apache 2.0 | Apple Silicon 専用の MLX Bonsai、Thinking 対応 |
+| `bonsai-1.7b` | MLX repo | Apache 2.0 | Apple Silicon 専用の MLX Bonsai、Thinking 対応 |
 | `qwen3:8b-q4_k_m` | ≈ 5.2 GB | Apache 2.0 | 上位 tier、Thinking 対応 |
 | `calm3:22b-q4_k_m` | ≈ 13 GB | Apache 2.0 | 最上位 tier、日英特化、要 16 GB VRAM |
 | `gemma4:e4b-q4_k_m` | ≈ 2.6 GB | Apache 2.0 | 高速・軽量 (Google Gemma 4) |
@@ -274,9 +276,18 @@ python3 -m pip install -r ./python/requirements-asr.txt
 | `qwen2.5:7b-instruct-q4_k_m` | ≈ 4.7 GB | Apache 2.0 | 安定版 |
 | `qwen2.5:14b-instruct-q4_k_m` | ≈ 8.7 GB | Apache 2.0 | 高精度版 |
 
-> **Note**: `bonsai-8b` は Q1_0_g128 形式のため、[PrismML fork の llama.cpp](https://github.com/PrismML-Eng/llama.cpp) が必要です。
+> **Note**: Apple Silicon (`darwin/arm64`) では MLX 対応版が分かっているモデル
+> (`bonsai-*`, `qwen2.5:*`, `qwen3:*`, `qwen3.5:*`, `calm3:*`, `gemma4:*`)
+> がローカル MLX backend に自動切替されます。先に
+> `python3 -m pip install -r ./python/requirements-llm.txt`
+> を実行してください。
+> それ以外の環境では `bonsai-8b` は [PrismML fork の llama.cpp](https://github.com/PrismML-Eng/llama.cpp)
+> を使い、`bonsai-4b` / `bonsai-1.7b` は利用できません。
 > リリースアーカイブと `make` では必要な companion binary が自動で同梱されます。
 > 標準バイナリだけをビルドした場合は、`bonsai-8b` を使う前に `make prism` を実行してください。
+> 登録済みの MLX repo ID を直接指定することもでき、たとえば
+> `prism-ml/Ternary-Bonsai-8B-mlx-2bit` や `mlx-community/Qwen3-0.6B-4bit`
+> を受け付けます。
 
 ファイルパスを直接指定することも可能です:
 

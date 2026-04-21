@@ -49,7 +49,7 @@ type pythonWorkerTranscriber struct {
 }
 
 func newPythonWorkerTranscriber(backend ASRBackendKind, modelRef string) (transcriber, error) {
-	pythonBin, err := resolvePythonBinary()
+	pythonBin, err := resolvePythonBinary("ASR_PYTHON_BIN")
 	if err != nil {
 		return nil, err
 	}
@@ -185,8 +185,8 @@ func (w *pythonWorkerTranscriber) stderrSuffix() string {
 	return "\n  worker stderr: " + msg
 }
 
-func resolvePythonBinary() (string, error) {
-	if env := strings.TrimSpace(os.Getenv("ASR_PYTHON_BIN")); env != "" {
+func resolvePythonBinary(envVar string) (string, error) {
+	if env := strings.TrimSpace(os.Getenv(envVar)); env != "" {
 		return env, nil
 	}
 	if path, err := exec.LookPath("python3"); err == nil {

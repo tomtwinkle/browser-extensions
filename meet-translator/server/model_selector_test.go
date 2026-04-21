@@ -74,6 +74,8 @@ func TestLlamaRegistry_NeedsPrism_BonsaiRequiresPrism(t *testing.T) {
 // gemma4 や qwen など標準モデルが NeedsPrism=false であることを確認する。
 func TestLlamaRegistry_NeedsPrism_StandardModelsDoNotRequirePrism(t *testing.T) {
 	standardModels := []string{
+		"bonsai-1.7b",
+		"bonsai-4b",
 		"gemma4:e2b-q4_k_m",
 		"gemma4:e4b-q4_k_m",
 		"gemma4:26b-q4_k_m",
@@ -177,9 +179,28 @@ func TestRedirectIfNeeded_CorrectVariantNoRedirect(t *testing.T) {
 	}
 }
 
+func TestRedirectIfNeeded_MLXPreferredOnAppleSilicon_NoRedirect(t *testing.T) {
+	patchPlatform(t, "darwin", "arm64")
+
+	execCalled := false
+	patchExecBinary(t, func(path string, argv []string, env []string) error {
+		execCalled = true
+		return nil
+	})
+
+	redirectIfNeeded("bonsai-8b")
+	redirectIfNeeded(bonsai8BMLXModelRef)
+
+	if execCalled {
+		t.Error("exec should not be called when MLX is preferred on Apple Silicon")
+	}
+}
+
 // TestRedirectIfNeeded_WrongVariantNoBinaryPrintsHint は対応バイナリが存在しない場合に
 // exec せずヒントを stderr に出力することを確認する。
 func TestRedirectIfNeeded_WrongVariantNoBinaryPrintsHint(t *testing.T) {
+	patchPlatform(t, "linux", "amd64")
+
 	execCalled := false
 	patchExecBinary(t, func(path string, argv []string, env []string) error {
 		execCalled = true
@@ -225,6 +246,8 @@ func TestRedirectIfNeeded_WrongVariantNoBinaryPrintsHint(t *testing.T) {
 // TestRedirectIfNeeded_WrongVariantBinaryFoundExecsToTarget は対応バイナリが存在する場合に
 // exec が正しいパスで呼ばれることを確認する。
 func TestRedirectIfNeeded_WrongVariantBinaryFoundExecsToTarget(t *testing.T) {
+	patchPlatform(t, "linux", "amd64")
+
 	// 現在のビルドと逆の NeedsPrism を持つモデルを探す
 	var mismatchedModel string
 	var needsPrism bool
@@ -239,13 +262,7 @@ func TestRedirectIfNeeded_WrongVariantBinaryFoundExecsToTarget(t *testing.T) {
 		t.Skip("no model mismatching current build variant found in registry")
 	}
 
-	// 期待されるターゲットバイナリ名
-	var expectedBin string
-	if needsPrism {
-		expectedBin = "server-prism"
-	} else {
-		expectedBin = "server"
-	}
+	expectedBin := targetBinaryName(needsPrism)
 
 	// テスト用ダミーバイナリを実行ファイルと同じディレクトリに作成
 	exeDir := filepath.Dir(findExePath(t))
@@ -312,12 +329,7 @@ func TestTargetBinaryName(t *testing.T) {
 		{false, "server"},
 	}
 	for _, tt := range tests {
-		var got string
-		if tt.needsPrism {
-			got = "server-prism"
-		} else {
-			got = "server"
-		}
+		got := targetBinaryName(tt.needsPrism)
 		if got != tt.wantBin {
 			t.Errorf("needsPrism=%v → binary %q, want %q", tt.needsPrism, got, tt.wantBin)
 		}

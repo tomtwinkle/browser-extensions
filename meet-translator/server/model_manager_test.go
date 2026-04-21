@@ -66,6 +66,15 @@ func patchLlamaRegistry(t *testing.T, m map[string]LlamaEntry) {
 	t.Cleanup(func() { llamaRegistry = orig })
 }
 
+func patchPlatform(t *testing.T, goos, goarch string) {
+	t.Helper()
+	origGOOS, origGOARCH := currentGOOS, currentGOARCH
+	currentGOOS, currentGOARCH = goos, goarch
+	t.Cleanup(func() {
+		currentGOOS, currentGOARCH = origGOOS, origGOARCH
+	})
+}
+
 // ─── resolveWhisperModel ─────────────────────────────────────────────────────
 
 func TestResolveWhisperModel_ExistingFile(t *testing.T) {
@@ -229,8 +238,11 @@ func TestResolveLlamaModel_ExistingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != f.Name() {
-		t.Errorf("got %q, want %q", got, f.Name())
+	if got.Backend != llmBackendLlamaCPP {
+		t.Fatalf("backend = %q, want %q", got.Backend, llmBackendLlamaCPP)
+	}
+	if got.ResolvedSpec != f.Name() {
+		t.Errorf("got %q, want %q", got.ResolvedSpec, f.Name())
 	}
 }
 
@@ -248,8 +260,11 @@ func TestResolveLlamaModel_CacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != cachedPath {
-		t.Errorf("got %q, want %q", got, cachedPath)
+	if got.Backend != llmBackendLlamaCPP {
+		t.Fatalf("backend = %q, want %q", got.Backend, llmBackendLlamaCPP)
+	}
+	if got.ResolvedSpec != cachedPath {
+		t.Errorf("got %q, want %q", got.ResolvedSpec, cachedPath)
 	}
 }
 
@@ -272,8 +287,11 @@ func TestResolveLlamaModel_OllamaCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != blobPath {
-		t.Errorf("got %q, want %q", got, blobPath)
+	if got.Backend != llmBackendLlamaCPP {
+		t.Fatalf("backend = %q, want %q", got.Backend, llmBackendLlamaCPP)
+	}
+	if got.ResolvedSpec != blobPath {
+		t.Errorf("got %q, want %q", got.ResolvedSpec, blobPath)
 	}
 }
 
@@ -294,11 +312,14 @@ func TestResolveLlamaModel_Download(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, err := os.Stat(got); err != nil {
+	if got.Backend != llmBackendLlamaCPP {
+		t.Fatalf("backend = %q, want %q", got.Backend, llmBackendLlamaCPP)
+	}
+	if _, err := os.Stat(got.ResolvedSpec); err != nil {
 		t.Errorf("downloaded file not found: %v", err)
 	}
-	if !strings.HasSuffix(got, "test-dl-q4_k_m.gguf") {
-		t.Errorf("unexpected filename: %q", got)
+	if !strings.HasSuffix(got.ResolvedSpec, "test-dl-q4_k_m.gguf") {
+		t.Errorf("unexpected filename: %q", got.ResolvedSpec)
 	}
 }
 
@@ -317,6 +338,83 @@ func TestResolveLlamaModel_EmptySpec(t *testing.T) {
 	_, err := resolveLlamaModel("")
 	if err == nil {
 		t.Fatal("expected error for empty spec")
+	}
+}
+
+func TestResolveLlamaModel_MLXPreferredOnAppleSilicon(t *testing.T) {
+	patchPlatform(t, "darwin", "arm64")
+
+	got, err := resolveLlamaModel("bonsai-8b")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != llmBackendMLX {
+		t.Fatalf("backend = %q, want %q", got.Backend, llmBackendMLX)
+	}
+	if got.ResolvedSpec != bonsai8BMLXModelRef {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, bonsai8BMLXModelRef)
+	}
+}
+
+func TestResolveLlamaModel_QwenMLXPreferredOnAppleSilicon(t *testing.T) {
+	patchPlatform(t, "darwin", "arm64")
+
+	got, err := resolveLlamaModel("qwen3:0.6b-q4_k_m")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != llmBackendMLX {
+		t.Fatalf("backend = %q, want %q", got.Backend, llmBackendMLX)
+	}
+	if got.ResolvedSpec != "mlx-community/Qwen3-0.6B-4bit" {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, "mlx-community/Qwen3-0.6B-4bit")
+	}
+}
+
+func TestResolveLlamaModel_MLXAliasFallsBackOnNonApple(t *testing.T) {
+	patchPlatform(t, "linux", "amd64")
+	cacheDir := setTestModelCacheDir(t)
+	cachedPath := setupLlamaCache(t, cacheDir, "Bonsai-8B.gguf")
+
+	got, err := resolveLlamaModel(bonsai8BMLXModelRef)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != llmBackendLlamaCPP {
+		t.Fatalf("backend = %q, want %q", got.Backend, llmBackendLlamaCPP)
+	}
+	if got.ResolvedSpec != cachedPath {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, cachedPath)
+	}
+}
+
+func TestResolveLlamaModel_QwenMLXAliasFallsBackOnNonApple(t *testing.T) {
+	patchPlatform(t, "linux", "amd64")
+	cacheDir := setTestModelCacheDir(t)
+	cachedPath := setupLlamaCache(t, cacheDir, "Qwen3-0.6B-Q4_K_M.gguf")
+
+	got, err := resolveLlamaModel("mlx-community/Qwen3-0.6B-4bit")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != llmBackendLlamaCPP {
+		t.Fatalf("backend = %q, want %q", got.Backend, llmBackendLlamaCPP)
+	}
+	if got.ResolvedSpec != cachedPath {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, cachedPath)
+	}
+}
+
+func TestResolveLlamaModel_MLXOnlyRequiresAppleSilicon(t *testing.T) {
+	patchPlatform(t, "linux", "amd64")
+	setTestModelCacheDir(t)
+
+	_, err := resolveLlamaModel("bonsai-4b")
+	if err == nil {
+		t.Fatal("expected error for MLX-only model on non-Apple platform")
+	}
+	if !strings.Contains(err.Error(), "Apple Silicon MLX") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
