@@ -111,7 +111,7 @@ jobs:
   # Python-backed ASR ケースのみ実行時依存を追加セットアップする。
   # build ジョブのアーティファクト (バイナリのみ) をダウンロードして実行する。
   execute:
-    name: Execute Test (${{ matrix.name }} / ${{ matrix.whisper_model }} / ${{ matrix.llama_model }})
+    name: Execute Test (${{ matrix.name }} / ${{ matrix.whisper_model }} / ${{ matrix.llama_model }}${{ matrix.scenario && format(' / {0}', matrix.scenario) || '' }})
     needs: build
     runs-on: ${{ matrix.os }}
     strategy:
@@ -155,6 +155,17 @@ jobs:
             bin: server
             whisper_model: tiny
             llama_model: bonsai-8b
+          # ── 新規: MLX runtime missing path should fail cleanly (Apple Silicon only) ─
+          # whisper の Metal 初期化後に MLX worker が起動失敗しても、
+          # GGML_ASSERT / SIGABRT に落ちず明示エラーで終了することを検証する。
+          - os: macos-latest
+            name: macos-arm64
+            bin: server
+            whisper_model: tiny
+            llama_model: bonsai-8b
+            scenario: mlx-runtime-missing
+            expect_startup_failure: true
+            expected_startup_error: "MLX worker failed to initialize: No module named 'mlx_lm'"
           - os: windows-latest
             name: windows-amd64
             bin: server.exe
@@ -272,14 +283,14 @@ jobs:
           esac
 
       - name: Install MLX runtime dependencies
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-latest' && matrix.expect_startup_failure != true
         run: |
           python -m pip install --upgrade pip
           python -m pip install mlx-lm
           echo "LLM_PYTHON_BIN=$(command -v python)" >> $GITHUB_ENV
 
       - name: Warm MLX model cache
-        if: matrix.os == 'macos-latest'
+        if: matrix.os == 'macos-latest' && matrix.expect_startup_failure != true
         timeout-minutes: 20
         run: |
           python - <<'PY'
@@ -413,15 +424,24 @@ jobs:
       # モデルは事前ダウンロード済みのためキャッシュを使用。
       - name: Start server
         run: |
-          ./server/${{ matrix.bin }} \
-            --llama-gpu-layers 0 \
-            --whisper-gpu-layers 0 \
-            > server.log 2>&1 &
+          (
+            set +e
+            if [ "${{ matrix.expect_startup_failure }}" = "true" ]; then
+              ./server/${{ matrix.bin }} \
+                --llama-gpu-layers 0
+            else
+              ./server/${{ matrix.bin }} \
+                --llama-gpu-layers 0 \
+                --whisper-gpu-layers 0
+            fi
+            echo $? > server.exit
+          ) > server.log 2>&1 &
           echo $! > server.pid
           echo "Server started (PID: $(cat server.pid))"
 
       # ── サーバー起動を待機 (最大 5 分) ───────────────────────────────────
       - name: Wait for server ready
+        if: matrix.expect_startup_failure != true
         run: |
           attempts=60
           if [ "${{ runner.os }}" = "macOS" ]; then
@@ -442,8 +462,50 @@ jobs:
           echo "ERROR: server failed to start within $((attempts * 5 / 60)) minutes"
           exit 1
 
+      - name: Verify expected startup failure
+        if: matrix.expect_startup_failure == true
+        run: |
+          attempts=120
+          echo "Waiting for expected startup failure (up to $((attempts * 5 / 60)) minutes)..."
+          for i in $(seq 1 "$attempts"); do
+            if [ -f server.exit ]; then
+              break
+            fi
+            if curl -sf http://localhost:7070/health > /dev/null 2>&1; then
+              echo "ERROR: server became healthy but startup failure was expected"
+              exit 1
+            fi
+            echo "  attempt ${i}/${attempts}..."
+            sleep 5
+          done
+
+          if [ ! -f server.exit ]; then
+            echo "ERROR: server did not exit within $((attempts * 5 / 60)) minutes"
+            exit 1
+          fi
+
+          status="$(cat server.exit)"
+          echo "Server exit status: $status"
+          if [ "$status" = "0" ]; then
+            echo "ERROR: server exited successfully but failure was expected"
+            exit 1
+          fi
+
+          if ! grep -F "${{ matrix.expected_startup_error }}" server.log > /dev/null; then
+            echo "ERROR: expected startup error not found in server.log"
+            exit 1
+          fi
+
+          if grep -E 'GGML_ASSERT|SIGABRT' server.log > /dev/null; then
+            echo "ERROR: startup failure regressed to an abort"
+            exit 1
+          fi
+
+          echo "PASS: startup failed cleanly with the expected MLX dependency error"
+
       # ── GET /health ───────────────────────────────────────────────────────
       - name: Test GET /health
+        if: matrix.expect_startup_failure != true
         run: |
           curl -sf http://localhost:7070/health -o health.json
           cat health.json
@@ -459,6 +521,7 @@ jobs:
       # ── POST /transcribe-and-translate ────────────────────────────────────
       # 無音 WAV を送信 → transcription/translation フィールドを持つ JSON が返ること
       - name: Test POST /transcribe-and-translate
+        if: matrix.expect_startup_failure != true
         run: |
           curl -sf -X POST http://localhost:7070/transcribe-and-translate \
             -F "audio=@test_silence.wav" \
@@ -486,7 +549,10 @@ jobs:
       # ── クリーンアップ ────────────────────────────────────────────────────
       - name: Stop server
         if: always()
-        run: kill "$(cat server.pid)" 2>/dev/null || true
+        run: |
+          if [ -f server.pid ]; then
+            kill "$(cat server.pid)" 2>/dev/null || true
+          fi
 
       - name: Show server log
         if: always()

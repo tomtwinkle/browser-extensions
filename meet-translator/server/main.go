@@ -638,11 +638,47 @@ func (s *server) swapModel(spec string) error {
 	return nil
 }
 
+func initializeRuntimeBackends(
+	resolvedWhisper ResolvedWhisperModel,
+	resolvedLlama ResolvedLlamaModel,
+	llamaGPULayers int,
+	initLlama func(),
+	freeLlama func(),
+	newASR func(ResolvedWhisperModel) (transcriber, error),
+	newLLM func(ResolvedLlamaModel, int) (llmBackend, error),
+) (transcriber, llmBackend, error) {
+	initLlama()
+
+	asrTranscriber, err := newASR(resolvedWhisper)
+	if err != nil {
+		freeLlama()
+		return nil, nil, err
+	}
+
+	llm, err := newLLM(resolvedLlama, llamaGPULayers)
+	if err != nil {
+		if closeErr := asrTranscriber.Close(); closeErr != nil {
+			log.Printf("[asr] startup cleanup warning: %v", closeErr)
+		}
+		freeLlama()
+		return nil, nil, err
+	}
+
+	return asrTranscriber, llm, nil
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
 func main() {
+	if err := run(); err != nil {
+		log.Print(err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg := loadConfig()
 
 	// 初回起動時 (config ファイルが存在しない) かつモデル未指定の場合、
@@ -656,7 +692,7 @@ func main() {
 	// パラメーター未指定時はヘルプを表示して終了
 	if cfg.whisperModel == "" && cfg.llamaModel == "" {
 		printFullHelp()
-		os.Exit(0)
+		return nil
 	}
 
 	// モデル名解決 (自動ダウンロード・Ollama キャッシュ共有)
@@ -667,29 +703,27 @@ func main() {
 	// verbose フラグをパッケージレベル変数に反映（model_manager.go 等で使用）
 	verboseEnabled.Store(cfg.verbose)
 
-	// llama バックエンド初期化
-	initLlamaBackend()
-	defer freeLlamaBackend()
-
-	// 音声認識バックエンドをロード
 	logV("loading ASR backend: backend=%s spec=%s", resolvedWhisper.Backend, cfg.whisperModel)
-	asrTranscriber, err := newTranscriber(resolvedWhisper)
+	logV("loading llama model: backend=%s spec=%s resolved=%s GPU layers=%d", resolvedLlama.Backend, originalModelSpec, cfg.llamaModel, cfg.llamaGPULayers)
+	asrTranscriber, llm, err := initializeRuntimeBackends(
+		resolvedWhisper,
+		resolvedLlama,
+		cfg.llamaGPULayers,
+		initLlamaBackend,
+		freeLlamaBackend,
+		newTranscriber,
+		newLLMBackend,
+	)
 	if err != nil {
-		log.Fatalf("%v", err)
+		return err
 	}
+	defer freeLlamaBackend()
 	defer func() {
 		if err := asrTranscriber.Close(); err != nil {
 			log.Printf("[asr] shutdown warning: %v", err)
 		}
 	}()
 	log.Printf("asr ready: %s (%s)", originalWhisperSpec, resolvedWhisper.Backend)
-
-	// llama モデルをロード
-	logV("loading llama model: backend=%s spec=%s resolved=%s GPU layers=%d", resolvedLlama.Backend, originalModelSpec, cfg.llamaModel, cfg.llamaGPULayers)
-	llm, err := newLLMBackend(resolvedLlama, cfg.llamaGPULayers)
-	if err != nil {
-		log.Fatalf("%v", err)
-	}
 	log.Printf("llama ready: %s (%s)", originalModelSpec, resolvedLlama.Backend)
 
 	// 辞書ロード
@@ -720,6 +754,7 @@ func main() {
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(quit)
 
 	// done はシャットダウンシーケンス（HTTP drain → improver 完了）が
 	// 終わったことを main goroutine に伝えるチャネル。
@@ -751,9 +786,12 @@ func main() {
 		log.Printf("[verbose] verbose logging enabled")
 	}
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+		srvCancel()
+		srv.improver.Wait()
+		return err
 	}
 	// シャットダウンシーケンスが完全に終わるまで待ってから defer を実行する。
 	// これにより improver の CGo 呼び出し完了前にモデルが解放される race を防ぐ。
 	<-done
+	return nil
 }
