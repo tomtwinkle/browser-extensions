@@ -51,18 +51,27 @@ func newPythonMLXBackend(modelRef string) (llmBackend, error) {
 		return nil, fmt.Errorf("MLX backend requires Apple Silicon (darwin/arm64)")
 	}
 
-	pythonBin, err := resolvePythonBinary("LLM_PYTHON_BIN")
-	if err != nil {
-		return nil, err
-	}
-
 	tempDir, scriptPath, requirementsPath, err := materializePythonLLMFiles()
 	if err != nil {
 		return nil, err
 	}
+	launchSpec, err := resolvePythonLaunchSpec("LLM_PYTHON_BIN", requirementsPath)
+	if err != nil {
+		_ = os.RemoveAll(tempDir)
+		return nil, err
+	}
 
-	cmd := exec.Command(
-		pythonBin,
+	return startPythonMLXBackend(launchSpec, modelRef, tempDir, scriptPath, requirementsPath)
+}
+
+func startPythonMLXBackend(
+	launchSpec pythonLaunchSpec,
+	modelRef string,
+	tempDir string,
+	scriptPath string,
+	requirementsPath string,
+) (llmBackend, error) {
+	cmd := launchSpec.command(
 		scriptPath,
 		"--model", modelRef,
 		"--requirements-path", requirementsPath,
@@ -96,10 +105,23 @@ func newPythonMLXBackend(modelRef string) (llmBackend, error) {
 
 	var ready llmWorkerResponse
 	if err := worker.dec.Decode(&ready); err != nil {
+		stderrText := worker.stderr.String()
 		_ = worker.Close()
+		if uvSpec, ok, retryErr := retryWithUV(launchSpec, requirementsPath, stderrText); retryErr != nil {
+			return nil, retryErr
+		} else if ok {
+			return startPythonMLXBackend(uvSpec, modelRef, tempDir, scriptPath, requirementsPath)
+		}
 		return nil, fmt.Errorf("failed to initialize MLX worker: %w%s", err, worker.stderrSuffix())
 	}
 	if ready.Status != "ready" {
+		if uvSpec, ok, retryErr := retryWithUV(launchSpec, requirementsPath, ready.Error+"\n"+worker.stderr.String()); retryErr != nil {
+			_ = worker.Close()
+			return nil, retryErr
+		} else if ok {
+			_ = worker.Close()
+			return startPythonMLXBackend(uvSpec, modelRef, tempDir, scriptPath, requirementsPath)
+		}
 		_ = worker.Close()
 		return nil, fmt.Errorf("MLX worker failed to initialize: %s%s", ready.Error, llmInstallHint(ready.RequirementsPath))
 	}
@@ -143,7 +165,9 @@ func (w *pythonMLXBackend) Close() error {
 		}
 		if w.cmd != nil {
 			if err := w.cmd.Wait(); err != nil {
-				closeErr = fmt.Errorf("MLX worker exited with error: %w%s", err, w.stderrSuffix())
+				if !isExpectedPythonWorkerShutdownError(err, w.stderr.String()) {
+					closeErr = fmt.Errorf("MLX worker exited with error: %w%s", err, w.stderrSuffix())
+				}
 			}
 		}
 		if w.tempDir != "" {
@@ -185,5 +209,5 @@ func materializePythonLLMFiles() (tempDir, scriptPath, requirementsPath string, 
 }
 
 func llmInstallHint(_ string) string {
-	return "\n  install MLX dependencies with: python3 -m pip install -r ./python/requirements-llm.txt"
+	return "\n  install uv to auto-provision MLX dependencies on demand, or install them manually with: python3 -m pip install -r ./python/requirements-llm.txt"
 }

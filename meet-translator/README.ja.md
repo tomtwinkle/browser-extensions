@@ -245,7 +245,7 @@ curl http://localhost:7070/health
 
 `sensevoice:<model-ref>` と `whisperx:<model-name>` の高度な指定にも対応します。
 
-SenseVoice / WhisperX を使う場合は、先にローカル Python 依存を入れ、`ffmpeg` を `PATH` から参照できるようにしてください。
+SenseVoice / WhisperX はローカル Python worker を使います。`uv` が入っていれば isolated 環境を自動で用意できます。そうでない場合は、先にローカル Python 依存を入れ、`ffmpeg` を `PATH` から参照できるようにしてください。
 
 ```bash
 cd server
@@ -278,7 +278,8 @@ python3 -m pip install -r ./python/requirements-asr.txt
 
 > **Note**: Apple Silicon (`darwin/arm64`) では MLX 対応版が分かっているモデル
 > (`bonsai-*`, `qwen2.5:*`, `qwen3:*`, `qwen3.5:*`, `calm3:*`, `gemma4:*`)
-> がローカル MLX backend に自動切替されます。先に
+> がローカル MLX backend に自動切替されます。`uv` が入っていれば MLX 依存も
+> 自動で用意できます。そうでない場合は、先に
 > `python3 -m pip install -r ./python/requirements-llm.txt`
 > を実行してください。
 > それ以外の環境では `bonsai-8b` は [PrismML fork の llama.cpp](https://github.com/PrismML-Eng/llama.cpp)

@@ -649,6 +649,27 @@ func initializeRuntimeBackends(
 ) (transcriber, llmBackend, error) {
 	initLlama()
 
+	// Start MLX-backed LLMs before whisper.cpp so Whisper's Metal path never
+	// initializes ahead of the Python MLX worker.
+	if resolvedWhisper.Backend == asrBackendWhisperCPP && resolvedLlama.Backend == llmBackendMLX {
+		llm, err := newLLM(resolvedLlama, llamaGPULayers)
+		if err != nil {
+			freeLlama()
+			return nil, nil, err
+		}
+
+		asrTranscriber, err := newASR(resolvedWhisper)
+		if err != nil {
+			if closeErr := llm.Close(); closeErr != nil {
+				log.Printf("[llm] startup cleanup warning: %v", closeErr)
+			}
+			freeLlama()
+			return nil, nil, err
+		}
+
+		return asrTranscriber, llm, nil
+	}
+
 	asrTranscriber, err := newASR(resolvedWhisper)
 	if err != nil {
 		freeLlama()

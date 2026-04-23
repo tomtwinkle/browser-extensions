@@ -49,13 +49,13 @@ type pythonWorkerTranscriber struct {
 }
 
 func newPythonWorkerTranscriber(backend ASRBackendKind, modelRef string) (transcriber, error) {
-	pythonBin, err := resolvePythonBinary("ASR_PYTHON_BIN")
+	tempDir, scriptPath, requirementsPath, err := materializePythonASRFiles()
 	if err != nil {
 		return nil, err
 	}
-
-	tempDir, scriptPath, requirementsPath, err := materializePythonASRFiles()
+	launchSpec, err := resolvePythonLaunchSpec("ASR_PYTHON_BIN", requirementsPath)
 	if err != nil {
+		_ = os.RemoveAll(tempDir)
 		return nil, err
 	}
 
@@ -64,8 +64,27 @@ func newPythonWorkerTranscriber(backend ASRBackendKind, modelRef string) (transc
 		device = "cpu"
 	}
 
-	cmd := exec.Command(
-		pythonBin,
+	return startPythonWorkerTranscriber(
+		launchSpec,
+		backend,
+		modelRef,
+		device,
+		tempDir,
+		scriptPath,
+		requirementsPath,
+	)
+}
+
+func startPythonWorkerTranscriber(
+	launchSpec pythonLaunchSpec,
+	backend ASRBackendKind,
+	modelRef string,
+	device string,
+	tempDir string,
+	scriptPath string,
+	requirementsPath string,
+) (transcriber, error) {
+	cmd := launchSpec.command(
 		scriptPath,
 		"--backend", string(backend),
 		"--model", modelRef,
@@ -102,10 +121,23 @@ func newPythonWorkerTranscriber(backend ASRBackendKind, modelRef string) (transc
 
 	var ready pythonWorkerResponse
 	if err := worker.dec.Decode(&ready); err != nil {
+		stderrText := worker.stderr.String()
 		_ = worker.Close()
+		if uvSpec, ok, retryErr := retryWithUV(launchSpec, requirementsPath, stderrText); retryErr != nil {
+			return nil, retryErr
+		} else if ok {
+			return startPythonWorkerTranscriber(uvSpec, backend, modelRef, device, tempDir, scriptPath, requirementsPath)
+		}
 		return nil, fmt.Errorf("failed to initialize %s worker: %w%s", backend, err, worker.stderrSuffix())
 	}
 	if ready.Status != "ready" {
+		if uvSpec, ok, retryErr := retryWithUV(launchSpec, requirementsPath, ready.Error+"\n"+worker.stderr.String()); retryErr != nil {
+			_ = worker.Close()
+			return nil, retryErr
+		} else if ok {
+			_ = worker.Close()
+			return startPythonWorkerTranscriber(uvSpec, backend, modelRef, device, tempDir, scriptPath, requirementsPath)
+		}
 		_ = worker.Close()
 		return nil, fmt.Errorf("%s worker failed to initialize: %s%s", backend, ready.Error, pythonInstallHint(ready.RequirementsPath))
 	}
@@ -164,7 +196,9 @@ func (w *pythonWorkerTranscriber) Close() error {
 		}
 		if w.cmd != nil {
 			if err := w.cmd.Wait(); err != nil {
-				closeErr = fmt.Errorf("%s worker exited with error: %w%s", w.backend, err, w.stderrSuffix())
+				if !isExpectedPythonWorkerShutdownError(err, w.stderr.String()) {
+					closeErr = fmt.Errorf("%s worker exited with error: %w%s", w.backend, err, w.stderrSuffix())
+				}
 			}
 		}
 		if w.tempDir != "" {
@@ -183,19 +217,6 @@ func (w *pythonWorkerTranscriber) stderrSuffix() string {
 		return ""
 	}
 	return "\n  worker stderr: " + msg
-}
-
-func resolvePythonBinary(envVar string) (string, error) {
-	if env := strings.TrimSpace(os.Getenv(envVar)); env != "" {
-		return env, nil
-	}
-	if path, err := exec.LookPath("python3"); err == nil {
-		return path, nil
-	}
-	if path, err := exec.LookPath("python"); err == nil {
-		return path, nil
-	}
-	return "", fmt.Errorf("python backend selected but neither python3 nor python was found in PATH")
 }
 
 func materializePythonASRFiles() (tempDir, scriptPath, requirementsPath string, err error) {
@@ -219,5 +240,5 @@ func materializePythonASRFiles() (tempDir, scriptPath, requirementsPath string, 
 }
 
 func pythonInstallHint(_ string) string {
-	return "\n  install dependencies with: python3 -m pip install -r ./python/requirements-asr.txt\n  ensure ffmpeg is installed and available on PATH"
+	return "\n  install uv to auto-provision Python dependencies on demand, or install them manually with: python3 -m pip install -r ./python/requirements-asr.txt\n  ensure ffmpeg is installed and available on PATH"
 }
