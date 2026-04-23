@@ -155,15 +155,27 @@ jobs:
             bin: server
             whisper_model: tiny
             llama_model: bonsai-8b
+          # ── 新規: MLX + whisper Metal success path (Apple Silicon only) ────────
+          # MLX runtime が揃っている通常ケースで、MLX LLM と whisper Metal が
+          # 両方とも有効なまま正常起動・疎通できることを検証する。
+          - os: macos-latest
+            name: macos-arm64
+            bin: server
+            whisper_model: tiny
+            llama_model: bonsai-8b
+            scenario: mlx-metal-success
+            enable_whisper_gpu: true
           # ── 新規: MLX runtime missing path should fail cleanly (Apple Silicon only) ─
-          # whisper の Metal 初期化後に MLX worker が起動失敗しても、
-          # GGML_ASSERT / SIGABRT に落ちず明示エラーで終了することを検証する。
+          # Apple Silicon では MLX worker を whisper.cpp より先に起動するため、
+          # mlx-lm がなくても GGML_ASSERT / SIGABRT に落ちず明示エラーで終了することを検証する。
           - os: macos-latest
             name: macos-arm64
             bin: server
             whisper_model: tiny
             llama_model: bonsai-8b
             scenario: mlx-runtime-missing
+            enable_whisper_gpu: true
+            python_launcher: python
             expect_startup_failure: true
             expected_startup_error: "MLX worker failed to initialize: No module named 'mlx_lm'"
           - os: windows-latest
@@ -357,6 +369,10 @@ jobs:
           console.log(`Generated test_silence.wav: ${fs.statSync('test_silence.wav').size} bytes`);
           JSEOF
 
+      - name: Configure Python launcher
+        if: matrix.python_launcher != ''
+        run: echo "MEET_TRANSLATOR_PYTHON_LAUNCHER=${{ matrix.python_launcher }}" >> $GITHUB_ENV
+
       # ── llama モデルの事前ダウンロード ───────────────────────────────────
       # 大きなモデル (例: bonsai-8b / gemma4:e2b-q4_k_m) はダウンロードに時間がかかるため、
       # サーバー起動前に明示的にダウンロードする。
@@ -426,7 +442,7 @@ jobs:
         run: |
           (
             set +e
-            if [ "${{ matrix.expect_startup_failure }}" = "true" ]; then
+            if [ "${{ matrix.enable_whisper_gpu == true }}" = "true" ]; then
               ./server/${{ matrix.bin }} \
                 --llama-gpu-layers 0
             else
@@ -460,6 +476,23 @@ jobs:
             sleep 5
           done
           echo "ERROR: server failed to start within $((attempts * 5 / 60)) minutes"
+          exit 1
+
+      - name: Verify MLX + Metal startup success
+        if: matrix.scenario == 'mlx-metal-success'
+        run: |
+          attempts=30
+          for i in $(seq 1 "$attempts"); do
+            if grep -F 'llama ready: bonsai-8b (mlx)' server.log > /dev/null && \
+               grep -F 'asr ready: tiny (whisper.cpp)' server.log > /dev/null && \
+               grep -E 'whisper_init_with_params_no_state: use gpu[[:space:]]+=[[:space:]]+1' server.log > /dev/null; then
+              echo "PASS: MLX LLM and whisper Metal both initialized successfully"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ERROR: expected MLX + whisper Metal startup markers not found"
+          cat server.log
           exit 1
 
       - name: Verify expected startup failure

@@ -242,7 +242,7 @@ Specify a model name with `--whisper-model` and it will be downloaded automatica
 
 Advanced forms are also supported: `sensevoice:<model-ref>` and `whisperx:<model-name>`.
 
-For SenseVoice / WhisperX, install the local Python dependencies first and make sure `ffmpeg` is available on your `PATH`:
+SenseVoice / WhisperX use the local Python worker. If `uv` is installed, the worker can provision an isolated environment automatically. Otherwise, install the local Python dependencies first and make sure `ffmpeg` is available on your `PATH`:
 
 ```bash
 cd server
@@ -275,7 +275,8 @@ Specify a model name with `--llama-model` and it will be downloaded automaticall
 
 > **Note**: On Apple Silicon (`darwin/arm64`), models with a known MLX counterpart
 > (`bonsai-*`, `qwen2.5:*`, `qwen3:*`, `qwen3.5:*`, `calm3:*`, `gemma4:*`)
-> automatically switch to the local MLX backend. Install it first with
+> automatically switch to the local MLX backend. If `uv` is installed, the worker can
+> provision MLX dependencies automatically. Otherwise install them first with
 > `python3 -m pip install -r ./python/requirements-llm.txt`.
 > On other platforms, `bonsai-8b` still uses the
 > [PrismML fork of llama.cpp](https://github.com/PrismML-Eng/llama.cpp),
