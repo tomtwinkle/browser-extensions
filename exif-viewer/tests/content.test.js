@@ -16,15 +16,20 @@ function createElement(tagName = 'div', rect = null) {
     style: {},
     attributes: {},
     children: [],
+    listeners: {},
     parentElement: null,
     firstChild: null,
     hidden: false,
     textContent: '',
+    value: '',
     offsetWidth: 72,
     offsetHeight: 32,
     naturalWidth: 0,
     naturalHeight: 0,
-    addEventListener() {},
+    addEventListener(type, listener) {
+      if (!this.listeners[type]) this.listeners[type] = [];
+      this.listeners[type].push(listener);
+    },
     appendChild(child) {
       child.parentElement = this;
       this.children.push(child);
@@ -60,6 +65,15 @@ function createElement(tagName = 'div', rect = null) {
     },
     getBoundingClientRect() {
       return rect || { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+    },
+    click() {
+      for (const listener of this.listeners.click || []) {
+        listener({
+          target: this,
+          preventDefault() {},
+          stopPropagation() {},
+        });
+      }
     },
   };
 }
@@ -248,4 +262,102 @@ test('renderMetadata adds a Google Maps link when GPS coordinates are available'
     'https://www.google.com/maps/@35.6534804,139.7197987,17.0z'
   );
   assert.equal(link.textContent, 'Open in Google Maps');
+});
+
+test('renderMetadata shows summary rows, tooltip labels, and expands XMP decode views', () => {
+  const api = loadContentScript();
+  const image = createElement('img', {
+    left: 10,
+    top: 10,
+    right: 210,
+    bottom: 110,
+    width: 200,
+    height: 100,
+  });
+  image.currentSrc = 'https://example.com/detailed.jpg';
+  image.naturalWidth = 8192;
+  image.naturalHeight = 5464;
+
+  api.renderMetadata(image, {
+    sourceUrl: image.currentSrc,
+    mimeType: 'image/jpeg',
+    byteLength: 2048,
+    container: 'jpeg',
+    hasExif: true,
+    sections: [
+      {
+        label: 'Image',
+        entries: [
+          {
+            name: 'Model',
+            title: 'Camera model',
+            description: 'Camera body model recorded when the image was captured.',
+            displayValue: 'EOS R5',
+          },
+        ],
+      },
+    ],
+    summary: {
+      camera: { display: 'Canon EOS R5' },
+      lens: { display: 'Canon RF24-70mm F2.8 L IS USM · 24-70 mm f/2.8' },
+      capture: { display: '2026:04:24 10:00:00 +09:00' },
+      exposure: { display: '1/125 s · f/2.8 · ISO 100 · 24 mm · 35mm equiv 24 mm' },
+      image: { size: '8192 × 5464', orientation: 'Rotate 90° CW' },
+      software: { display: 'Adobe Lightroom Classic' },
+      gps: {
+        latitude: 35.6534804,
+        longitude: 139.7197987,
+        altitude: 52,
+        timestamp: '2026:04:24 01:23:45 UTC',
+      },
+    },
+    xmp: {
+      hasXmp: true,
+      packetCount: 1,
+      packets: [
+        {
+          label: 'XMP packet 1',
+          byteLength: 128,
+          hexDump: '00000000  3C 78 3A 78 6D 70 6D 65 74 61                 |<x:xmpmeta|',
+          properties: [
+            { path: 'dc:title', value: 'Hover EXIF Viewer' },
+            { path: 'rdf:Description@dc:creator', value: 'Tomoki Harada' },
+          ],
+        },
+      ],
+    },
+  });
+
+  const ui = api.ensureUi();
+  assert.match(flattenText(ui.body), /Canon EOS R5/);
+  assert.match(flattenText(ui.body), /Canon RF24-70mm F2.8 L IS USM/);
+  assert.match(flattenText(ui.body), /Adobe Lightroom Classic/);
+  assert.match(flattenText(ui.body), /Camera model/);
+  assert.match(flattenText(ui.body), /Model/);
+
+  const tooltip = findFirst(
+    ui.body,
+    (node) => node.tagName === 'SPAN' && node.getAttribute('title') != null
+  );
+  assert.ok(tooltip);
+  assert.equal(
+    tooltip.getAttribute('title'),
+    'Camera body model recorded when the image was captured.'
+  );
+
+  const xmpButton = findFirst(
+    ui.body,
+    (node) => node.tagName === 'BUTTON' && node.textContent === 'Decode XMP (1)'
+  );
+  assert.ok(xmpButton);
+  xmpButton.click();
+
+  assert.match(flattenText(ui.body), /Binary editor/);
+  assert.match(flattenText(ui.body), /Decoded XMP/);
+  assert.match(flattenText(ui.body), /dc:title/);
+  assert.match(flattenText(ui.body), /Hover EXIF Viewer/);
+
+  const textarea = findFirst(ui.body, (node) => node.tagName === 'TEXTAREA');
+  assert.ok(textarea);
+  assert.match(textarea.value, /3C 78 3A 78 6D 70 6D 65 74 61/);
 });

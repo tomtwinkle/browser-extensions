@@ -10,6 +10,9 @@ A Chrome / Edge Manifest V3 extension that shows a small button only while the p
 
 - Shows an `EXIF` button near the lower-right corner of the hovered image
 - Reads EXIF metadata from JPEG, PNG (`eXIf`), WebP (`EXIF`), and TIFF payloads
+- Surfaces more high-value metadata such as camera model, lens, capture time, exposure, image size, GPS, and other useful EXIF fields
+- Adds clearer per-field titles and hover tooltips so each EXIF item is easier to understand
+- Includes a `Decode XMP` button that opens a side-by-side XMP hex/binary view and decoded property list
 - Fetches cross-origin images through the extension service worker so Chrome and Edge can inspect images loaded from CDNs
 - Renders metadata in a lightweight in-page modal with no external dependencies
 

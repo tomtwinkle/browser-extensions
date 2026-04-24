@@ -44,32 +44,65 @@
         0x0131: 'Software',
         0x0132: 'ModifyDate',
         0x013b: 'Artist',
+        0x02bc: 'XMPPacket',
         0x8298: 'Copyright',
         0x8769: 'ExifIFDPointer',
         0x8825: 'GPSInfoIFDPointer',
+        0xc614: 'UniqueCameraModel',
+        0xc615: 'LocalizedCameraModel',
       },
       exif: {
         0x829a: 'ExposureTime',
         0x829d: 'FNumber',
         0x8822: 'ExposureProgram',
         0x8827: 'ISO',
+        0x8830: 'SensitivityType',
+        0x8831: 'StandardOutputSensitivity',
+        0x8832: 'RecommendedExposureIndex',
+        0x8833: 'ISOSpeed',
         0x9000: 'ExifVersion',
         0x9003: 'DateTimeOriginal',
         0x9004: 'CreateDate',
+        0x9010: 'OffsetTime',
+        0x9011: 'OffsetTimeOriginal',
+        0x9012: 'OffsetTimeDigitized',
         0x9101: 'ComponentsConfiguration',
         0x9201: 'ShutterSpeedValue',
         0x9202: 'ApertureValue',
+        0x9203: 'BrightnessValue',
         0x9204: 'ExposureBiasValue',
+        0x9205: 'MaxApertureValue',
+        0x9206: 'SubjectDistance',
         0x9207: 'MeteringMode',
+        0x9208: 'LightSource',
         0x9209: 'Flash',
         0x920a: 'FocalLength',
+        0x9214: 'SubjectArea',
         0x9286: 'UserComment',
+        0xa000: 'FlashpixVersion',
+        0xa001: 'ColorSpace',
         0xa002: 'PixelXDimension',
         0xa003: 'PixelYDimension',
+        0xa20e: 'FocalPlaneXResolution',
+        0xa20f: 'FocalPlaneYResolution',
+        0xa210: 'FocalPlaneResolutionUnit',
+        0xa217: 'SensingMethod',
+        0xa300: 'FileSource',
+        0xa301: 'SceneType',
+        0xa401: 'CustomRendered',
+        0xa402: 'ExposureMode',
         0xa403: 'WhiteBalance',
+        0xa404: 'DigitalZoomRatio',
         0xa405: 'FocalLengthIn35mmFormat',
         0xa406: 'SceneCaptureType',
+        0xa407: 'GainControl',
+        0xa408: 'Contrast',
+        0xa409: 'Saturation',
+        0xa40a: 'Sharpness',
+        0xa40c: 'SubjectDistanceRange',
         0xa420: 'ImageUniqueID',
+        0xa432: 'LensSpecification',
+        0xa433: 'LensMake',
         0xa434: 'LensModel',
         0xa005: 'InteroperabilityIFDPointer',
       },
@@ -81,8 +114,20 @@
         0x0004: 'GPSLongitude',
         0x0005: 'GPSAltitudeRef',
         0x0006: 'GPSAltitude',
+        0x0007: 'GPSTimeStamp',
+        0x0008: 'GPSSatellites',
+        0x0009: 'GPSStatus',
+        0x000a: 'GPSMeasureMode',
+        0x000b: 'GPSDOP',
+        0x000c: 'GPSSpeedRef',
+        0x000d: 'GPSSpeed',
+        0x000e: 'GPSTrackRef',
+        0x000f: 'GPSTrack',
+        0x0010: 'GPSImgDirectionRef',
+        0x0011: 'GPSImgDirection',
         0x0012: 'GPSMapDatum',
         0x001d: 'GPSDateStamp',
+        0x001f: 'GPSHPositioningError',
       },
       interop: {
         0x0001: 'InteropIndex',
@@ -239,10 +284,19 @@
     }
 
     function resolutionUnitString(value) {
+      if (value == null) return null;
       const map = {
         1: 'No unit',
         2: 'inch',
         3: 'cm',
+      };
+      return map[value] || String(value);
+    }
+
+    function colorSpaceString(value) {
+      const map = {
+        1: 'sRGB',
+        0xffff: 'Uncalibrated',
       };
       return map[value] || String(value);
     }
@@ -262,6 +316,15 @@
       return map[value] || String(value);
     }
 
+    function exposureModeString(value) {
+      const map = {
+        0: 'Auto exposure',
+        1: 'Manual exposure',
+        2: 'Auto bracket',
+      };
+      return map[value] || String(value);
+    }
+
     function meteringModeString(value) {
       const map = {
         0: 'Unknown',
@@ -271,6 +334,33 @@
         4: 'Multi-spot',
         5: 'Pattern',
         6: 'Partial',
+      };
+      return map[value] || String(value);
+    }
+
+    function lightSourceString(value) {
+      const map = {
+        0: 'Unknown',
+        1: 'Daylight',
+        2: 'Fluorescent',
+        3: 'Tungsten',
+        4: 'Flash',
+        9: 'Fine weather',
+        10: 'Cloudy',
+        11: 'Shade',
+        12: 'Daylight fluorescent',
+        13: 'Day white fluorescent',
+        14: 'Cool white fluorescent',
+        15: 'White fluorescent',
+        17: 'Standard light A',
+        18: 'Standard light B',
+        19: 'Standard light C',
+        20: 'D55',
+        21: 'D65',
+        22: 'D75',
+        23: 'D50',
+        24: 'ISO studio tungsten',
+        255: 'Other',
       };
       return map[value] || String(value);
     }
@@ -285,6 +375,89 @@
         1: 'Landscape',
         2: 'Portrait',
         3: 'Night scene',
+      };
+      return map[value] || String(value);
+    }
+
+    function customRenderedString(value) {
+      const map = {
+        0: 'Normal process',
+        1: 'Custom process',
+      };
+      return map[value] || String(value);
+    }
+
+    function gainControlString(value) {
+      const map = {
+        0: 'None',
+        1: 'Low gain up',
+        2: 'High gain up',
+        3: 'Low gain down',
+        4: 'High gain down',
+      };
+      return map[value] || String(value);
+    }
+
+    function contrastString(value) {
+      const map = {
+        0: 'Normal',
+        1: 'Low',
+        2: 'High',
+      };
+      return map[value] || String(value);
+    }
+
+    function saturationString(value) {
+      const map = {
+        0: 'Normal',
+        1: 'Low',
+        2: 'High',
+      };
+      return map[value] || String(value);
+    }
+
+    function sharpnessString(value) {
+      const map = {
+        0: 'Normal',
+        1: 'Soft',
+        2: 'Hard',
+      };
+      return map[value] || String(value);
+    }
+
+    function subjectDistanceRangeString(value) {
+      const map = {
+        0: 'Unknown',
+        1: 'Macro',
+        2: 'Close',
+        3: 'Distant',
+      };
+      return map[value] || String(value);
+    }
+
+    function sensingMethodString(value) {
+      const map = {
+        1: 'Not defined',
+        2: 'One-chip color area sensor',
+        3: 'Two-chip color area sensor',
+        4: 'Three-chip color area sensor',
+        5: 'Color sequential area sensor',
+        7: 'Trilinear sensor',
+        8: 'Color sequential linear sensor',
+      };
+      return map[value] || String(value);
+    }
+
+    function sensitivityTypeString(value) {
+      const map = {
+        0: 'Unknown',
+        1: 'Standard output sensitivity',
+        2: 'Recommended exposure index',
+        3: 'ISO speed',
+        4: 'SOS + REI',
+        5: 'SOS + ISO speed',
+        6: 'REI + ISO speed',
+        7: 'SOS + REI + ISO speed',
       };
       return map[value] || String(value);
     }
@@ -369,6 +542,337 @@
       return `${numberString(signed, 2)} m`;
     }
 
+    function resolutionString(rawValue, unit) {
+      const value = rationalValue(rawValue);
+      if (!Number.isFinite(value)) return genericValueString(rawValue);
+      return `${numberString(value, 2)} ${unit && unit !== 'No unit' ? `pixels/${unit}` : 'pixels'}`;
+    }
+
+    function subjectDistanceString(rawValue) {
+      const value = rationalValue(rawValue);
+      if (!Number.isFinite(value)) return genericValueString(rawValue);
+      return `${numberString(value, 2)} m`;
+    }
+
+    function digitalZoomRatioString(rawValue) {
+      const value = rationalValue(rawValue);
+      if (!Number.isFinite(value)) return genericValueString(rawValue);
+      if (value === 0) return 'None';
+      return `${numberString(value, 2)}×`;
+    }
+
+    function subjectAreaString(rawValue) {
+      if (!Array.isArray(rawValue)) return genericValueString(rawValue);
+      return rawValue.join(', ');
+    }
+
+    function apexExposureTimeString(rawValue) {
+      const apex = rationalValue(rawValue);
+      if (!Number.isFinite(apex)) return genericValueString(rawValue);
+      const exposureTime = Math.pow(2, -apex);
+      if (!Number.isFinite(exposureTime) || exposureTime <= 0) return genericValueString(rawValue);
+      if (exposureTime >= 1) return `${numberString(exposureTime, 2)} s`;
+      return `1/${Math.max(1, Math.round(1 / exposureTime))} s`;
+    }
+
+    function apexApertureString(rawValue) {
+      const apex = rationalValue(rawValue);
+      if (!Number.isFinite(apex)) return genericValueString(rawValue);
+      return `f/${numberString(Math.pow(2, apex / 2), 1)}`;
+    }
+
+    function exposureValueString(rawValue) {
+      const value = rationalValue(rawValue);
+      if (!Number.isFinite(value)) return genericValueString(rawValue);
+      const sign = value > 0 ? '+' : '';
+      return `${sign}${numberString(value, 2)} EV`;
+    }
+
+    function componentsConfigurationString(rawValue) {
+      if (!(rawValue instanceof Uint8Array)) return genericValueString(rawValue);
+      const map = {
+        1: 'Y',
+        2: 'Cb',
+        3: 'Cr',
+        4: 'R',
+        5: 'G',
+        6: 'B',
+      };
+      return Array.from(rawValue)
+        .filter((value) => value !== 0)
+        .map((value) => map[value] || value)
+        .join(' ');
+    }
+
+    function flashpixVersionString(rawValue) {
+      if (rawValue instanceof Uint8Array) return trimAscii(readAscii(rawValue, 0, rawValue.byteLength));
+      return genericValueString(rawValue);
+    }
+
+    function fileSourceString(rawValue) {
+      const value = rawValue instanceof Uint8Array ? rawValue[0] : rawValue;
+      const map = {
+        3: 'DSC',
+      };
+      return map[value] || genericValueString(rawValue);
+    }
+
+    function sceneTypeString(rawValue) {
+      const value = rawValue instanceof Uint8Array ? rawValue[0] : rawValue;
+      const map = {
+        1: 'Directly photographed',
+      };
+      return map[value] || genericValueString(rawValue);
+    }
+
+    function lensSpecificationString(rawValue) {
+      if (!Array.isArray(rawValue) || rawValue.length !== 4) return genericValueString(rawValue);
+      const [minFocal, maxFocal, minAperture, maxAperture] = rawValue.map((value) => rationalValue(value));
+      const focalText =
+        Number.isFinite(minFocal) && Number.isFinite(maxFocal)
+          ? minFocal === maxFocal
+            ? `${numberString(minFocal, 1)} mm`
+            : `${numberString(minFocal, 1)}-${numberString(maxFocal, 1)} mm`
+          : null;
+      const apertureText =
+        Number.isFinite(minAperture) && Number.isFinite(maxAperture)
+          ? minAperture === maxAperture
+            ? `f/${numberString(minAperture, 1)}`
+            : `f/${numberString(minAperture, 1)}-${numberString(maxAperture, 1)}`
+          : null;
+      return [focalText, apertureText].filter(Boolean).join(' ');
+    }
+
+    function gpsStatusString(rawValue) {
+      const value = trimAscii(rawValue);
+      const map = {
+        A: 'Measurement active',
+        V: 'Measurement void',
+      };
+      return map[value] || value || genericValueString(rawValue);
+    }
+
+    function gpsMeasureModeString(rawValue) {
+      const value = trimAscii(rawValue);
+      const map = {
+        2: '2D',
+        3: '3D',
+      };
+      return map[value] || value || genericValueString(rawValue);
+    }
+
+    function gpsTimeStampString(rawValue) {
+      if (!Array.isArray(rawValue) || rawValue.length !== 3) return genericValueString(rawValue);
+      const [hours, minutes, seconds] = rawValue.map((value) => rationalValue(value));
+      if (![hours, minutes, seconds].every(Number.isFinite)) return genericValueString(rawValue);
+      const secondText =
+        Number.isInteger(seconds)
+          ? String(seconds).padStart(2, '0')
+          : numberString(seconds, 2).padStart(5, '0');
+      return `${String(Math.floor(hours)).padStart(2, '0')}:${String(Math.floor(minutes)).padStart(2, '0')}:${secondText} UTC`;
+    }
+
+    function gpsSpeedString(rawValue, ref) {
+      const value = rationalValue(rawValue);
+      if (!Number.isFinite(value)) return genericValueString(rawValue);
+      const unit = ref === 'M' ? 'mph' : ref === 'N' ? 'knots' : 'km/h';
+      return `${numberString(value, 2)} ${unit}`;
+    }
+
+    function gpsDirectionString(rawValue, ref) {
+      const value = rationalValue(rawValue);
+      if (!Number.isFinite(value)) return genericValueString(rawValue);
+      return `${numberString(value, 2)}°${ref ? ` ${ref}` : ''}`;
+    }
+
+    function combineLabel(primary, secondary) {
+      const left = trimAscii(primary);
+      const right = trimAscii(secondary);
+      if (left && right) {
+        if (right.toLowerCase().startsWith(left.toLowerCase())) return right;
+        return `${left} ${right}`;
+      }
+      return left || right || null;
+    }
+
+    function joinParts(parts) {
+      const filtered = parts.filter(Boolean);
+      return filtered.length > 0 ? filtered.join(' · ') : null;
+    }
+
+    function dateTimeWithOffset(dateText, offsetText) {
+      if (!dateText) return null;
+      return offsetText ? `${dateText} ${offsetText}` : dateText;
+    }
+
+    function decodeUtf8(bytes) {
+      if (typeof TextDecoder !== 'undefined') {
+        return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      }
+      if (typeof Buffer !== 'undefined') {
+        return Buffer.from(bytes).toString('utf8');
+      }
+      return readAscii(bytes, 0, bytes.byteLength);
+    }
+
+    function encodeUtf8(text) {
+      if (typeof TextEncoder !== 'undefined') {
+        return new TextEncoder().encode(text);
+      }
+      if (typeof Buffer !== 'undefined') {
+        return Uint8Array.from(Buffer.from(text, 'utf8'));
+      }
+      return Uint8Array.from(text, (char) => char.charCodeAt(0));
+    }
+
+    function humanizeTagName(name) {
+      return name
+        .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+        .replace(/^GPS/, 'GPS ')
+        .replace(/^EXIF/, 'EXIF ')
+        .trim();
+    }
+
+    const TAG_DETAILS = {
+      ifd0: {
+        0x010e: {
+          title: 'Image description',
+          description: 'Free-form caption or description embedded in the image.',
+        },
+        0x010f: {
+          title: 'Camera make',
+          description: 'Manufacturer or camera brand recorded by the device.',
+        },
+        0x0110: {
+          title: 'Camera model',
+          description: 'Camera body model recorded when the image was captured.',
+        },
+        0x0112: {
+          title: 'Orientation',
+          description: 'How the image should be rotated or mirrored for correct display.',
+        },
+        0x011a: {
+          title: 'Horizontal resolution',
+          description: 'Stored horizontal print/display resolution recorded in the file.',
+        },
+        0x011b: {
+          title: 'Vertical resolution',
+          description: 'Stored vertical print/display resolution recorded in the file.',
+        },
+        0x0131: {
+          title: 'Software',
+          description: 'Application or firmware that last wrote the image metadata.',
+        },
+        0x0132: {
+          title: 'Modified time',
+          description: 'Timestamp of the last metadata or file modification recorded in EXIF.',
+        },
+        0xc614: {
+          title: 'Unique camera model',
+          description: 'DNG/XMP-style unique identifier for the camera model.',
+        },
+        0xc615: {
+          title: 'Localized camera model',
+          description: 'Localized display name for the camera model, when available.',
+        },
+      },
+      exif: {
+        0x829a: {
+          title: 'Exposure time',
+          description: 'Shutter duration used when the photo was captured.',
+        },
+        0x829d: {
+          title: 'Aperture',
+          description: 'Lens opening recorded as the f-number.',
+        },
+        0x8827: {
+          title: 'ISO',
+          description: 'Sensor sensitivity used for the capture.',
+        },
+        0x9003: {
+          title: 'Capture time',
+          description: 'Original capture date and time recorded by the camera.',
+        },
+        0x920a: {
+          title: 'Focal length',
+          description: 'Lens focal length at the moment the photo was taken.',
+        },
+        0xa001: {
+          title: 'Color space',
+          description: 'Color profile or color space recorded in the file.',
+        },
+        0xa002: {
+          title: 'Image width',
+          description: 'Pixel width reported by EXIF metadata.',
+        },
+        0xa003: {
+          title: 'Image height',
+          description: 'Pixel height reported by EXIF metadata.',
+        },
+        0xa402: {
+          title: 'Exposure mode',
+          description: 'Whether exposure was automatic, manual, or bracketed.',
+        },
+        0xa403: {
+          title: 'White balance',
+          description: 'White balance mode used for the capture.',
+        },
+        0xa404: {
+          title: 'Digital zoom',
+          description: 'Digital zoom ratio recorded by the camera.',
+        },
+        0xa405: {
+          title: '35mm equivalent',
+          description: 'Approximate focal length translated into 35mm film terms.',
+        },
+        0xa432: {
+          title: 'Lens specification',
+          description: 'Lens focal-length and aperture range recorded by EXIF.',
+        },
+        0xa433: {
+          title: 'Lens make',
+          description: 'Lens manufacturer recorded in EXIF.',
+        },
+        0xa434: {
+          title: 'Lens model',
+          description: 'Lens model recorded in EXIF.',
+        },
+      },
+      gps: {
+        0x0002: {
+          title: 'Latitude',
+          description: 'Latitude coordinate recorded by the capturing device.',
+        },
+        0x0004: {
+          title: 'Longitude',
+          description: 'Longitude coordinate recorded by the capturing device.',
+        },
+        0x0006: {
+          title: 'Altitude',
+          description: 'Approximate altitude recorded for the image location.',
+        },
+        0x0007: {
+          title: 'GPS time',
+          description: 'UTC time recorded by the GPS receiver.',
+        },
+        0x001d: {
+          title: 'GPS date',
+          description: 'UTC date recorded by the GPS receiver.',
+        },
+      },
+    };
+
+    function tagTitle(groupId, tag, name) {
+      return TAG_DETAILS[groupId]?.[tag]?.title || humanizeTagName(name);
+    }
+
+    function tagDescription(groupId, tag, title) {
+      return (
+        TAG_DETAILS[groupId]?.[tag]?.description ||
+        `${title} recorded in the image metadata.`
+      );
+    }
+
     function exifVersionString(rawValue) {
       if (rawValue instanceof Uint8Array) return trimAscii(readAscii(rawValue, 0, rawValue.byteLength));
       return genericValueString(rawValue);
@@ -377,20 +881,46 @@
     function formatValue(groupId, tag, rawValue) {
       if (groupId === 'ifd0' && tag === 0x0112) return orientationString(rawValue);
       if (groupId === 'ifd0' && tag === 0x0128) return resolutionUnitString(rawValue);
+      if (groupId === 'exif' && (tag === 0x8827 || tag === 0x8831 || tag === 0x8832 || tag === 0x8833)) {
+        return Number.isFinite(rawValue) ? `ISO ${rawValue}` : genericValueString(rawValue);
+      }
+      if (groupId === 'exif' && tag === 0x8830) return sensitivityTypeString(rawValue);
       if (groupId === 'exif' && tag === 0x829a) return exposureTimeString(rawValue);
       if (groupId === 'exif' && tag === 0x829d) return apertureString(rawValue);
+      if (groupId === 'exif' && tag === 0x9201) return apexExposureTimeString(rawValue);
+      if (groupId === 'exif' && (tag === 0x9202 || tag === 0x9205)) return apexApertureString(rawValue);
+      if (groupId === 'exif' && tag === 0x9203) return exposureValueString(rawValue);
       if (groupId === 'exif' && tag === 0x8822) return exposureProgramString(rawValue);
-      if (groupId === 'exif' && tag === 0x8827) return Number.isFinite(rawValue) ? `ISO ${rawValue}` : genericValueString(rawValue);
       if (groupId === 'exif' && tag === 0x9000) return exifVersionString(rawValue);
+      if (groupId === 'exif' && tag === 0xa000) return flashpixVersionString(rawValue);
+      if (groupId === 'exif' && tag === 0x9101) return componentsConfigurationString(rawValue);
       if (groupId === 'exif' && tag === 0x9204) return exposureBiasString(rawValue);
+      if (groupId === 'exif' && tag === 0x9206) return subjectDistanceString(rawValue);
       if (groupId === 'exif' && tag === 0x9207) return meteringModeString(rawValue);
+      if (groupId === 'exif' && tag === 0x9208) return lightSourceString(rawValue);
       if (groupId === 'exif' && tag === 0x9209) return flashString(rawValue);
       if (groupId === 'exif' && tag === 0x920a) return focalLengthString(rawValue);
+      if (groupId === 'exif' && tag === 0x9214) return subjectAreaString(rawValue);
       if (groupId === 'exif' && tag === 0x9286) return decodeUserComment(rawValue) || formatByteArray(rawValue);
+      if (groupId === 'exif' && tag === 0xa001) return colorSpaceString(rawValue);
+      if (groupId === 'exif' && tag === 0xa217) return sensingMethodString(rawValue);
+      if (groupId === 'exif' && tag === 0xa300) return fileSourceString(rawValue);
+      if (groupId === 'exif' && tag === 0xa301) return sceneTypeString(rawValue);
+      if (groupId === 'exif' && tag === 0xa401) return customRenderedString(rawValue);
+      if (groupId === 'exif' && tag === 0xa402) return exposureModeString(rawValue);
       if (groupId === 'exif' && tag === 0xa403) return whiteBalanceString(rawValue);
+      if (groupId === 'exif' && tag === 0xa404) return digitalZoomRatioString(rawValue);
       if (groupId === 'exif' && tag === 0xa405) return focalLength35mmString(rawValue);
       if (groupId === 'exif' && tag === 0xa406) return sceneCaptureTypeString(rawValue);
+      if (groupId === 'exif' && tag === 0xa407) return gainControlString(rawValue);
+      if (groupId === 'exif' && tag === 0xa408) return contrastString(rawValue);
+      if (groupId === 'exif' && tag === 0xa409) return saturationString(rawValue);
+      if (groupId === 'exif' && tag === 0xa40a) return sharpnessString(rawValue);
+      if (groupId === 'exif' && tag === 0xa40c) return subjectDistanceRangeString(rawValue);
+      if (groupId === 'exif' && tag === 0xa432) return lensSpecificationString(rawValue);
       if (groupId === 'gps' && tag === 0x0000) return gpsVersionString(rawValue);
+      if (groupId === 'gps' && tag === 0x0009) return gpsStatusString(rawValue);
+      if (groupId === 'gps' && tag === 0x000a) return gpsMeasureModeString(rawValue);
       return genericValueString(rawValue);
     }
 
@@ -443,6 +973,9 @@
       const latitudeRef = trimAscii(rawByTag.get(0x0001));
       const longitudeRef = trimAscii(rawByTag.get(0x0003));
       const altitudeRef = rawByTag.get(0x0005);
+      const speedRef = trimAscii(rawByTag.get(0x000c));
+      const trackRef = trimAscii(rawByTag.get(0x000e));
+      const imageDirectionRef = trimAscii(rawByTag.get(0x0010));
       for (const entry of section.entries) {
         if (entry.tag === 0x0002) {
           entry.displayValue = gpsCoordinateString(entry.rawValue, latitudeRef);
@@ -450,6 +983,34 @@
           entry.displayValue = gpsCoordinateString(entry.rawValue, longitudeRef);
         } else if (entry.tag === 0x0006) {
           entry.displayValue = gpsAltitudeString(entry.rawValue, altitudeRef);
+        } else if (entry.tag === 0x0007) {
+          entry.displayValue = gpsTimeStampString(entry.rawValue);
+        } else if (entry.tag === 0x000d) {
+          entry.displayValue = gpsSpeedString(entry.rawValue, speedRef);
+        } else if (entry.tag === 0x000f) {
+          entry.displayValue = gpsDirectionString(entry.rawValue, trackRef);
+        } else if (entry.tag === 0x0011) {
+          entry.displayValue = gpsDirectionString(entry.rawValue, imageDirectionRef);
+        } else if (entry.tag === 0x001f) {
+          entry.displayValue = subjectDistanceString(entry.rawValue);
+        }
+      }
+    }
+
+    function updateImageDisplay(section, rawByTag) {
+      const resolutionUnit = resolutionUnitString(rawByTag.get(0x0128));
+      for (const entry of section.entries) {
+        if (entry.tag === 0x011a || entry.tag === 0x011b) {
+          entry.displayValue = resolutionString(entry.rawValue, resolutionUnit);
+        }
+      }
+    }
+
+    function updateExifDisplay(section, rawByTag) {
+      const resolutionUnit = resolutionUnitString(rawByTag.get(0xa210));
+      for (const entry of section.entries) {
+        if (entry.tag === 0xa20e || entry.tag === 0xa20f) {
+          entry.displayValue = resolutionString(entry.rawValue, resolutionUnit);
         }
       }
     }
@@ -458,9 +1019,95 @@
       return section?.entries.find((entry) => entry.tag === tag) || null;
     }
 
+    function findSection(sections, id) {
+      return sections.find((section) => section.id === id) || null;
+    }
+
+    function sectionDisplayValue(section, tag) {
+      return findSectionEntry(section, tag)?.displayValue || null;
+    }
+
     function buildSummary(sections) {
       const summary = {};
-      const gpsSection = sections.find((section) => section.id === 'gps');
+      const imageSection = findSection(sections, 'ifd0');
+      const exifSection = findSection(sections, 'exif');
+      const gpsSection = findSection(sections, 'gps');
+
+      const cameraMake = sectionDisplayValue(imageSection, 0x010f);
+      const cameraModel =
+        sectionDisplayValue(imageSection, 0x0110) ||
+        sectionDisplayValue(imageSection, 0xc614) ||
+        sectionDisplayValue(imageSection, 0xc615);
+      const cameraDisplay = combineLabel(cameraMake, cameraModel) || cameraModel || cameraMake;
+      if (cameraDisplay) {
+        summary.camera = {
+          make: cameraMake || null,
+          model: cameraModel || null,
+          display: cameraDisplay,
+        };
+      }
+
+      const lensMake = sectionDisplayValue(exifSection, 0xa433);
+      const lensModel = sectionDisplayValue(exifSection, 0xa434);
+      const lensSpecification = sectionDisplayValue(exifSection, 0xa432);
+      const lensName = combineLabel(lensMake, lensModel) || lensModel || lensMake;
+      const lensDisplay =
+        lensSpecification && lensSpecification !== lensName
+          ? joinParts([lensName, lensSpecification])
+          : lensName || lensSpecification;
+      if (lensDisplay) {
+        summary.lens = {
+          display: lensDisplay,
+        };
+      }
+
+      const capturedAt =
+        dateTimeWithOffset(sectionDisplayValue(exifSection, 0x9003), sectionDisplayValue(exifSection, 0x9011)) ||
+        dateTimeWithOffset(sectionDisplayValue(exifSection, 0x9004), sectionDisplayValue(exifSection, 0x9012)) ||
+        dateTimeWithOffset(sectionDisplayValue(imageSection, 0x0132), sectionDisplayValue(exifSection, 0x9010));
+      if (capturedAt) {
+        summary.capture = {
+          display: capturedAt,
+        };
+      }
+
+      const exposureDisplay = joinParts([
+        sectionDisplayValue(exifSection, 0x829a) || sectionDisplayValue(exifSection, 0x9201),
+        sectionDisplayValue(exifSection, 0x829d) || sectionDisplayValue(exifSection, 0x9202),
+        sectionDisplayValue(exifSection, 0x8827) ||
+          sectionDisplayValue(exifSection, 0x8831) ||
+          sectionDisplayValue(exifSection, 0x8832) ||
+          sectionDisplayValue(exifSection, 0x8833),
+        sectionDisplayValue(exifSection, 0x920a),
+        sectionDisplayValue(exifSection, 0xa405)
+          ? `35mm equiv ${sectionDisplayValue(exifSection, 0xa405)}`
+          : null,
+      ]);
+      if (exposureDisplay) {
+        summary.exposure = {
+          display: exposureDisplay,
+        };
+      }
+
+      const imageSize =
+        sectionDisplayValue(exifSection, 0xa002) && sectionDisplayValue(exifSection, 0xa003)
+          ? `${sectionDisplayValue(exifSection, 0xa002)} × ${sectionDisplayValue(exifSection, 0xa003)}`
+          : null;
+      const orientation = sectionDisplayValue(imageSection, 0x0112);
+      if (imageSize || orientation) {
+        summary.image = {
+          size: imageSize,
+          orientation,
+        };
+      }
+
+      const software = sectionDisplayValue(imageSection, 0x0131);
+      if (software) {
+        summary.software = {
+          display: software,
+        };
+      }
+
       if (gpsSection) {
         const latitudeRef = trimAscii(findSectionEntry(gpsSection, 0x0001)?.rawValue);
         const longitudeRef = trimAscii(findSectionEntry(gpsSection, 0x0003)?.rawValue);
@@ -469,9 +1116,12 @@
         if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
           const altitudeRef = findSectionEntry(gpsSection, 0x0005)?.rawValue;
           const altitudeValue = rationalValue(findSectionEntry(gpsSection, 0x0006)?.rawValue);
+          const gpsDate = sectionDisplayValue(gpsSection, 0x001d);
+          const gpsTime = sectionDisplayValue(gpsSection, 0x0007);
           summary.gps = {
             latitude,
             longitude,
+            timestamp: gpsDate && gpsTime ? `${gpsDate} ${gpsTime}` : gpsDate || gpsTime || null,
           };
           if (Number.isFinite(altitudeValue)) {
             summary.gps.altitude = altitudeRef === 1 ? -altitudeValue : altitudeValue;
@@ -481,7 +1131,217 @@
       return summary;
     }
 
-    function parseTiff(bytes, tiffOffset, container) {
+    function flattenXmlNode(node, path, properties) {
+      if (!node || node.nodeType !== 1) return;
+      const currentPath = path ? `${path}/${node.nodeName}` : node.nodeName;
+      if (node.attributes) {
+        for (const attribute of Array.from(node.attributes)) {
+          if (!/^xmlns(?::|$)/.test(attribute.name)) {
+            properties.push({
+              path: `${currentPath}@${attribute.name}`,
+              value: attribute.value,
+            });
+          }
+        }
+      }
+      const children = Array.from(node.childNodes || []);
+      const elementChildren = children.filter((child) => child.nodeType === 1);
+      const textValue = children
+        .filter((child) => child.nodeType === 3 || child.nodeType === 4)
+        .map((child) => String(child.nodeValue || '').trim())
+        .filter(Boolean)
+        .join(' ');
+      if (textValue) {
+        properties.push({
+          path: currentPath,
+          value: textValue,
+        });
+      }
+      for (const child of elementChildren) {
+        flattenXmlNode(child, currentPath, properties);
+      }
+    }
+
+    function extractFlatXmlProperties(xml) {
+      if (typeof DOMParser !== 'undefined') {
+        try {
+          const doc = new DOMParser().parseFromString(xml, 'application/xml');
+          if (!doc.querySelector('parsererror') && doc.documentElement) {
+            const properties = [];
+            flattenXmlNode(doc.documentElement, '', properties);
+            return properties;
+          }
+        } catch (_) {}
+      }
+
+      const properties = [];
+      const attributeRegex = /<([A-Za-z_][\w:.-]*)([^>]*)>/g;
+      let attributeMatch = attributeRegex.exec(xml);
+      while (attributeMatch) {
+        const [, tagName, attrText] = attributeMatch;
+        const itemPath = tagName;
+        const pairRegex = /([A-Za-z_][\w:.-]*)="([^"]*)"/g;
+        let pairMatch = pairRegex.exec(attrText);
+        while (pairMatch) {
+          if (!/^xmlns(?::|$)/.test(pairMatch[1])) {
+            properties.push({
+              path: `${itemPath}@${pairMatch[1]}`,
+              value: pairMatch[2],
+            });
+          }
+          pairMatch = pairRegex.exec(attrText);
+        }
+        attributeMatch = attributeRegex.exec(xml);
+      }
+
+      const leafRegex = /<([A-Za-z_][\w:.-]*)(?:\s[^>]*)?>([^<]+)<\/\1>/g;
+      let leafMatch = leafRegex.exec(xml);
+      while (leafMatch) {
+        const value = leafMatch[2].trim();
+        if (value) {
+          properties.push({
+            path: leafMatch[1],
+            value,
+          });
+        }
+        leafMatch = leafRegex.exec(xml);
+      }
+      return properties;
+    }
+
+    function normalizeXmpXml(xml) {
+      return String(xml || '')
+        .replace(/^\uFEFF/, '')
+        .replace(/<\?xpacket[\s\S]*?\?>/g, '')
+        .trim();
+    }
+
+    function formatHexDump(bytes) {
+      const lines = [];
+      for (let offset = 0; offset < bytes.byteLength; offset += 16) {
+        const slice = bytes.subarray(offset, offset + 16);
+        const hex = Array.from(slice)
+          .map((byte) => byte.toString(16).toUpperCase().padStart(2, '0'))
+          .join(' ');
+        const ascii = Array.from(slice)
+          .map((byte) => (byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : '.'))
+          .join('');
+        lines.push(`${offset.toString(16).toUpperCase().padStart(8, '0')}  ${hex.padEnd(47, ' ')}  |${ascii}|`);
+      }
+      return lines.join('\n');
+    }
+
+    function buildXmpData(packetBytesList) {
+      if (!Array.isArray(packetBytesList) || packetBytesList.length === 0) {
+        return {
+          hasXmp: false,
+          packetCount: 0,
+          packets: [],
+        };
+      }
+      return {
+        hasXmp: true,
+        packetCount: packetBytesList.length,
+        packets: packetBytesList.map((packetBytes, index) => {
+          const xml = normalizeXmpXml(decodeUtf8(packetBytes));
+          return {
+            label: `XMP packet ${index + 1}`,
+            byteLength: packetBytes.byteLength,
+            xml,
+            hexDump: formatHexDump(packetBytes),
+            properties: extractFlatXmlProperties(xml),
+          };
+        }),
+      };
+    }
+
+    function findJpegXmpPackets(bytes) {
+      const packets = [];
+      let offset = 2;
+      const prefix = 'http://ns.adobe.com/xap/1.0/\0';
+      while (offset + 4 <= bytes.byteLength) {
+        if (bytes[offset] !== 0xff) {
+          offset += 1;
+          continue;
+        }
+        let markerOffset = offset + 1;
+        while (markerOffset < bytes.byteLength && bytes[markerOffset] === 0xff) {
+          markerOffset += 1;
+        }
+        if (markerOffset >= bytes.byteLength) break;
+        const marker = bytes[markerOffset];
+        offset = markerOffset + 1;
+        if (marker === 0xd9 || marker === 0xda) break;
+        if (marker >= 0xd0 && marker <= 0xd7) continue;
+        if (offset + 2 > bytes.byteLength) break;
+        const segmentLength = readBigEndianUint16(bytes, offset);
+        const segmentDataOffset = offset + 2;
+        if (
+          marker === 0xe1 &&
+          segmentLength > prefix.length + 2 &&
+          segmentDataOffset + segmentLength - 2 <= bytes.byteLength &&
+          readAscii(bytes, segmentDataOffset, prefix.length) === prefix
+        ) {
+          packets.push(bytes.slice(segmentDataOffset + prefix.length, segmentDataOffset + segmentLength - 2));
+        }
+        offset += segmentLength;
+      }
+      return packets;
+    }
+
+    function findPngXmpPackets(bytes) {
+      const packets = [];
+      let offset = 8;
+      while (offset + 12 <= bytes.byteLength) {
+        const length = readBigEndianUint32(bytes, offset);
+        const type = readAscii(bytes, offset + 4, 4);
+        const dataOffset = offset + 8;
+        requireRange(bytes, dataOffset, length);
+        if (type === 'iTXt') {
+          const chunk = bytes.subarray(dataOffset, dataOffset + length);
+          const keywordEnd = chunk.indexOf(0);
+          if (keywordEnd > 0 && decodeUtf8(chunk.subarray(0, keywordEnd)) === 'XML:com.adobe.xmp') {
+            let index = keywordEnd + 1;
+            const compressionFlag = chunk[index];
+            index += 2;
+            if (compressionFlag === 0) {
+              const languageEnd = chunk.indexOf(0, index);
+              if (languageEnd >= 0) {
+                index = languageEnd + 1;
+                const translatedEnd = chunk.indexOf(0, index);
+                if (translatedEnd >= 0) {
+                  packets.push(chunk.slice(translatedEnd + 1));
+                }
+              }
+            }
+          }
+        }
+        offset += 12 + length;
+      }
+      return packets;
+    }
+
+    function findWebpXmpPackets(bytes) {
+      const packets = [];
+      let offset = 12;
+      while (offset + 8 <= bytes.byteLength) {
+        const chunkType = readAscii(bytes, offset, 4);
+        const chunkLength =
+          bytes[offset + 4] |
+          (bytes[offset + 5] << 8) |
+          (bytes[offset + 6] << 16) |
+          (bytes[offset + 7] << 24);
+        const dataOffset = offset + 8;
+        requireRange(bytes, dataOffset, chunkLength);
+        if (chunkType === 'XMP ') {
+          packets.push(bytes.slice(dataOffset, dataOffset + chunkLength));
+        }
+        offset += 8 + chunkLength + (chunkLength % 2);
+      }
+      return packets;
+    }
+
+    function parseTiff(bytes, tiffOffset, container, inheritedXmpPackets = []) {
       requireRange(bytes, tiffOffset, 8);
       const byteOrder = readAscii(bytes, tiffOffset, 2);
       const littleEndian = byteOrder === 'II';
@@ -497,6 +1357,7 @@
 
       const sections = [];
       const visited = new Set();
+      const xmpPackets = [...inheritedXmpPackets];
 
       function parseIfd(groupId, ifdOffset) {
         if (!ifdOffset) return { nextIfdOffset: 0, pointers: {} };
@@ -539,22 +1400,40 @@
             pointers.gps = rawValue;
             continue;
           }
+          if (groupId === 'ifd0' && tag === 0x02bc) {
+            if (typeof rawValue === 'string') {
+              xmpPackets.push(encodeUtf8(rawValue));
+            } else if (rawValue instanceof Uint8Array) {
+              xmpPackets.push(rawValue);
+            } else if (Array.isArray(rawValue)) {
+              xmpPackets.push(Uint8Array.from(rawValue));
+            }
+            continue;
+          }
           if (groupId === 'exif' && tag === 0xa005) {
             pointers.interop = rawValue;
             continue;
           }
           if (isStructuralTag(groupId, tag)) continue;
 
+          const name = tagName(groupId, tag);
+          const title = tagTitle(groupId, tag, name);
           section.entries.push({
             group: groupId,
             tag,
-            name: tagName(groupId, tag),
+            name,
+            title,
+            description: tagDescription(groupId, tag, title),
             rawValue,
             displayValue: formatValue(groupId, tag, rawValue),
           });
         }
 
-        if (groupId === 'gps') {
+        if (groupId === 'ifd0') {
+          updateImageDisplay(section, rawByTag);
+        } else if (groupId === 'exif') {
+          updateExifDisplay(section, rawByTag);
+        } else if (groupId === 'gps') {
           updateGpsDisplay(section, rawByTag);
         }
 
@@ -581,6 +1460,7 @@
         hasExif: sections.length > 0,
         sections,
         summary: buildSummary(sections),
+        xmp: buildXmpData(xmpPackets),
       };
     }
 
@@ -699,6 +1579,13 @@
         return parseTiff(bytes, 0, container);
       }
 
+      const xmpPackets =
+        container === 'jpeg'
+          ? findJpegXmpPackets(bytes)
+          : container === 'png'
+            ? findPngXmpPackets(bytes)
+            : findWebpXmpPackets(bytes);
+
       const tiffOffset =
         container === 'jpeg'
           ? findJpegExif(bytes)
@@ -712,10 +1599,11 @@
           hasExif: false,
           sections: [],
           summary: {},
+          xmp: buildXmpData(xmpPackets),
         };
       }
 
-      return parseTiff(bytes, tiffOffset, container);
+      return parseTiff(bytes, tiffOffset, container, xmpPackets);
     }
 
     return {

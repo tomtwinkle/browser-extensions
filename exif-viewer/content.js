@@ -112,7 +112,8 @@
 
     const panel = createElement(doc, 'div', {
       styles: {
-        maxWidth: '720px',
+        width: 'min(1100px, calc(100vw - 48px))',
+        maxWidth: '1100px',
         maxHeight: 'min(80vh, 720px)',
         margin: '0 auto',
         background: '#ffffff',
@@ -327,6 +328,11 @@
     return `https://www.google.com/maps/@${gps.latitude.toFixed(7)},${gps.longitude.toFixed(7)},17.0z`;
   }
 
+  function metricText(value, unit, digits = 2) {
+    if (!Number.isFinite(value)) return 'Unknown';
+    return `${value.toFixed(digits).replace(/\.?0+$/, '')} ${unit}`;
+  }
+
   function openModal(titleText, subtitleText, children) {
     const ui = ensureUi();
     ui.title.textContent = titleText;
@@ -367,6 +373,69 @@
     });
   }
 
+  function isElementNode(value) {
+    return Boolean(value && typeof value === 'object' && typeof value.tagName === 'string');
+  }
+
+  function helpBadge(doc, description) {
+    return createElement(doc, 'span', {
+      text: '?',
+      attrs: {
+        title: description,
+        'aria-label': description,
+      },
+      styles: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '16px',
+        height: '16px',
+        borderRadius: '999px',
+        background: '#cbd5e1',
+        color: '#0f172a',
+        fontSize: '11px',
+        fontWeight: '700',
+        cursor: 'help',
+        flex: '0 0 auto',
+        marginTop: '1px',
+      },
+    });
+  }
+
+  function metadataLabel(doc, entry) {
+    const wrapper = createElement(doc, 'div', {
+      styles: {
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: '8px',
+      },
+    });
+    const textWrap = createElement(doc, 'div');
+    textWrap.appendChild(
+      createElement(doc, 'div', {
+        text: entry.title || entry.name,
+      })
+    );
+    if (entry.name && entry.title && entry.title !== entry.name) {
+      textWrap.appendChild(
+        createElement(doc, 'div', {
+          text: entry.name,
+          styles: {
+            marginTop: '2px',
+            fontSize: '11px',
+            fontWeight: '500',
+            color: '#64748b',
+          },
+        })
+      );
+    }
+    wrapper.appendChild(textWrap);
+    if (entry.description) {
+      wrapper.appendChild(helpBadge(doc, entry.description));
+    }
+    return wrapper;
+  }
+
   function detailTable(doc, rows) {
     const table = createElement(doc, 'table', {
       styles: {
@@ -383,7 +452,6 @@
     for (const [label, value] of rows) {
       const row = createElement(doc, 'tr');
       const labelCell = createElement(doc, 'th', {
-        text: label,
         styles: {
           width: '34%',
           padding: '10px 12px',
@@ -397,6 +465,11 @@
           boxSizing: 'border-box',
         },
       });
+      if (isElementNode(label)) {
+        labelCell.appendChild(label);
+      } else {
+        labelCell.textContent = label;
+      }
       const valueCell = createElement(doc, 'td', {
         styles: {
           padding: '10px 12px',
@@ -409,7 +482,7 @@
           boxSizing: 'border-box',
         },
       });
-      if (value && typeof value === 'object' && typeof value.tagName === 'string') {
+      if (isElementNode(value)) {
         valueCell.appendChild(value);
       } else {
         valueCell.textContent = value;
@@ -436,6 +509,26 @@
         text: `${coordinateText(gps.latitude)}, ${coordinateText(gps.longitude)}`,
       })
     );
+    if (Number.isFinite(gps.altitude)) {
+      wrapper.appendChild(
+        createElement(doc, 'div', {
+          text: `Altitude: ${metricText(gps.altitude, 'm')}`,
+          styles: {
+            color: '#475569',
+          },
+        })
+      );
+    }
+    if (gps.timestamp) {
+      wrapper.appendChild(
+        createElement(doc, 'div', {
+          text: `GPS time: ${gps.timestamp}`,
+          styles: {
+            color: '#475569',
+          },
+        })
+      );
+    }
     wrapper.appendChild(
       createElement(doc, 'a', {
         text: 'Open in Google Maps',
@@ -453,16 +546,182 @@
     return wrapper;
   }
 
+  function xmpEditor(doc, packet) {
+    const editor = createElement(doc, 'textarea', {
+      attrs: {
+        readonly: 'readonly',
+        spellcheck: 'false',
+        'aria-label': `${packet.label} binary editor`,
+      },
+      styles: {
+        width: '100%',
+        minHeight: '280px',
+        padding: '12px',
+        border: '1px solid #cbd5e1',
+        borderRadius: '12px',
+        boxSizing: 'border-box',
+        background: '#0f172a',
+        color: '#e2e8f0',
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+        fontSize: '12px',
+        lineHeight: '1.6',
+        resize: 'vertical',
+      },
+    });
+    editor.value = packet.hexDump;
+    editor.textContent = packet.hexDump;
+    return editor;
+  }
+
+  function xmpPropertiesView(doc, packet) {
+    if (!Array.isArray(packet.properties) || packet.properties.length === 0) {
+      return paragraph(
+        doc,
+        'No structured XMP properties were decoded from this packet, but the raw bytes are shown in the binary editor.',
+        {
+          margin: '0',
+        }
+      );
+    }
+    return detailTable(
+      doc,
+      packet.properties.map((property) => [property.path, property.value])
+    );
+  }
+
+  function xmpPacketView(doc, packet) {
+    const wrapper = createElement(doc, 'div', {
+      styles: {
+        marginTop: '16px',
+        padding: '16px',
+        border: '1px solid #cbd5e1',
+        borderRadius: '14px',
+        background: '#f8fafc',
+      },
+    });
+    wrapper.appendChild(
+      createElement(doc, 'div', {
+        text: `${packet.label} (${formatByteLength(packet.byteLength)})`,
+        styles: {
+          marginBottom: '12px',
+          fontSize: '13px',
+          fontWeight: '700',
+          color: '#0f172a',
+        },
+      })
+    );
+
+    const grid = createElement(doc, 'div', {
+      styles: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+        gap: '16px',
+        alignItems: 'start',
+      },
+    });
+
+    const binaryPane = createElement(doc, 'div');
+    binaryPane.appendChild(
+      createElement(doc, 'div', {
+        text: 'Binary editor',
+        styles: {
+          marginBottom: '8px',
+          fontSize: '12px',
+          fontWeight: '700',
+          color: '#334155',
+        },
+      })
+    );
+    binaryPane.appendChild(xmpEditor(doc, packet));
+
+    const decodedPane = createElement(doc, 'div');
+    decodedPane.appendChild(
+      createElement(doc, 'div', {
+        text: 'Decoded XMP',
+        styles: {
+          marginBottom: '8px',
+          fontSize: '12px',
+          fontWeight: '700',
+          color: '#334155',
+        },
+      })
+    );
+    decodedPane.appendChild(xmpPropertiesView(doc, packet));
+
+    grid.appendChild(binaryPane);
+    grid.appendChild(decodedPane);
+    wrapper.appendChild(grid);
+    return wrapper;
+  }
+
+  function xmpDecodeSection(doc, xmp) {
+    const wrapper = createElement(doc, 'div', {
+      styles: {
+        marginTop: '16px',
+      },
+    });
+    const button = createElement(doc, 'button', {
+      text: `Decode XMP (${xmp.packetCount})`,
+      attrs: {
+        type: 'button',
+      },
+      styles: {
+        border: '1px solid #cbd5e1',
+        borderRadius: '999px',
+        background: '#ffffff',
+        color: '#0f172a',
+        fontSize: '12px',
+        fontWeight: '700',
+        lineHeight: '1',
+        padding: '10px 14px',
+        cursor: 'pointer',
+      },
+    });
+
+    const panel = createElement(doc, 'div', {
+      styles: {
+        display: 'none',
+      },
+    });
+
+    button.addEventListener('click', () => {
+      const isOpen = panel.style.display !== 'none';
+      panel.style.display = isOpen ? 'none' : 'block';
+      button.textContent = isOpen ? `Decode XMP (${xmp.packetCount})` : 'Hide XMP';
+    });
+
+    panel.appendChild(
+      paragraph(
+        doc,
+        'XMP packets are decoded from the original image bytes. The left pane shows a hex-style binary editor view; the right pane shows decoded XML properties.',
+        {
+          marginTop: '12px',
+        }
+      )
+    );
+    xmp.packets.forEach((packet) => panel.appendChild(xmpPacketView(doc, packet)));
+
+    wrapper.appendChild(button);
+    wrapper.appendChild(panel);
+    return wrapper;
+  }
+
   function metadataSummaryRows(doc, image, metadata) {
-    const rows = [
-      ['Source', shortSourceLabel(metadata.sourceUrl)],
-      ['Format', String(metadata.container || metadata.mimeType || 'Unknown').toUpperCase()],
-      ['Size', formatByteLength(metadata.byteLength)],
-    ];
-    if (metadata.mimeType) rows.push(['MIME type', metadata.mimeType]);
+    const rows = [];
+    if (metadata?.summary?.camera?.display) rows.push(['Camera', metadata.summary.camera.display]);
+    if (metadata?.summary?.lens?.display) rows.push(['Lens', metadata.summary.lens.display]);
+    if (metadata?.summary?.capture?.display) rows.push(['Captured', metadata.summary.capture.display]);
+    if (metadata?.summary?.exposure?.display) rows.push(['Exposure', metadata.summary.exposure.display]);
     if (Number.isFinite(metadata?.summary?.gps?.latitude) && Number.isFinite(metadata?.summary?.gps?.longitude)) {
       rows.push(['Location', locationValue(doc, metadata.summary.gps)]);
     }
+    if (metadata?.summary?.image?.size) rows.push(['EXIF image size', metadata.summary.image.size]);
+    if (metadata?.summary?.image?.orientation) rows.push(['Orientation', metadata.summary.image.orientation]);
+    if (metadata?.summary?.software?.display) rows.push(['Software', metadata.summary.software.display]);
+    rows.push(['Source', shortSourceLabel(metadata.sourceUrl)]);
+    rows.push(['Format', String(metadata.container || metadata.mimeType || 'Unknown').toUpperCase()]);
+    rows.push(['Size', formatByteLength(metadata.byteLength)]);
+    if (metadata.mimeType) rows.push(['MIME type', metadata.mimeType]);
     if (Number.isFinite(image?.naturalWidth) && Number.isFinite(image?.naturalHeight)) {
       rows.push(['Natural size', `${image.naturalWidth} × ${image.naturalHeight}`]);
     }
@@ -476,6 +735,10 @@
     const children = [
       detailTable(doc, metadataSummaryRows(doc, image, metadata)),
     ];
+
+    if (metadata?.xmp?.hasXmp) {
+      children.push(xmpDecodeSection(doc, metadata.xmp));
+    }
 
     if (!metadata.hasExif || !Array.isArray(metadata.sections) || metadata.sections.length === 0) {
       children.push(
@@ -493,7 +756,7 @@
       children.push(
         detailTable(
           doc,
-          section.entries.map((entry) => [entry.name, entry.displayValue])
+          section.entries.map((entry) => [metadataLabel(doc, entry), entry.displayValue])
         )
       );
     }
