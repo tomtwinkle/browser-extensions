@@ -442,7 +442,7 @@ jobs:
 
       - name: Warm SenseVoice ASR cache
         if: startsWith(matrix.whisper_model, 'sensevoice')
-        timeout-minutes: 20
+        timeout-minutes: 40
         run: |
           MODEL_SPEC="${{ matrix.whisper_model }}"
           case "$MODEL_SPEC" in
@@ -469,6 +469,7 @@ jobs:
               vad_model="fsmn-vad",
               vad_kwargs={"max_single_segment_time": 30000},
               device=device,
+              disable_update=True,
           )
           print("SenseVoice cache ready")
           PY
