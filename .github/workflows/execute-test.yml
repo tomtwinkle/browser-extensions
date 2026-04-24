@@ -395,6 +395,10 @@ jobs:
               DEST="$MODEL_CACHE_DIR/llama/Bonsai-8B.gguf"
               URL="https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/f708df14d9e83594af9564fb4c9c345a571c481c/Bonsai-8B.gguf"
               ;;
+            qwen3:0.6b-q4_k_m)
+              DEST="$MODEL_CACHE_DIR/llama/Qwen3-0.6B-Q4_K_M.gguf"
+              URL="https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/50968a4468ef4233ed78cd7c3de230dd1d61a56b/Qwen3-0.6B-Q4_K_M.gguf"
+              ;;
             gemma4:e2b-q4_k_m)
               DEST="$MODEL_CACHE_DIR/llama/google_gemma-4-E2B-it-Q4_K_M.gguf"
               URL="https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/2b078a823b3180e03bcbe6c2dfc96afde936857b/google_gemma-4-E2B-it-Q4_K_M.gguf"
