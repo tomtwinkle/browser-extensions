@@ -8,6 +8,8 @@
     ui: null,
     hoveredImage: null,
     requestToken: 0,
+    activeTooltip: null,
+    tooltipHandlersBound: false,
   };
 
   function assignStyle(element, styles) {
@@ -201,6 +203,7 @@
     backdrop.addEventListener('click', (event) => {
       if (event.target === backdrop) closeModal();
     });
+    bindGlobalTooltipHandlers();
 
     state.ui = {
       container,
@@ -213,6 +216,28 @@
       closeButton,
     };
     return state.ui;
+  }
+
+  function bindGlobalTooltipHandlers() {
+    if (state.tooltipHandlersBound) return;
+
+    if (typeof root.document?.addEventListener === 'function') {
+      root.document.addEventListener('click', (event) => {
+        if (!state.activeTooltip) return;
+        if (containsNode(state.activeTooltip.wrapper, event.target)) return;
+        hideHelpTooltip(state.activeTooltip, { force: true });
+      });
+    }
+
+    if (typeof root.addEventListener === 'function') {
+      root.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && state.activeTooltip) {
+          hideHelpTooltip(state.activeTooltip, { force: true });
+        }
+      });
+    }
+
+    state.tooltipHandlersBound = true;
   }
 
   function containsNode(rootNode, target) {
@@ -335,6 +360,7 @@
 
   function openModal(titleText, subtitleText, children) {
     const ui = ensureUi();
+    closeActiveTooltip();
     ui.title.textContent = titleText;
     ui.subtitle.textContent = subtitleText;
     replaceChildren(ui.body, children);
@@ -343,6 +369,7 @@
 
   function closeModal() {
     if (!state.ui) return;
+    closeActiveTooltip();
     state.ui.backdrop.style.display = 'none';
   }
 
@@ -377,12 +404,53 @@
     return Boolean(value && typeof value === 'object' && typeof value.tagName === 'string');
   }
 
+  function setHelpTooltipOpen(tooltipState, isOpen) {
+    if (!tooltipState) return;
+    tooltipState.isOpen = isOpen;
+    tooltipState.bubble.hidden = !isOpen;
+    tooltipState.bubble.style.display = isOpen ? 'block' : 'none';
+    tooltipState.button.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  }
+
+  function hideHelpTooltip(tooltipState, { force = false } = {}) {
+    if (!tooltipState || (!force && tooltipState.pinned)) return;
+    tooltipState.pinned = false;
+    setHelpTooltipOpen(tooltipState, false);
+    if (state.activeTooltip === tooltipState) {
+      state.activeTooltip = null;
+    }
+  }
+
+  function showHelpTooltip(tooltipState, { pinned = false } = {}) {
+    if (!tooltipState) return;
+    if (state.activeTooltip && state.activeTooltip !== tooltipState) {
+      hideHelpTooltip(state.activeTooltip, { force: true });
+    }
+    tooltipState.pinned = pinned;
+    setHelpTooltipOpen(tooltipState, true);
+    state.activeTooltip = tooltipState;
+  }
+
+  function closeActiveTooltip() {
+    if (!state.activeTooltip) return;
+    hideHelpTooltip(state.activeTooltip, { force: true });
+  }
+
   function helpBadge(doc, description) {
-    return createElement(doc, 'span', {
+    const wrapper = createElement(doc, 'span', {
+      styles: {
+        position: 'relative',
+        display: 'inline-flex',
+        alignItems: 'center',
+        flex: '0 0 auto',
+      },
+    });
+    const button = createElement(doc, 'button', {
       text: '?',
       attrs: {
-        title: description,
-        'aria-label': description,
+        type: 'button',
+        'aria-label': 'Show field explanation',
+        'aria-expanded': 'false',
       },
       styles: {
         display: 'inline-flex',
@@ -390,16 +458,67 @@
         justifyContent: 'center',
         width: '16px',
         height: '16px',
+        padding: '0',
+        border: 'none',
         borderRadius: '999px',
         background: '#cbd5e1',
         color: '#0f172a',
         fontSize: '11px',
         fontWeight: '700',
         cursor: 'help',
-        flex: '0 0 auto',
         marginTop: '1px',
       },
     });
+    const bubble = createElement(doc, 'div', {
+      text: description,
+      attrs: {
+        role: 'tooltip',
+      },
+      styles: {
+        display: 'none',
+        position: 'absolute',
+        top: 'calc(100% + 6px)',
+        right: '0',
+        zIndex: '1',
+        minWidth: '220px',
+        maxWidth: '280px',
+        padding: '8px 10px',
+        borderRadius: '10px',
+        background: '#0f172a',
+        color: '#f8fafc',
+        fontSize: '12px',
+        fontWeight: '500',
+        lineHeight: '1.5',
+        boxShadow: '0 12px 28px rgba(15, 23, 42, 0.28)',
+      },
+    });
+    bubble.hidden = true;
+
+    const tooltipState = {
+      wrapper,
+      button,
+      bubble,
+      pinned: false,
+      isOpen: false,
+    };
+
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (tooltipState.isOpen && tooltipState.pinned) {
+        hideHelpTooltip(tooltipState, { force: true });
+        return;
+      }
+      showHelpTooltip(tooltipState, { pinned: true });
+    });
+    button.addEventListener('mouseenter', () => showHelpTooltip(tooltipState));
+    button.addEventListener('focus', () => showHelpTooltip(tooltipState));
+    wrapper.addEventListener('mouseleave', () => hideHelpTooltip(tooltipState));
+    button.addEventListener('blur', () => hideHelpTooltip(tooltipState));
+
+    wrapper.appendChild(button);
+    wrapper.appendChild(bubble);
+    return wrapper;
   }
 
   function metadataLabel(doc, entry) {

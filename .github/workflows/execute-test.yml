@@ -395,6 +395,10 @@ jobs:
               DEST="$MODEL_CACHE_DIR/llama/Bonsai-8B.gguf"
               URL="https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/f708df14d9e83594af9564fb4c9c345a571c481c/Bonsai-8B.gguf"
               ;;
+            qwen3:0.6b-q4_k_m)
+              DEST="$MODEL_CACHE_DIR/llama/Qwen3-0.6B-Q4_K_M.gguf"
+              URL="https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/50968a4468ef4233ed78cd7c3de230dd1d61a56b/Qwen3-0.6B-Q4_K_M.gguf"
+              ;;
             gemma4:e2b-q4_k_m)
               DEST="$MODEL_CACHE_DIR/llama/google_gemma-4-E2B-it-Q4_K_M.gguf"
               URL="https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/2b078a823b3180e03bcbe6c2dfc96afde936857b/google_gemma-4-E2B-it-Q4_K_M.gguf"
@@ -435,6 +439,40 @@ jobs:
             curl -L --retry 3 --retry-delay 5 --progress-bar -o "$DEST" "$URL"
             echo "Download complete: $(du -sh "$DEST" | cut -f1)"
           fi
+
+      - name: Warm SenseVoice ASR cache
+        if: startsWith(matrix.whisper_model, 'sensevoice')
+        timeout-minutes: 40
+        run: |
+          MODEL_SPEC="${{ matrix.whisper_model }}"
+          case "$MODEL_SPEC" in
+            sensevoice|sensevoice-small)
+              export MODEL_REF="iic/SenseVoiceSmall"
+              ;;
+            sensevoice:*)
+              export MODEL_REF="${MODEL_SPEC#sensevoice:}"
+              ;;
+            *)
+              echo "Skipping SenseVoice warmup for $MODEL_SPEC"
+              exit 0
+              ;;
+          esac
+          python - <<'PY'
+          import os
+          from funasr import AutoModel
+
+          model_ref = os.environ["MODEL_REF"]
+          device = os.environ.get("ASR_PYTHON_DEVICE", "cpu")
+          print(f"Warming SenseVoice cache for {model_ref} on {device}")
+          AutoModel(
+              model=model_ref,
+              vad_model="fsmn-vad",
+              vad_kwargs={"max_single_segment_time": 30000},
+              device=device,
+              disable_update=True,
+          )
+          print("SenseVoice cache ready")
+          PY
 
       # ── サーバーを起動 ────────────────────────────────────────────────────
       # モデルは事前ダウンロード済みのためキャッシュを使用。
