@@ -4,6 +4,8 @@
 
 [English README](README.md)
 
+![Hover EXIF Viewer preview](./assets/hover-exif-viewer-preview.svg)
+
 ## 機能
 
 - 画像の右下付近に `EXIF` ボタンをホバー時のみ表示

@@ -4,6 +4,8 @@ A Chrome / Edge Manifest V3 extension that shows a small button only while the p
 
 [日本語版 README](README.ja.md)
 
+![Hover EXIF Viewer preview](./assets/hover-exif-viewer-preview.svg)
+
 ## Features
 
 - Shows an `EXIF` button near the lower-right corner of the hovered image
