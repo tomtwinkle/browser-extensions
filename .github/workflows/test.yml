@@ -28,6 +28,9 @@ jobs:
 
       - name: Check extension scripts
         run: |
+          node --check exif-viewer/shared.js
+          node --check exif-viewer/background.js
+          node --check exif-viewer/content.js
           node --check meet-translator/extension/shared.js
           node --check meet-translator/extension/background.js
           node --check meet-translator/extension/content.js
@@ -37,7 +40,7 @@ jobs:
           node --check meet-translator/extension/i18n.js
 
       - name: Run extension tests
-        run: node --test meet-translator/extension/tests/*.test.js
+        run: node --test exif-viewer/tests/*.test.js meet-translator/extension/tests/*.test.js
 
   test:
     name: Test (${{ matrix.name }})

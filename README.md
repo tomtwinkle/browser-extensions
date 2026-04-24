@@ -8,6 +8,7 @@ A monorepo of Chrome / Edge browser extensions.
 
 | Extension | Description | README |
 |---|---|---|
+| [exif-viewer](exif-viewer/) | Hover EXIF Viewer – shows an EXIF button only while hovering an image and displays the image's metadata in-page | [README](exif-viewer/README.md) |
 | [meet-translator](meet-translator/) | Google Meet Auto-Translate Chat – real-time speech transcription & translation posted to Meet chat | [README](meet-translator/README.md) |
 
 ## Third-Party Licenses

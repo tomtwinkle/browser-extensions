@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Hover EXIF Viewer",
+  "version": "1.0.0",
+  "description": "Shows an EXIF button when you hover an image and displays its EXIF metadata.",
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Hover EXIF Viewer"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "shared.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
