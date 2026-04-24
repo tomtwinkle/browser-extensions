@@ -440,6 +440,39 @@ jobs:
             echo "Download complete: $(du -sh "$DEST" | cut -f1)"
           fi
 
+      - name: Warm SenseVoice ASR cache
+        if: startsWith(matrix.whisper_model, 'sensevoice')
+        timeout-minutes: 20
+        run: |
+          MODEL_SPEC="${{ matrix.whisper_model }}"
+          case "$MODEL_SPEC" in
+            sensevoice|sensevoice-small)
+              export MODEL_REF="iic/SenseVoiceSmall"
+              ;;
+            sensevoice:*)
+              export MODEL_REF="${MODEL_SPEC#sensevoice:}"
+              ;;
+            *)
+              echo "Skipping SenseVoice warmup for $MODEL_SPEC"
+              exit 0
+              ;;
+          esac
+          python - <<'PY'
+          import os
+          from funasr import AutoModel
+
+          model_ref = os.environ["MODEL_REF"]
+          device = os.environ.get("ASR_PYTHON_DEVICE", "cpu")
+          print(f"Warming SenseVoice cache for {model_ref} on {device}")
+          AutoModel(
+              model=model_ref,
+              vad_model="fsmn-vad",
+              vad_kwargs={"max_single_segment_time": 30000},
+              device=device,
+          )
+          print("SenseVoice cache ready")
+          PY
+
       # ── サーバーを起動 ────────────────────────────────────────────────────
       # モデルは事前ダウンロード済みのためキャッシュを使用。
       - name: Start server
