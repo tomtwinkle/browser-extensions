@@ -335,15 +335,28 @@ test('renderMetadata shows summary rows, tooltip labels, and expands XMP decode 
   assert.match(flattenText(ui.body), /Camera model/);
   assert.match(flattenText(ui.body), /Model/);
 
+  const tooltipButton = findFirst(
+    ui.body,
+    (node) =>
+      node.tagName === 'BUTTON' &&
+      node.textContent === '?' &&
+      node.getAttribute('aria-label') === 'Show field explanation'
+  );
+  assert.ok(tooltipButton);
+  assert.equal(tooltipButton.getAttribute('aria-expanded'), 'false');
+
+  tooltipButton.click();
+
   const tooltip = findFirst(
     ui.body,
-    (node) => node.tagName === 'SPAN' && node.getAttribute('title') != null
+    (node) => node.tagName === 'DIV' && node.getAttribute('role') === 'tooltip' && node.hidden === false
   );
   assert.ok(tooltip);
   assert.equal(
-    tooltip.getAttribute('title'),
+    tooltip.textContent,
     'Camera body model recorded when the image was captured.'
   );
+  assert.equal(tooltipButton.getAttribute('aria-expanded'), 'true');
 
   const xmpButton = findFirst(
     ui.body,
