@@ -9,6 +9,7 @@ A Chrome / Edge Manifest V3 extension that shows a small button only while the p
 ## Features
 
 - Shows an `EXIF` button near the lower-right corner of the hovered image
+- Ignores tiny icon-like images that are too small to comfortably show the hover button
 - Reads EXIF metadata from JPEG, PNG (`eXIf`), WebP (`EXIF`), and TIFF payloads
 - Surfaces more high-value metadata such as camera model, lens, capture time, exposure, image size, GPS, and other useful EXIF fields
 - Adds clearer per-field titles and hover tooltips so each EXIF item is easier to understand

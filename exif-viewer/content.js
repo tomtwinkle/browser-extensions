@@ -3,6 +3,12 @@
 
   const shared = root.ExifViewerShared;
   const UI_ROOT_ID = 'hover-exif-viewer-root';
+  const HOVER_BUTTON_MIN_WIDTH = 72;
+  const HOVER_BUTTON_HEIGHT = 32;
+  const BUTTON_IMAGE_PADDING = 12;
+  const VIEWPORT_EDGE_PADDING = 8;
+  const MIN_ELIGIBLE_IMAGE_WIDTH = HOVER_BUTTON_MIN_WIDTH + BUTTON_IMAGE_PADDING * 2;
+  const MIN_ELIGIBLE_IMAGE_HEIGHT = HOVER_BUTTON_HEIGHT + BUTTON_IMAGE_PADDING * 2;
 
   const state = {
     ui: null,
@@ -75,8 +81,8 @@
         display: 'none',
         alignItems: 'center',
         justifyContent: 'center',
-        minWidth: '72px',
-        height: '32px',
+        minWidth: `${HOVER_BUTTON_MIN_WIDTH}px`,
+        height: `${HOVER_BUTTON_HEIGHT}px`,
         padding: '0 12px',
         border: '1px solid rgba(15, 23, 42, 0.2)',
         borderRadius: '999px',
@@ -289,8 +295,17 @@
     );
   }
 
+  function isLargeEnoughRect(rect) {
+    return Boolean(
+      rect &&
+      rect.width >= MIN_ELIGIBLE_IMAGE_WIDTH &&
+      rect.height >= MIN_ELIGIBLE_IMAGE_HEIGHT
+    );
+  }
+
   function isEligibleImage(image) {
-    return Boolean(image && imageSource(image) && isVisibleRect(imageRect(image)));
+    const rect = imageRect(image);
+    return Boolean(image && imageSource(image) && isVisibleRect(rect) && isLargeEnoughRect(rect));
   }
 
   function showButtonForImage(image) {
@@ -312,10 +327,22 @@
       hideButton();
       return;
     }
-    const buttonWidth = ui.button.offsetWidth || 72;
-    const buttonHeight = ui.button.offsetHeight || 32;
-    const left = Math.max(8, Math.min(viewportWidth() - buttonWidth - 8, rect.right - buttonWidth - 12));
-    const top = Math.max(8, Math.min(viewportHeight() - buttonHeight - 8, rect.bottom - buttonHeight - 12));
+    const buttonWidth = ui.button.offsetWidth || HOVER_BUTTON_MIN_WIDTH;
+    const buttonHeight = ui.button.offsetHeight || HOVER_BUTTON_HEIGHT;
+    const left = Math.max(
+      VIEWPORT_EDGE_PADDING,
+      Math.min(
+        viewportWidth() - buttonWidth - VIEWPORT_EDGE_PADDING,
+        rect.right - buttonWidth - BUTTON_IMAGE_PADDING
+      )
+    );
+    const top = Math.max(
+      VIEWPORT_EDGE_PADDING,
+      Math.min(
+        viewportHeight() - buttonHeight - VIEWPORT_EDGE_PADDING,
+        rect.bottom - buttonHeight - BUTTON_IMAGE_PADDING
+      )
+    );
     ui.button.style.left = `${Math.round(left)}px`;
     ui.button.style.top = `${Math.round(top)}px`;
   }
