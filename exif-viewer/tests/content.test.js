@@ -195,6 +195,27 @@ test('handlePointerMove hides the hover button after leaving the image', () => {
   assert.equal(ui.button.style.display, 'none');
 });
 
+test('handlePointerMove ignores tiny icon-like images', () => {
+  const api = loadContentScript();
+  const image = createElement('img', {
+    left: 120,
+    top: 80,
+    right: 168,
+    bottom: 128,
+    width: 48,
+    height: 48,
+  });
+  image.currentSrc = 'https://example.com/icon.png';
+
+  api.handlePointerMove({ target: image });
+  const ui = api.ensureUi();
+
+  assert.equal(api.state.hoveredImage, null);
+  assert.equal(api.isEligibleImage(image), false);
+  assert.equal(ui.button.hidden, true);
+  assert.equal(ui.button.style.display, 'none');
+});
+
 test('renderMetadata renders an explicit no-EXIF message when metadata is absent', () => {
   const api = loadContentScript();
   const image = createElement('img', {
