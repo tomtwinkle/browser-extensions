@@ -7,6 +7,7 @@
 #include <cstring>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -137,9 +138,18 @@ int whisper_bridge_transcribe(
         return -1;
     }
 
-    // Whisper が検出した言語を取得
+    // Whisper が実際に聞き取った言語を取得する。
+    // whisper_full_lang_id() は caller が固定言語を渡した場合にそのヒントを返すため、
+    // mel から再推定した結果を優先して background 側の翻訳方向判定に渡す。
     if (lang_out_buf && lang_out_size > 0) {
-        int lang_id = whisper_full_lang_id(ctx);
+        int lang_id = -1;
+        std::vector<float> lang_probs(whisper_lang_max_id() + 1, 0.0f);
+        if (!lang_probs.empty()) {
+            lang_id = whisper_lang_auto_detect(ctx, 0, kWhisperThreads, lang_probs.data());
+        }
+        if (lang_id < 0) {
+            lang_id = whisper_full_lang_id(ctx);
+        }
         const char* lang_str = whisper_lang_str(lang_id);
         strncpy(lang_out_buf, lang_str ? lang_str : "", lang_out_size - 1);
         lang_out_buf[lang_out_size - 1] = '\0';

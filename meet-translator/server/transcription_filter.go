@@ -79,6 +79,10 @@ var hallucinationExactPhrases = []string{
 	"またね",
 	"バイバイ",
 	"私たちのことを持っています",
+	// ── 日本語: 短い単語/句のハルシネーション ───────────────────────────────
+	"銀ゴラビュー",
+	"すべての音楽を",
+	"コンテンツ",
 	// ── 日本語: チャンネル登録・高評価 ───────────────────────────────────
 	"チャンネル登録よろしくお願いします",
 	"チャンネル登録お願いします",
@@ -152,6 +156,26 @@ func normalizeForDedup(s string) string {
 		}
 	}
 	return b.String()
+}
+
+func isHallucinationClauseBoundary(r rune) bool {
+	switch r {
+	case '\n', '\r', '\t', '.', ',', ';', ':', '!', '?', '。', '、', '；', '：', '！', '？', '…', '/', '／', '|', '｜':
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizedHallucinationClauses(text string) []string {
+	rawClauses := strings.FieldsFunc(text, isHallucinationClauseBoundary)
+	clauses := make([]string, 0, len(rawClauses))
+	for _, clause := range rawClauses {
+		if norm := normalizeForDedup(clause); norm != "" {
+			clauses = append(clauses, norm)
+		}
+	}
+	return clauses
 }
 
 func runeSlicesEqual(a, b []rune) bool {
@@ -256,15 +280,23 @@ func hasDominantRepeatedNormalizedRun(norm string, minUnitRunes, minRepeats int)
 //
 // 判定ロジック:
 //  1. 正規化後に hallucinationExactPhrases のいずれかと完全一致
-//  2. 正規化後に hallucinationSubstrings のいずれかを部分一致で含む
+//  2. 句読点区切りの各句が hallucinationExactPhrases のいずれかと完全一致
+//  3. 正規化後に hallucinationSubstrings のいずれかを部分一致で含む
 func isKnownHallucination(text string) bool {
 	norm := normalizeForDedup(text)
 	if norm == "" {
 		return false
 	}
+	clauses := normalizedHallucinationClauses(text)
 	for _, phrase := range hallucinationExactPhrases {
-		if norm == normalizeForDedup(phrase) {
+		normPhrase := normalizeForDedup(phrase)
+		if norm == normPhrase {
 			return true
+		}
+		for _, clause := range clauses {
+			if clause == normPhrase {
+				return true
+			}
 		}
 	}
 	for _, sub := range hallucinationSubstrings {
