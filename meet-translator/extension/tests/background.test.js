@@ -138,3 +138,110 @@ test('submitGlossaryFeedback trims source and target before posting to the serve
   assert.equal(payload.target, 'GitHub');
   assert.match(payload.description, /^user-feedback \| speaker=Test Speaker \| original=get hub \| translation=translated$/);
 });
+
+test('resolveTranscriptionSourceLang keeps Whisper on auto-detect for bidirectional meetings', () => {
+  const { context } = loadBackgroundScript();
+
+  assert.equal(
+    context.resolveTranscriptionSourceLang({
+      sourceLang: 'en',
+      targetLang: 'ja',
+      bidirectional: true,
+    }),
+    ''
+  );
+  assert.equal(
+    context.resolveTranscriptionSourceLang({
+      sourceLang: 'en',
+      targetLang: 'ja',
+      bidirectional: false,
+    }),
+    'en'
+  );
+  assert.equal(
+    context.resolveTranscriptionSourceLang({
+      sourceLang: 'en',
+      targetLang: 'en',
+      bidirectional: true,
+    }),
+    'en'
+  );
+});
+
+test('shouldRequestTranscription drops very short utterances before calling the server', () => {
+  const { context } = loadBackgroundScript();
+
+  assert.equal(context.shouldRequestTranscription(999), false);
+  assert.equal(context.shouldRequestTranscription(1000), true);
+});
+
+test('transcribeOnly forwards speech duration to the server guardrails', async () => {
+  const requests = [];
+  const { context } = loadBackgroundScript({
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return {
+        ok: true,
+        async json() {
+          return { transcription: '', detected_language: '' };
+        },
+      };
+    },
+  });
+
+  await context.transcribeOnly(Buffer.from('RIFF').toString('base64'), {
+    serverUrl: 'http://localhost:17070',
+    sourceLang: '',
+    targetLang: 'ja',
+    bidirectional: false,
+  }, 5123.8);
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, 'http://localhost:17070/transcribe');
+  assert.equal(requests[0].options.body.get('speech_ms'), '5124');
+});
+
+test('resolveTranscriptLanguage rejects transcriptions outside the configured language set', () => {
+  const { context } = loadBackgroundScript();
+
+  const fixedSource = context.resolveTranscriptLanguage(
+    {
+      sourceLang: 'en',
+      targetLang: 'ja',
+      bidirectional: false,
+    },
+    'コンテンツ',
+    'ja'
+  );
+  assert.equal(fixedSource.accepted, false);
+  assert.equal(fixedSource.language, null);
+  assert.equal(fixedSource.reason, 'unexpected language ja');
+
+  const bidirectional = context.resolveTranscriptLanguage(
+    {
+      sourceLang: 'en',
+      targetLang: 'ja',
+      bidirectional: true,
+    },
+    'こんにちは',
+    ''
+  );
+  assert.equal(bidirectional.accepted, true);
+  assert.equal(bidirectional.language, 'ja');
+});
+
+test('resolveTranscriptLanguage prefers text heuristics when ASR detection is misleading', () => {
+  const { context } = loadBackgroundScript();
+
+  const result = context.resolveTranscriptLanguage(
+    {
+      sourceLang: 'en',
+      targetLang: 'ja',
+      bidirectional: false,
+    },
+    'Hello everyone',
+    'ja'
+  );
+  assert.equal(result.accepted, true);
+  assert.equal(result.language, 'en');
+});

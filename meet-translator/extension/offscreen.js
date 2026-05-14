@@ -284,7 +284,7 @@ function finishSpeech(reason) {
       ', peakRms=' + speechPeakRms.toFixed(6) + ')'
   );
   if (verdict.shouldFlush) {
-    flushSpeech(speechSamples);
+    flushSpeech(speechSamples, speechMs);
   } else {
     bgLog(
       'info',
@@ -313,7 +313,7 @@ function bufferToBase64(buffer) {
 }
 
 /** Encode and send the accumulated speech samples to the background worker. */
-function flushSpeech(chunks) {
+function flushSpeech(chunks, speechDurationMs) {
   if (chunks.length === 0) return;
   const sampleRate = audioContext ? audioContext.sampleRate : 48000;
   const wavBuffer = encodeWav(chunks, sampleRate);
@@ -323,7 +323,11 @@ function flushSpeech(chunks) {
   // structured-clone で backing ArrayBuffer を転送（detach）し、受信側で
   // byteLength === 0 になる場合がある（→ サーバーで RIFF ヘッダー読み取りエラー）。
   // 文字列は必ずコピーされるため安全。Array<number> より約 3 倍コンパクト。
-  chrome.runtime.sendMessage({ type: 'AUDIO_DATA', wavB64: bufferToBase64(wavBuffer) });
+  chrome.runtime.sendMessage({
+    type: 'AUDIO_DATA',
+    wavB64: bufferToBase64(wavBuffer),
+    speechMs: Number.isFinite(speechDurationMs) ? speechDurationMs : null,
+  });
 }
 
 // ---------------------------------------------------------------------------
