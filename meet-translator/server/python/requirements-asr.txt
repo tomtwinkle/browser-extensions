@@ -4,3 +4,4 @@ torchaudio
 funasr
 modelscope
 whisperx
+transformers>=4.39

@@ -225,6 +225,84 @@ func TestResolveWhisperModel_WhisperXPrefix(t *testing.T) {
 	}
 }
 
+func TestResolveWhisperModel_TransformersAlias(t *testing.T) {
+	got, err := resolveWhisperModel("kotoba-whisper-v2.2")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != asrBackendTransformersWhisper {
+		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendTransformersWhisper)
+	}
+	if got.ResolvedSpec != "kotoba-tech/kotoba-whisper-v2.2" {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, "kotoba-tech/kotoba-whisper-v2.2")
+	}
+}
+
+func TestResolveWhisperModel_TransformersModelRef(t *testing.T) {
+	got, err := resolveWhisperModel("kotoba-tech/kotoba-whisper-v2.2")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != asrBackendTransformersWhisper {
+		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendTransformersWhisper)
+	}
+	if got.ResolvedSpec != "kotoba-tech/kotoba-whisper-v2.2" {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, "kotoba-tech/kotoba-whisper-v2.2")
+	}
+}
+
+func TestResolveWhisperModel_KotobaWhisperXFasterAlias(t *testing.T) {
+	got, err := resolveWhisperModel("kotoba-whisper-v2.2-faster")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != asrBackendWhisperX {
+		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendWhisperX)
+	}
+	if got.ResolvedSpec != "RoachLin/kotoba-whisper-v2.2-faster" {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, "RoachLin/kotoba-whisper-v2.2-faster")
+	}
+}
+
+func TestResolveWhisperModel_KotobaWhisperXFasterModelRef(t *testing.T) {
+	got, err := resolveWhisperModel("RoachLin/kotoba-whisper-v2.2-faster")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != asrBackendWhisperX {
+		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendWhisperX)
+	}
+	if got.ResolvedSpec != "RoachLin/kotoba-whisper-v2.2-faster" {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, "RoachLin/kotoba-whisper-v2.2-faster")
+	}
+}
+
+func TestResolveWhisperModel_WhisperXUppercaseAlias(t *testing.T) {
+	got, err := resolveWhisperModel("whisperX")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != asrBackendWhisperX {
+		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendWhisperX)
+	}
+	if got.ResolvedSpec != "large-v3" {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, "large-v3")
+	}
+}
+
+func TestResolveWhisperModel_WhisperXUppercasePrefix(t *testing.T) {
+	got, err := resolveWhisperModel("whisperX:small")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != asrBackendWhisperX {
+		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendWhisperX)
+	}
+	if got.ResolvedSpec != "small" {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, "small")
+	}
+}
+
 // ─── resolveLlamaModel ───────────────────────────────────────────────────────
 
 func TestResolveLlamaModel_ExistingFile(t *testing.T) {

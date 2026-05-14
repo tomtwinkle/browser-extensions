@@ -216,7 +216,22 @@ jobs:
           - os: ubuntu-latest
             name: ubuntu-amd64
             bin: server
+            whisper_model: kotoba-whisper-v2.2
+            llama_model: qwen3:0.6b-q4_k_m
+          - os: ubuntu-latest
+            name: ubuntu-amd64
+            bin: server
+            whisper_model: kotoba-whisper-v2.2-faster
+            llama_model: qwen3:0.6b-q4_k_m
+          - os: ubuntu-latest
+            name: ubuntu-amd64
+            bin: server
             whisper_model: whisperx:small
+            llama_model: qwen3:0.6b-q4_k_m
+          - os: ubuntu-latest
+            name: ubuntu-amd64
+            bin: server
+            whisper_model: whisperX:small
             llama_model: qwen3:0.6b-q4_k_m
 
     env:
@@ -247,7 +262,7 @@ jobs:
           key: models-v1-${{ runner.os }}-${{ runner.arch }}-whisper-${{ matrix.whisper_model }}-${{ matrix.llama_model }}
 
       - name: Set Python ASR cache paths
-        if: startsWith(matrix.whisper_model, 'sensevoice') || startsWith(matrix.whisper_model, 'whisperx')
+        if: contains(matrix.whisper_model, 'kotoba-whisper-v2.2') || startsWith(matrix.whisper_model, 'sensevoice') || startsWith(matrix.whisper_model, 'whisperx') || startsWith(matrix.whisper_model, 'whisperX')
         run: |
           echo "HF_HOME=$GITHUB_WORKSPACE/hf-home" >> $GITHUB_ENV
           echo "MODELSCOPE_CACHE=$GITHUB_WORKSPACE/modelscope-cache" >> $GITHUB_ENV
@@ -258,7 +273,7 @@ jobs:
           echo "HF_HOME=$GITHUB_WORKSPACE/hf-home" >> $GITHUB_ENV
 
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        if: startsWith(matrix.whisper_model, 'sensevoice') || startsWith(matrix.whisper_model, 'whisperx')
+        if: contains(matrix.whisper_model, 'kotoba-whisper-v2.2') || startsWith(matrix.whisper_model, 'sensevoice') || startsWith(matrix.whisper_model, 'whisperx') || startsWith(matrix.whisper_model, 'whisperX')
         with:
           path: |
             ${{ github.workspace }}/hf-home
@@ -272,13 +287,13 @@ jobs:
           key: py-mlx-cache-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.llama_model }}
 
       - name: Setup Python (Python-backed ASR / MLX only)
-        if: startsWith(matrix.whisper_model, 'sensevoice') || startsWith(matrix.whisper_model, 'whisperx') || matrix.os == 'macos-latest'
+        if: contains(matrix.whisper_model, 'kotoba-whisper-v2.2') || startsWith(matrix.whisper_model, 'sensevoice') || startsWith(matrix.whisper_model, 'whisperx') || startsWith(matrix.whisper_model, 'whisperX') || matrix.os == 'macos-latest'
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
 
       - name: Install ASR runtime dependencies
-        if: startsWith(matrix.whisper_model, 'sensevoice') || startsWith(matrix.whisper_model, 'whisperx')
+        if: contains(matrix.whisper_model, 'kotoba-whisper-v2.2') || startsWith(matrix.whisper_model, 'sensevoice') || startsWith(matrix.whisper_model, 'whisperx') || startsWith(matrix.whisper_model, 'whisperX')
         run: |
           python -m pip install --upgrade pip
           if [ "${{ runner.os }}" = "Linux" ]; then
@@ -289,7 +304,10 @@ jobs:
             sensevoice*)
               python -m pip install torch torchaudio funasr modelscope
               ;;
-            whisperx*)
+            kotoba-whisper-v2.2|kotoba-tech/kotoba-whisper-v2.2)
+              python -m pip install torch "transformers>=4.39"
+              ;;
+            whisperx*|whisperX*|kotoba-whisper-v2.2-faster|RoachLin/kotoba-whisper-v2.2-faster)
               python -m pip install torch whisperx
               ;;
           esac
@@ -502,7 +520,7 @@ jobs:
             attempts=120
           fi
           case "${{ matrix.whisper_model }}" in
-            kotoba-whisper*|sensevoice*|whisperx*) attempts=120 ;;
+            kotoba-whisper*|sensevoice*|whisperx*|whisperX*) attempts=120 ;;
           esac
           echo "Waiting for server to become ready (up to $((attempts * 5 / 60)) minutes)..."
           for i in $(seq 1 "$attempts"); do

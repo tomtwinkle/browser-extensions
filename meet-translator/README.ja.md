@@ -240,10 +240,12 @@ curl http://localhost:7070/health
 | `large-v3-turbo` | 809 MB | ◎ **default floor** (高速) |
 | `kotoba-whisper` | 3.1 GB | ◎◎ 日本語特化の Kotoba-Whisper v2.0 |
 | `kotoba-whisper-q5_0` | ≈ 1.0 GB | ◎ 量子化版 Kotoba-Whisper v2.0 |
+| `kotoba-whisper-v2.2` / `kotoba-tech/kotoba-whisper-v2.2` | モデル側で管理 | ◎◎ ローカル Python Transformers worker 経由の Kotoba-Whisper v2.2 |
+| `kotoba-whisper-v2.2-faster` / `RoachLin/kotoba-whisper-v2.2-faster` | モデル側で管理 | ◎◎ WhisperX / faster-whisper 経由の Kotoba-Whisper v2.2 |
 | `sensevoice` | モデル側で管理 | ◎ ローカル Python worker 経由の高速多言語 ASR |
-| `whisperx` | モデル側で管理 | ◎ ローカル Python worker 経由の WhisperX large-v3 |
+| `whisperx` / `whisperX` | モデル側で管理 | ◎ ローカル Python worker 経由の WhisperX large-v3 |
 
-`sensevoice:<model-ref>` と `whisperx:<model-name>` の高度な指定にも対応します。
+`sensevoice:<model-ref>` と `whisperx:<model-name>`（`whisperX:<model-name>` も可）の高度な指定にも対応します。
 
 SenseVoice / WhisperX はローカル Python worker を使います。`uv` が入っていれば isolated 環境を自動で用意できます。そうでない場合は、先にローカル Python 依存を入れ、`ffmpeg` を `PATH` から参照できるようにしてください。
 

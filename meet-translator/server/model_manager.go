@@ -110,6 +110,22 @@ var whisperRegistry = map[string]WhisperEntry{
 		URL:           "https://huggingface.co/kotoba-tech/kotoba-whisper-v2.0-ggml/resolve/main/ggml-kotoba-whisper-v2.0-q5_0.bin",
 		CacheFilename: "ggml-kotoba-whisper-v2.0-q5_0.bin",
 	},
+	"kotoba-whisper-v2.2": {
+		Backend:  asrBackendTransformersWhisper,
+		ModelRef: "kotoba-tech/kotoba-whisper-v2.2",
+	},
+	"kotoba-tech/kotoba-whisper-v2.2": {
+		Backend:  asrBackendTransformersWhisper,
+		ModelRef: "kotoba-tech/kotoba-whisper-v2.2",
+	},
+	"kotoba-whisper-v2.2-faster": {
+		Backend:  asrBackendWhisperX,
+		ModelRef: "RoachLin/kotoba-whisper-v2.2-faster",
+	},
+	"RoachLin/kotoba-whisper-v2.2-faster": {
+		Backend:  asrBackendWhisperX,
+		ModelRef: "RoachLin/kotoba-whisper-v2.2-faster",
+	},
 	"sensevoice": {
 		Backend:  asrBackendSenseVoice,
 		ModelRef: "iic/SenseVoiceSmall",
@@ -119,6 +135,10 @@ var whisperRegistry = map[string]WhisperEntry{
 		ModelRef: "iic/SenseVoiceSmall",
 	},
 	"whisperx": {
+		Backend:  asrBackendWhisperX,
+		ModelRef: "large-v3",
+	},
+	"whisperX": {
 		Backend:  asrBackendWhisperX,
 		ModelRef: "large-v3",
 	},
@@ -262,6 +282,21 @@ func templateFor(modelName string) string {
 	return "qwen"
 }
 
+func canonicalWhisperSpec(spec string) string {
+	spec = strings.TrimSpace(spec)
+	if _, ok := whisperRegistry[spec]; ok {
+		return spec
+	}
+	if strings.ContainsAny(spec, "/\\") {
+		return spec
+	}
+	lower := strings.ToLower(spec)
+	if _, ok := whisperRegistry[lower]; ok {
+		return lower
+	}
+	return spec
+}
+
 // hasThinkingSupport はモデルが thinking モードに対応しているか返す。
 func hasThinkingSupport(modelName string) bool {
 	e, ok := llamaRegistry[canonicalLlamaSpec(modelName)]
@@ -317,6 +352,7 @@ func modelCacheDir() string {
 
 // resolveWhisperModel はモデル名またはファイルパスを実際のバックエンド設定に解決する。
 func resolveWhisperModel(spec string) (ResolvedWhisperModel, error) {
+	spec = strings.TrimSpace(spec)
 	if spec == "" {
 		return ResolvedWhisperModel{}, fmt.Errorf("whisper model not specified\n  available models: %s", sortedWhisperKeys())
 	}
@@ -331,12 +367,12 @@ func resolveWhisperModel(spec string) (ResolvedWhisperModel, error) {
 	if resolved, ok, err := resolveSpecialWhisperSpec(spec); ok || err != nil {
 		return resolved, err
 	}
-	if strings.ContainsAny(spec, "/\\") {
-		return ResolvedWhisperModel{}, fmt.Errorf("file not found: %s", spec)
-	}
-
-	entry, ok := whisperRegistry[spec]
+	canonicalSpec := canonicalWhisperSpec(spec)
+	entry, ok := whisperRegistry[canonicalSpec]
 	if !ok {
+		if strings.ContainsAny(spec, "/\\") {
+			return ResolvedWhisperModel{}, fmt.Errorf("file not found: %s", spec)
+		}
 		return ResolvedWhisperModel{}, fmt.Errorf("unknown whisper model: %q\n  available: %s", spec, sortedWhisperKeys())
 	}
 
@@ -344,13 +380,13 @@ func resolveWhisperModel(spec string) (ResolvedWhisperModel, error) {
 		return ResolvedWhisperModel{
 			Backend:      entry.Backend,
 			Spec:         spec,
-			ResolvedSpec: entry.ModelRef,
+			ResolvedSpec: resolvedPythonWhisperModelRef(canonicalSpec, entry),
 		}, nil
 	}
 
-	dest := filepath.Join(modelCacheDir(), "whisper", cacheFilenameForWhisperEntry(spec, entry))
+	dest := filepath.Join(modelCacheDir(), "whisper", cacheFilenameForWhisperEntry(canonicalSpec, entry))
 	if _, err := os.Stat(dest); err == nil {
-		logV("whisper/%s: using cache %s", spec, dest)
+		logV("whisper/%s: using cache %s", canonicalSpec, dest)
 		return ResolvedWhisperModel{
 			Backend:      asrBackendWhisperCPP,
 			Spec:         spec,
@@ -358,9 +394,9 @@ func resolveWhisperModel(spec string) (ResolvedWhisperModel, error) {
 		}, nil
 	}
 
-	fmt.Printf("[model] downloading whisper/%s...\n  %s\n", spec, entry.URL)
+	fmt.Printf("[model] downloading whisper/%s...\n  %s\n", canonicalSpec, entry.URL)
 	if err := downloadModel(entry.URL, dest); err != nil {
-		return ResolvedWhisperModel{}, fmt.Errorf("download failed (%s): %w", spec, err)
+		return ResolvedWhisperModel{}, fmt.Errorf("download failed (%s): %w", canonicalSpec, err)
 	}
 	return ResolvedWhisperModel{
 		Backend:      asrBackendWhisperCPP,
@@ -458,8 +494,11 @@ func sortedLlamaKeys() string {
 }
 
 func resolveSpecialWhisperSpec(spec string) (ResolvedWhisperModel, bool, error) {
-	if strings.HasPrefix(spec, "sensevoice:") {
-		ref := strings.TrimSpace(strings.TrimPrefix(spec, "sensevoice:"))
+	spec = strings.TrimSpace(spec)
+	lower := strings.ToLower(spec)
+
+	if strings.HasPrefix(lower, "sensevoice:") {
+		ref := strings.TrimSpace(spec[len("sensevoice:"):])
 		if ref == "" {
 			return ResolvedWhisperModel{}, true, fmt.Errorf("sensevoice backend requires a model ref after sensevoice:")
 		}
@@ -470,8 +509,8 @@ func resolveSpecialWhisperSpec(spec string) (ResolvedWhisperModel, bool, error) 
 		}, true, nil
 	}
 
-	if strings.HasPrefix(spec, "whisperx:") {
-		ref := strings.TrimSpace(strings.TrimPrefix(spec, "whisperx:"))
+	if strings.HasPrefix(lower, "whisperx:") {
+		ref := strings.TrimSpace(spec[len("whisperx:"):])
 		if ref == "" {
 			return ResolvedWhisperModel{}, true, fmt.Errorf("whisperx backend requires a model name after whisperx:")
 		}
@@ -483,6 +522,13 @@ func resolveSpecialWhisperSpec(spec string) (ResolvedWhisperModel, bool, error) 
 	}
 
 	return ResolvedWhisperModel{}, false, nil
+}
+
+func resolvedPythonWhisperModelRef(spec string, entry WhisperEntry) string {
+	if entry.ModelRef != "" {
+		return entry.ModelRef
+	}
+	return spec
 }
 
 func normalizeSenseVoiceModelRef(ref string) string {

@@ -237,10 +237,12 @@ Specify a model name with `--whisper-model` and it will be downloaded automatica
 | `large-v3-turbo` | 809 MB | ◎ **default floor** (fast) |
 | `kotoba-whisper` | 3.1 GB | ◎◎ Japanese-focused Kotoba-Whisper v2.0 |
 | `kotoba-whisper-q5_0` | ≈ 1.0 GB | ◎ Quantized Kotoba-Whisper v2.0 |
+| `kotoba-whisper-v2.2` / `kotoba-tech/kotoba-whisper-v2.2` | model-managed | ◎◎ Kotoba-Whisper v2.2 via local Python Transformers worker |
+| `kotoba-whisper-v2.2-faster` / `RoachLin/kotoba-whisper-v2.2-faster` | model-managed | ◎◎ Kotoba-Whisper v2.2 via WhisperX / faster-whisper |
 | `sensevoice` | model-managed | ◎ Fast multilingual ASR via local Python worker |
-| `whisperx` | model-managed | ◎ WhisperX large-v3 via local Python worker |
+| `whisperx` / `whisperX` | model-managed | ◎ WhisperX large-v3 via local Python worker |
 
-Advanced forms are also supported: `sensevoice:<model-ref>` and `whisperx:<model-name>`.
+Advanced forms are also supported: `sensevoice:<model-ref>` and `whisperx:<model-name>` (also `whisperX:<model-name>`).
 
 SenseVoice / WhisperX use the local Python worker. If `uv` is installed, the worker can provision an isolated environment automatically. Otherwise, install the local Python dependencies first and make sure `ffmpeg` is available on your `PATH`:
 
