@@ -396,6 +396,7 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 
 	sourceLang := r.FormValue("source_lang")
 	targetLang := r.FormValue("target_lang")
+	speechMs, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("speech_ms")))
 	if targetLang == "" {
 		targetLang = "ja"
 	}
@@ -442,6 +443,11 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 	// 既知ハルシネーションフレーズ (YouTube 締め言葉等) を破棄する
 	if isKnownHallucination(transcription) {
 		s.logVerbose("transcription filtered (known hallucination): %q", transcription)
+		writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
+		return
+	}
+	if isLongDurationUnclearTranscription(transcription, speechMs) {
+		s.logVerbose("transcription filtered (long-duration unclear): %q (speech_ms=%d)", transcription, speechMs)
 		writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
 		return
 	}
@@ -506,6 +512,7 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sourceLang := r.FormValue("source_lang")
+	speechMs, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("speech_ms")))
 	if s.cfg.verbose {
 		hdrLen := 12
 		if len(audioData) < hdrLen {
@@ -540,6 +547,11 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 	// 既知ハルシネーションフレーズ (YouTube 締め言葉等) を破棄する
 	if isKnownHallucination(transcription) {
 		s.logVerbose("transcription filtered (known hallucination): %q", transcription)
+		writeJSON(w, http.StatusOK, map[string]string{"transcription": ""})
+		return
+	}
+	if isLongDurationUnclearTranscription(transcription, speechMs) {
+		s.logVerbose("transcription filtered (long-duration unclear): %q (speech_ms=%d)", transcription, speechMs)
 		writeJSON(w, http.StatusOK, map[string]string{"transcription": ""})
 		return
 	}

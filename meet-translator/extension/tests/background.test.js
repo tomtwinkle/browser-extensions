@@ -175,6 +175,32 @@ test('shouldRequestTranscription drops very short utterances before calling the 
   assert.equal(context.shouldRequestTranscription(1000), true);
 });
 
+test('transcribeOnly forwards speech duration to the server guardrails', async () => {
+  const requests = [];
+  const { context } = loadBackgroundScript({
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return {
+        ok: true,
+        async json() {
+          return { transcription: '', detected_language: '' };
+        },
+      };
+    },
+  });
+
+  await context.transcribeOnly(Buffer.from('RIFF').toString('base64'), {
+    serverUrl: 'http://localhost:17070',
+    sourceLang: '',
+    targetLang: 'ja',
+    bidirectional: false,
+  }, 5123.8);
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, 'http://localhost:17070/transcribe');
+  assert.equal(requests[0].options.body.get('speech_ms'), '5124');
+});
+
 test('resolveTranscriptLanguage rejects transcriptions outside the configured language set', () => {
   const { context } = loadBackgroundScript();
 

@@ -42,6 +42,30 @@ func TestIsMeaningfulTranscription(t *testing.T) {
 	}
 }
 
+func TestIsLongDurationUnclearTranscription(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     string
+		speechMs int
+		want     bool
+	}{
+		{name: "long unclear short word is filtered", text: "hello", speechMs: 5000, want: true},
+		{name: "long meaningful sentence is kept", text: "進捗確認をお願いします", speechMs: 5000, want: false},
+		{name: "short acknowledgement is kept", text: "はい", speechMs: 5000, want: false},
+		{name: "short acknowledgement phrase is kept", text: "そうですね", speechMs: 7000, want: false},
+		{name: "below duration threshold is kept", text: "hello", speechMs: 4999, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isLongDurationUnclearTranscription(tt.text, tt.speechMs)
+			if got != tt.want {
+				t.Errorf("isLongDurationUnclearTranscription(%q, %d) = %v, want %v", tt.text, tt.speechMs, got, tt.want)
+			}
+		})
+	}
+}
+
 // ─── isRepeatTranscription ───────────────────────────────────────────────────
 
 func TestIsRepeatTranscription(t *testing.T) {

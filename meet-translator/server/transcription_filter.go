@@ -31,6 +31,11 @@ const (
 	// minMeaningfulRunes は「有意な発話」とみなすための最小文字数。
 	minMeaningfulRunes = 2
 
+	// 5 秒以上の「発話」と判定されたのに文字起こしが極端に短い場合は、
+	// 雑音由来の hallucination である可能性が高い。
+	minClearSpeechDurationMs     = 5000
+	minClearTranscriptionRunes   = 6
+
 	// 長時間セッションで発生しやすい「同じフレーズのループ再生」を低リスクで弾く閾値。
 	// 短い単位は 4 回以上、十分に長い単位は 2 回以上の完全反復を hallucination とみなす。
 	minLoopUnitRunes      = 4
@@ -144,6 +149,42 @@ var hallucinationSubstrings = []string{
 	"it is based on the touhou project",
 }
 
+// shortAcknowledgementPhrases は、短い返答でも実発話として扱いたい相槌・応答。
+// 5 秒ガードで誤って落とさないために完全一致で許可する。
+var shortAcknowledgementPhrases = []string{
+	"はい",
+	"はいはい",
+	"ええ",
+	"うん",
+	"うんうん",
+	"そうですね",
+	"そうです",
+	"そうですよね",
+	"そうだね",
+	"そうか",
+	"そうですか",
+	"なるほど",
+	"なるほどですね",
+	"了解",
+	"了解です",
+	"承知しました",
+	"わかりました",
+	"すみません",
+	"ありがとう",
+	"ありがとうございます",
+	"yes",
+	"yeah",
+	"yep",
+	"ok",
+	"okay",
+	"right",
+	"i see",
+	"got it",
+	"sure",
+	"thanks",
+	"sorry",
+}
+
 // ── フィルター関数 ──────────────────────────────────────────────────────────
 
 // normalizeForDedup はテキストを小文字化・句読点/空白除去して正規化する。
@@ -176,6 +217,27 @@ func normalizedHallucinationClauses(text string) []string {
 		}
 	}
 	return clauses
+}
+
+func normalizedMeaningfulText(text string) string {
+	cleaned := noiseTokenRe.ReplaceAllString(text, "")
+	cleaned = strings.TrimFunc(cleaned, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r)
+	})
+	return normalizeForDedup(cleaned)
+}
+
+func isShortAcknowledgement(text string) bool {
+	norm := normalizedMeaningfulText(text)
+	if norm == "" {
+		return false
+	}
+	for _, phrase := range shortAcknowledgementPhrases {
+		if norm == normalizeForDedup(phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func runeSlicesEqual(a, b []rune) bool {
@@ -340,14 +402,18 @@ func isRepeatTranscription(text string, history []contextEntry) bool {
 //   - ノイズトークンを除去した残りが minMeaningfulRunes 文字未満
 //   - 除去後に空白・句読点・記号のみ
 func isMeaningfulTranscription(text string) bool {
-	// 1. ノイズトークンを除去
-	cleaned := noiseTokenRe.ReplaceAllString(text, "")
+	return len([]rune(normalizedMeaningfulText(text))) >= minMeaningfulRunes
+}
 
-	// 2. 先頭・末尾の空白 / 句読点 / 記号を除去
-	cleaned = strings.TrimFunc(cleaned, func(r rune) bool {
-		return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r)
-	})
-
-	// 3. 残ったルーン数が閾値以上なら有意と判断
-	return len([]rune(cleaned)) >= minMeaningfulRunes
+// isLongDurationUnclearTranscription は、VAD 上は長い発話だったのに
+// 文字起こし結果が極端に短いケースを雑音由来 hallucination とみなす。
+// ただし短い相槌・返答は明示的に許可する。
+func isLongDurationUnclearTranscription(text string, speechMs int) bool {
+	if speechMs < minClearSpeechDurationMs {
+		return false
+	}
+	if isShortAcknowledgement(text) {
+		return false
+	}
+	return len([]rune(normalizedMeaningfulText(text))) < minClearTranscriptionRunes
 }

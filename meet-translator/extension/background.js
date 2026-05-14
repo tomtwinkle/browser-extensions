@@ -175,13 +175,14 @@ async function runPeriodicHealthCheck() {
  * @param {object} cfg    - getSettings() の結果
  * @returns {Promise<{transcription: string|null, detectedLang: string|null}>}
  */
-async function transcribeOnly(wavB64, cfg) {
+async function transcribeOnly(wavB64, cfg, speechMs = null) {
   // base64 → Uint8Array に変換。文字列は structured-clone で常に正しくコピーされる。
   const audioData = base64ToUint8Array(wavB64);
   const form = new FormData();
   form.append('audio', new Blob([audioData], { type: 'audio/wav' }), 'audio.wav');
   const transcriptionSourceLang = resolveTranscriptionSourceLang(cfg);
   if (transcriptionSourceLang) form.append('source_lang', transcriptionSourceLang);
+  if (Number.isFinite(speechMs)) form.append('speech_ms', String(Math.round(speechMs)));
 
   console.info(
     '[background] transcribeOnly: POST',
@@ -343,7 +344,7 @@ async function processAudioChunk(wavB64, speakerName, tabId, speechMs = null) {
   const cfg = await getSettings();
 
   // Step 1: Whisper 文字起こし → チャット投稿 / オーバーレイ（原文）
-  const { transcription, detectedLang } = await transcribeOnly(wavB64, cfg);
+  const { transcription, detectedLang } = await transcribeOnly(wavB64, cfg, effectiveSpeechMs);
   if (!transcription) return;
 
   if (isFillerOnly(transcription)) {
