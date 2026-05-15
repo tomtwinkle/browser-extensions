@@ -44,6 +44,21 @@ def normalize_whisperx_language(language):
     return language or None
 
 
+def normalize_transformers_whisper_language(language):
+    language = (language or "").strip().lower()
+    return language or None
+
+
+def detect_transformers_whisper_language(model_ref, language):
+    language = normalize_transformers_whisper_language(language)
+    if language:
+        return language
+    model_ref = (model_ref or "").strip().lower()
+    if "kotoba-whisper" in model_ref:
+        return "ja"
+    return ""
+
+
 def detect_sensevoice_language(raw_text, fallback):
     match = SENSEVOICE_LANG_RE.search(raw_text or "")
     if match:
@@ -141,11 +156,80 @@ class WhisperXBackend:
         return text, detected
 
 
+class TransformersWhisperBackend:
+    def __init__(self, model_ref, device):
+        import torch
+        from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+
+        self._model_ref = model_ref
+        self._torch = torch
+        self._processor = AutoProcessor.from_pretrained(model_ref)
+        self._device = self._resolve_device(torch, device)
+        self._torch_dtype = torch.float16 if self._device.startswith("cuda") else torch.float32
+        self._model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            model_ref,
+            torch_dtype=self._torch_dtype,
+        )
+        self._model.to(self._device)
+        self._model.eval()
+
+    def transcribe(self, audio_path, language, prompt):
+        whisper_lang = normalize_transformers_whisper_language(language)
+        generate_kwargs = {}
+        if whisper_lang:
+            generate_kwargs["language"] = whisper_lang
+        prompt_ids = self._prompt_ids(prompt)
+        if prompt_ids is not None:
+            generate_kwargs["prompt_ids"] = prompt_ids
+        audio = load_wav_float32(audio_path)
+        inputs = self._processor(audio, sampling_rate=16000, return_tensors="pt")
+        input_features = inputs["input_features"].to(self._device, dtype=self._torch_dtype)
+        attention_mask = inputs.get("attention_mask")
+        if attention_mask is not None:
+            generate_kwargs["attention_mask"] = attention_mask.to(self._device)
+
+        with self._torch.no_grad():
+            generated_ids = self._model.generate(input_features=input_features, **generate_kwargs)
+        text = self._processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
+        detected = detect_transformers_whisper_language(self._model_ref, whisper_lang)
+        return text, detected
+
+    def _prompt_ids(self, prompt):
+        prompt = (prompt or "").strip()
+        if not prompt:
+            return None
+        get_prompt_ids = getattr(self._processor, "get_prompt_ids", None)
+        if not callable(get_prompt_ids):
+            tokenizer = getattr(self._processor, "tokenizer", None)
+            get_prompt_ids = getattr(tokenizer, "get_prompt_ids", None)
+        if not callable(get_prompt_ids):
+            return None
+        try:
+            prompt_ids = get_prompt_ids(prompt)
+        except TypeError:
+            prompt_ids = get_prompt_ids(prompt, return_tensors="pt")
+        if prompt_ids is None:
+            return None
+        if hasattr(prompt_ids, "tolist"):
+            prompt_ids = prompt_ids.tolist()
+        if isinstance(prompt_ids, list) and len(prompt_ids) == 1 and isinstance(prompt_ids[0], list):
+            prompt_ids = prompt_ids[0]
+        return self._torch.tensor(prompt_ids, dtype=self._torch.long, device=self._device)
+
+    def _resolve_device(self, torch, device):
+        device = (device or "").strip().lower() or "cpu"
+        if device.startswith("cuda"):
+            return device if torch.cuda.is_available() else "cpu"
+        return device
+
+
 def build_backend(args):
     if args.backend == "sensevoice":
         return SenseVoiceBackend(args.model, args.device)
     if args.backend == "whisperx":
         return WhisperXBackend(args.model, args.device)
+    if args.backend == "transformers-whisper":
+        return TransformersWhisperBackend(args.model, args.device)
     raise RuntimeError(f"unsupported backend: {args.backend}")
 
 

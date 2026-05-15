@@ -55,16 +55,18 @@ curl -L -o ggml-base.bin \
 | `ggml-kotoba-whisper-v2.0.bin` | 3.1 GB | ◎◎ JA-focused |
 | `ggml-kotoba-whisper-v2.0-q5_0.bin` | ≈ 1.0 GB | ◎ JA-focused (quantized) |
 
-モデル名でも指定できます: `large-v3-turbo`, `kotoba-whisper`, `kotoba-whisper-q5_0`
+モデル名でも指定できます: `large-v3-turbo`, `kotoba-whisper`, `kotoba-whisper-q5_0`, `kotoba-whisper-v2.2`, `kotoba-whisper-v2.2-faster`, `whisperx`
 
 Python バックエンドも `--whisper-model` で選択できます:
 
 | モデル名 | 実装 | 備考 |
 |---|---|---|
+| `kotoba-whisper-v2.2` / `kotoba-tech/kotoba-whisper-v2.2` | Transformers Whisper | Kotoba-Whisper v2.2、ローカル Python worker |
+| `kotoba-whisper-v2.2-faster` / `RoachLin/kotoba-whisper-v2.2-faster` | WhisperX (faster-whisper backend) | Kotoba-Whisper v2.2 の faster-whisper 変換版 |
 | `sensevoice` / `sensevoice-small` | FunASR SenseVoiceSmall | 高速な多言語 ASR、ローカル Python worker |
-| `whisperx` / `whisperx-large-v3` | WhisperX (faster-whisper backend) | VAD 付き、多言語 ASR、ローカル Python worker |
+| `whisperx` / `whisperX` / `whisperx-large-v3` | WhisperX (faster-whisper backend) | VAD 付き、多言語 ASR、ローカル Python worker |
 | `sensevoice:<model-ref>` | FunASR | 任意の SenseVoice 系 model ref |
-| `whisperx:<model-name>` | WhisperX | 任意の WhisperX / faster-whisper モデル名 |
+| `whisperx:<model-name>` | WhisperX | 任意の WhisperX / faster-whisper モデル名（`whisperX:` でも可） |
 
 > **Python バックエンドの準備**:
 > `uv` が入っていれば isolated 環境を自動で用意できます。

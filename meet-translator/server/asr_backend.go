@@ -5,9 +5,10 @@ import "fmt"
 type ASRBackendKind string
 
 const (
-	asrBackendWhisperCPP ASRBackendKind = "whisper.cpp"
-	asrBackendSenseVoice ASRBackendKind = "sensevoice"
-	asrBackendWhisperX   ASRBackendKind = "whisperx"
+	asrBackendWhisperCPP          ASRBackendKind = "whisper.cpp"
+	asrBackendSenseVoice          ASRBackendKind = "sensevoice"
+	asrBackendWhisperX            ASRBackendKind = "whisperx"
+	asrBackendTransformersWhisper ASRBackendKind = "transformers-whisper"
 )
 
 type ResolvedWhisperModel struct {
@@ -32,7 +33,7 @@ func newTranscriber(model ResolvedWhisperModel) (transcriber, error) {
 	switch model.Backend {
 	case asrBackendWhisperCPP:
 		return newNativeWhisperTranscriber(model.ResolvedSpec)
-	case asrBackendSenseVoice, asrBackendWhisperX:
+	case asrBackendSenseVoice, asrBackendWhisperX, asrBackendTransformersWhisper:
 		return newPythonWorkerTranscriber(model.Backend, model.ResolvedSpec)
 	default:
 		return nil, fmt.Errorf("unsupported ASR backend: %s", model.Backend)
