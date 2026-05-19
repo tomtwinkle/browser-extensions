@@ -1,0 +1,3 @@
+# External dependency: ffmpeg must also be installed and available on PATH.
+torch
+whisperx

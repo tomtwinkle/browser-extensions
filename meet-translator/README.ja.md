@@ -247,12 +247,14 @@ curl http://localhost:7070/health
 
 `sensevoice:<model-ref>` と `whisperx:<model-name>`（`whisperX:<model-name>` も可）の高度な指定にも対応します。
 
-SenseVoice / WhisperX はローカル Python worker を使います。`uv` が入っていれば isolated 環境を自動で用意できます。そうでない場合は、先にローカル Python 依存を入れ、`ffmpeg` を `PATH` から参照できるようにしてください。
+SenseVoice / WhisperX はローカル Python worker を使います。`uv` が入っていれば、選んだ backend に必要な依存だけ isolated 環境へ自動で入ります。手動で入れる場合は、先に対応する Python 依存を入れてください。
 
 ```bash
 cd server
-python3 -m pip install -r ./python/requirements-asr.txt
+python3 -m pip install -r ./python/requirements-asr-whisperx.txt
 ```
+
+SenseVoice なら `./python/requirements-asr-sensevoice.txt`、`kotoba-whisper-v2.2` なら `./python/requirements-asr-transformers.txt`、まとめて全部入れるなら `./python/requirements-asr.txt` を使えます。SenseVoice / WhisperX 系では `ffmpeg` も `PATH` から参照できるようにしてください。
 
 ### LLM モデル（翻訳）
 

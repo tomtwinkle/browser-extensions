@@ -1,7 +1,3 @@
-# External dependency: ffmpeg must also be installed and available on PATH.
-torch
-torchaudio
-funasr
-modelscope
-whisperx
-transformers>=4.39
+-r requirements-asr-sensevoice.txt
+-r requirements-asr-whisperx.txt
+-r requirements-asr-transformers.txt

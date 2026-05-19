@@ -20,6 +20,15 @@ var embeddedASRWorker string
 //go:embed python/requirements-asr.txt
 var embeddedASRRequirements string
 
+//go:embed python/requirements-asr-sensevoice.txt
+var embeddedASRRequirementsSenseVoice string
+
+//go:embed python/requirements-asr-whisperx.txt
+var embeddedASRRequirementsWhisperX string
+
+//go:embed python/requirements-asr-transformers.txt
+var embeddedASRRequirementsTransformers string
+
 type pythonWorkerRequest struct {
 	Action    string `json:"action,omitempty"`
 	AudioPath string `json:"audio_path,omitempty"`
@@ -48,8 +57,18 @@ type pythonWorkerTranscriber struct {
 	requestMutex sync.Mutex
 }
 
+type pythonRequirementsSpec struct {
+	fileName string
+	content  string
+}
+
 func newPythonWorkerTranscriber(backend ASRBackendKind, modelRef string) (transcriber, error) {
-	tempDir, scriptPath, requirementsPath, err := materializePythonASRFiles()
+	requirementsSpec, err := asrRequirementsSpec(backend)
+	if err != nil {
+		return nil, err
+	}
+
+	tempDir, scriptPath, requirementsPath, err := materializePythonASRFiles(requirementsSpec)
 	if err != nil {
 		return nil, err
 	}
@@ -229,26 +248,62 @@ func (w *pythonWorkerTranscriber) stderrSuffix() string {
 	return "\n  worker stderr: " + msg
 }
 
-func materializePythonASRFiles() (tempDir, scriptPath, requirementsPath string, err error) {
+func asrRequirementsSpec(backend ASRBackendKind) (pythonRequirementsSpec, error) {
+	switch backend {
+	case asrBackendSenseVoice:
+		return pythonRequirementsSpec{
+			fileName: "requirements-asr-sensevoice.txt",
+			content:  embeddedASRRequirementsSenseVoice,
+		}, nil
+	case asrBackendWhisperX:
+		return pythonRequirementsSpec{
+			fileName: "requirements-asr-whisperx.txt",
+			content:  embeddedASRRequirementsWhisperX,
+		}, nil
+	case asrBackendTransformersWhisper:
+		return pythonRequirementsSpec{
+			fileName: "requirements-asr-transformers.txt",
+			content:  embeddedASRRequirementsTransformers,
+		}, nil
+	default:
+		return pythonRequirementsSpec{}, fmt.Errorf("unsupported ASR backend requirements: %s", backend)
+	}
+}
+
+func materializePythonASRFiles(requirementsSpec pythonRequirementsSpec) (tempDir, scriptPath, requirementsPath string, err error) {
 	tempDir, err = os.MkdirTemp("", "meet-translator-asr-*")
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to create temporary ASR worker directory: %w", err)
 	}
 
 	scriptPath = filepath.Join(tempDir, "asr_worker.py")
-	requirementsPath = filepath.Join(tempDir, "requirements-asr.txt")
+	requirementsPath = filepath.Join(tempDir, requirementsSpec.fileName)
 
 	if err := os.WriteFile(scriptPath, []byte(embeddedASRWorker), 0o700); err != nil {
 		_ = os.RemoveAll(tempDir)
 		return "", "", "", fmt.Errorf("failed to write ASR worker script: %w", err)
 	}
-	if err := os.WriteFile(requirementsPath, []byte(embeddedASRRequirements), 0o600); err != nil {
+	if err := os.WriteFile(requirementsPath, []byte(requirementsSpec.content), 0o600); err != nil {
 		_ = os.RemoveAll(tempDir)
 		return "", "", "", fmt.Errorf("failed to write ASR worker requirements: %w", err)
 	}
 	return tempDir, scriptPath, requirementsPath, nil
 }
 
-func pythonInstallHint(_ string) string {
-	return "\n  install uv to auto-provision Python dependencies on demand, or install them manually with: python3 -m pip install -r ./python/requirements-asr.txt\n  ensure ffmpeg is installed and available on PATH"
+func pythonInstallHint(requirementsPath string) string {
+	installPath := "./python/requirements-asr.txt"
+	switch filepath.Base(strings.TrimSpace(requirementsPath)) {
+	case "requirements-asr-sensevoice.txt":
+		installPath = "./python/requirements-asr-sensevoice.txt"
+	case "requirements-asr-whisperx.txt":
+		installPath = "./python/requirements-asr-whisperx.txt"
+	case "requirements-asr-transformers.txt":
+		installPath = "./python/requirements-asr-transformers.txt"
+	}
+
+	hint := "\n  install uv to auto-provision Python dependencies on demand, or install them manually with: python3 -m pip install -r " + installPath
+	if installPath == "./python/requirements-asr-transformers.txt" {
+		return hint
+	}
+	return hint + "\n  ensure ffmpeg is installed and available on PATH"
 }

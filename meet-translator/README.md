@@ -244,12 +244,14 @@ Specify a model name with `--whisper-model` and it will be downloaded automatica
 
 Advanced forms are also supported: `sensevoice:<model-ref>` and `whisperx:<model-name>` (also `whisperX:<model-name>`).
 
-SenseVoice / WhisperX use the local Python worker. If `uv` is installed, the worker can provision an isolated environment automatically. Otherwise, install the local Python dependencies first and make sure `ffmpeg` is available on your `PATH`:
+SenseVoice / WhisperX use the local Python worker. If `uv` is installed, the worker provisions only the dependencies needed for the selected backend automatically. Otherwise, install the matching local Python dependencies first:
 
 ```bash
 cd server
-python3 -m pip install -r ./python/requirements-asr.txt
+python3 -m pip install -r ./python/requirements-asr-whisperx.txt
 ```
+
+Use `./python/requirements-asr-sensevoice.txt` for SenseVoice, `./python/requirements-asr-transformers.txt` for `kotoba-whisper-v2.2`, or `./python/requirements-asr.txt` to install every ASR Python backend at once. Make sure `ffmpeg` is available on your `PATH` for SenseVoice / WhisperX backends.
 
 ### LLM models (translation)
 
