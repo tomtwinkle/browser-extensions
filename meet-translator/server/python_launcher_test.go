@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"reflect"
 	"testing"
@@ -185,5 +186,57 @@ func TestIsExpectedPythonWorkerShutdownError_RegularError(t *testing.T) {
 	stderr := "ModuleNotFoundError: No module named mlx_lm"
 	if isExpectedPythonWorkerShutdownError(err, stderr) {
 		t.Fatal("did not expect regular startup error to be ignored")
+	}
+}
+
+func TestPythonWorkerTranscriberCloseForRetryPreservesTempDir(t *testing.T) {
+	tempDir := t.TempDir()
+	worker := &pythonWorkerTranscriber{tempDir: tempDir}
+	if err := worker.closeForRetry(); err != nil {
+		t.Fatalf("closeForRetry() error = %v", err)
+	}
+	if _, err := os.Stat(tempDir); err != nil {
+		t.Fatalf("temp dir removed during retry close: %v", err)
+	}
+}
+
+func TestPythonWorkerTranscriberCloseRemovesTempDir(t *testing.T) {
+	parent := t.TempDir()
+	tempDir := parent + "/worker"
+	if err := os.Mkdir(tempDir, 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	worker := &pythonWorkerTranscriber{tempDir: tempDir}
+	if err := worker.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := os.Stat(tempDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temp dir still exists after Close(): %v", err)
+	}
+}
+
+func TestPythonMLXBackendCloseForRetryPreservesTempDir(t *testing.T) {
+	tempDir := t.TempDir()
+	worker := &pythonMLXBackend{tempDir: tempDir}
+	if err := worker.closeForRetry(); err != nil {
+		t.Fatalf("closeForRetry() error = %v", err)
+	}
+	if _, err := os.Stat(tempDir); err != nil {
+		t.Fatalf("temp dir removed during retry close: %v", err)
+	}
+}
+
+func TestPythonMLXBackendCloseRemovesTempDir(t *testing.T) {
+	parent := t.TempDir()
+	tempDir := parent + "/worker"
+	if err := os.Mkdir(tempDir, 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	worker := &pythonMLXBackend{tempDir: tempDir}
+	if err := worker.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := os.Stat(tempDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("temp dir still exists after Close(): %v", err)
 	}
 }
