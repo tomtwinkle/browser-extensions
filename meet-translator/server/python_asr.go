@@ -122,12 +122,14 @@ func startPythonWorkerTranscriber(
 	var ready pythonWorkerResponse
 	if err := worker.dec.Decode(&ready); err != nil {
 		stderrText := worker.stderr.String()
-		_ = worker.Close()
 		if uvSpec, ok, retryErr := retryWithUV(launchSpec, requirementsPath, stderrText); retryErr != nil {
+			_ = worker.Close()
 			return nil, retryErr
 		} else if ok {
+			_ = worker.closeForRetry()
 			return startPythonWorkerTranscriber(uvSpec, backend, modelRef, device, tempDir, scriptPath, requirementsPath)
 		}
+		_ = worker.Close()
 		return nil, fmt.Errorf("failed to initialize %s worker: %w%s", backend, err, worker.stderrSuffix())
 	}
 	if ready.Status != "ready" {
@@ -135,7 +137,7 @@ func startPythonWorkerTranscriber(
 			_ = worker.Close()
 			return nil, retryErr
 		} else if ok {
-			_ = worker.Close()
+			_ = worker.closeForRetry()
 			return startPythonWorkerTranscriber(uvSpec, backend, modelRef, device, tempDir, scriptPath, requirementsPath)
 		}
 		_ = worker.Close()
@@ -185,6 +187,14 @@ func (w *pythonWorkerTranscriber) Transcribe(audioData []byte, lang, prompt stri
 }
 
 func (w *pythonWorkerTranscriber) Close() error {
+	return w.close(true)
+}
+
+func (w *pythonWorkerTranscriber) closeForRetry() error {
+	return w.close(false)
+}
+
+func (w *pythonWorkerTranscriber) close(removeTempDir bool) error {
 	var closeErr error
 	w.closeOnce.Do(func() {
 		if w.stdin != nil {
@@ -201,7 +211,7 @@ func (w *pythonWorkerTranscriber) Close() error {
 				}
 			}
 		}
-		if w.tempDir != "" {
+		if removeTempDir && w.tempDir != "" {
 			_ = os.RemoveAll(w.tempDir)
 		}
 	})
