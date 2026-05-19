@@ -82,4 +82,11 @@ jobs:
 
       - name: Build
         working-directory: meet-translator/server
-        run: make build GPU=${{ matrix.gpu }}
+        run: |
+          if [ "${{ matrix.os }}" = "macos-latest" ] && [ "${{ matrix.gpu }}" = "metal" ]; then
+            # Catch regressions where a prior CPU build leaves Metal-specific libs missing.
+            make build GPU=cpu
+            make build GPU=metal
+          else
+            make build GPU=${{ matrix.gpu }}
+          fi
