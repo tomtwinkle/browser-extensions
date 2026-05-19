@@ -69,9 +69,14 @@ Python バックエンドも `--whisper-model` で選択できます:
 | `whisperx:<model-name>` | WhisperX | 任意の WhisperX / faster-whisper モデル名（`whisperX:` でも可） |
 
 > **Python バックエンドの準備**:
-> `uv` が入っていれば isolated 環境を自動で用意できます。
-> そうでない場合は `python3 -m pip install -r ./python/requirements-asr.txt`
-> を実行し、`ffmpeg` をインストールして PATH から参照できるようにしてください。
+> `uv` が入っていれば、選んだ backend に必要な依存だけ isolated 環境へ自動で入ります。
+> 手動で入れる場合は、使う backend に合わせて次を選んでください:
+> - `sensevoice`: `python3 -m pip install -r ./python/requirements-asr-sensevoice.txt`
+> - `whisperx`, `whisperX`, `kotoba-whisper-v2.2-faster`: `python3 -m pip install -r ./python/requirements-asr-whisperx.txt`
+> - `kotoba-whisper-v2.2`: `python3 -m pip install -r ./python/requirements-asr-transformers.txt`
+> - 全部まとめて入れる場合: `python3 -m pip install -r ./python/requirements-asr.txt`
+>
+> SenseVoice / WhisperX 系は `ffmpeg` も PATH から参照できるようにしてください。
 
 ### llama モデル (翻訳 LLM)
 

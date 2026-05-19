@@ -196,6 +196,16 @@ jobs:
             bin: server
             whisper_model: tiny
             llama_model: bonsai-1.7b
+          # ── 新規: ASR uv auto-provision regression test (Apple Silicon only) ─────
+          # 手動 pip install なしで direct python -> uv fallback を通し、
+          # 埋め込み requirements の backend 切り分けと retry の両方を検証する。
+          - os: macos-latest
+            name: macos-arm64
+            bin: server
+            whisper_model: kotoba-whisper-v2.2-faster
+            llama_model: bonsai-4b
+            scenario: uv-autoprovision
+            use_uv_autoprovision: true
           # ── 新規: 追加 LLM アーキテクチャ smoke test (Linux only) ───────────────
           - os: ubuntu-latest
             name: ubuntu-amd64
@@ -292,14 +302,24 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install ASR runtime dependencies
+      - name: Install ASR system runtime dependencies
         if: contains(matrix.whisper_model, 'kotoba-whisper-v2.2') || startsWith(matrix.whisper_model, 'sensevoice') || startsWith(matrix.whisper_model, 'whisperx') || startsWith(matrix.whisper_model, 'whisperX')
         run: |
-          python -m pip install --upgrade pip
           if [ "${{ runner.os }}" = "Linux" ]; then
             sudo apt-get update
             sudo apt-get install -y ffmpeg
           fi
+
+      - name: Install uv for ASR auto-provision scenario
+        if: matrix.use_uv_autoprovision == true
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install uv
+
+      - name: Install ASR Python runtime dependencies
+        if: (contains(matrix.whisper_model, 'kotoba-whisper-v2.2') || startsWith(matrix.whisper_model, 'sensevoice') || startsWith(matrix.whisper_model, 'whisperx') || startsWith(matrix.whisper_model, 'whisperX')) && matrix.use_uv_autoprovision != true
+        run: |
+          python -m pip install --upgrade pip
           case "${{ matrix.whisper_model }}" in
             sensevoice*)
               python -m pip install torch torchaudio funasr modelscope

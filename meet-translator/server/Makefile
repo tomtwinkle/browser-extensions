@@ -62,6 +62,9 @@ else
   GPU_TARGET := $(GPU)
 endif
 
+BUILD_STAMP := $(BUILD_DIR)/.built-$(GPU_TARGET)
+BUILD_PRISM_STAMP := $(BUILD_PRISM_DIR)/.built-$(GPU_TARGET)
+
 # ── cmake GPU flags & Go build tags ──────────────────────────────────────────
 CMAKE_GPU_FLAGS :=
 GO_TAGS         :=
@@ -147,7 +150,7 @@ prism: deps-prism
 	go build $(if $(GO_TAGS),-tags $(GO_TAGS)$(comma)prism,-tags prism) -o $(BIN_PRISM) .
 
 ## deps: 標準ビルド用ライブラリをクローン＆ビルド
-deps: $(BUILD_DIR)/.built
+deps: $(BUILD_STAMP)
 
 $(LLAMA_STAMP):
 	@mkdir -p $(VENDOR_DIR) $(BUILD_DIR)
@@ -177,7 +180,7 @@ $(WHISPER_STAMP):
 	@rm -f $(BUILD_DIR)/.whisper-version-*
 	@touch $@
 
-$(BUILD_DIR)/.built: $(LLAMA_STAMP) $(WHISPER_STAMP)
+$(BUILD_STAMP): $(LLAMA_STAMP) $(WHISPER_STAMP)
 	@echo "[cmake] Building standard variant with GPU=$(GPU_TARGET)..."
 	cmake -S . -B $(BUILD_DIR) \
 	$(CMAKE_GENERATOR) \
@@ -195,10 +198,11 @@ $(BUILD_DIR)/.built: $(LLAMA_STAMP) $(WHISPER_STAMP)
 			fi; \
 		done; \
 	fi
-	@touch $(BUILD_DIR)/.built
+	@rm -f $(BUILD_DIR)/.built-*
+	@touch $@
 
 ## deps-prism: PrismML ビルド用ライブラリをクローン＆ビルド
-deps-prism: $(BUILD_PRISM_DIR)/.built
+deps-prism: $(BUILD_PRISM_STAMP)
 
 $(LLAMA_PRISM_STAMP):
 	@mkdir -p $(VENDOR_PRISM_DIR) $(BUILD_PRISM_DIR)
@@ -228,7 +232,7 @@ $(WHISPER_PRISM_STAMP):
 	@rm -f $(BUILD_PRISM_DIR)/.whisper-version-*
 	@touch $@
 
-$(BUILD_PRISM_DIR)/.built: $(LLAMA_PRISM_STAMP) $(WHISPER_PRISM_STAMP)
+$(BUILD_PRISM_STAMP): $(LLAMA_PRISM_STAMP) $(WHISPER_PRISM_STAMP)
 	@echo "[cmake] Building PrismML variant with GPU=$(GPU_TARGET)..."
 	cmake -S . -B $(BUILD_PRISM_DIR) \
 	-DVENDOR_DIR=$(abspath $(VENDOR_PRISM_DIR)) \
@@ -247,7 +251,8 @@ $(BUILD_PRISM_DIR)/.built: $(LLAMA_PRISM_STAMP) $(WHISPER_PRISM_STAMP)
 			fi; \
 		done; \
 	fi
-	@touch $(BUILD_PRISM_DIR)/.built
+	@rm -f $(BUILD_PRISM_DIR)/.built-*
+	@touch $@
 
 ## test: run go test with CGo include/library paths
 test: deps
@@ -276,7 +281,7 @@ clean:
 ## rebuild: force cmake rebuild + go build while keeping vendor clones
 ##          pinned upstream tags are still auto-refreshed if they changed
 rebuild:
-	rm -f $(BUILD_DIR)/.built $(BIN)
+	rm -f $(BUILD_DIR)/.built-* $(BIN)
 	$(MAKE) build
 
 ## distclean: remove everything including vendor
