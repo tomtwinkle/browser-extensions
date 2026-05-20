@@ -70,11 +70,11 @@ Python バックエンドも `--whisper-model` で選択できます:
 
 > **Python バックエンドの準備**:
 > `uv` が入っていれば、選んだ backend に必要な依存だけ isolated 環境へ自動で入ります。
-> 手動で入れる場合は、使う backend に合わせて次を選んでください:
-> - `sensevoice`: `python3 -m pip install -r ./python/requirements-asr-sensevoice.txt`
-> - `whisperx`, `whisperX`, `kotoba-whisper-v2.2-faster`: `python3 -m pip install -r ./python/requirements-asr-whisperx.txt`
-> - `kotoba-whisper-v2.2`: `python3 -m pip install -r ./python/requirements-asr-transformers.txt`
-> - 全部まとめて入れる場合: `python3 -m pip install -r ./python/requirements-asr.txt`
+> 手動で入れる場合は Python 3.11 を使い、backend に合わせて次を選んでください:
+> - `sensevoice`: `python3.11 -m pip install -r ./python/requirements-asr-sensevoice.txt`
+> - `whisperx`, `whisperX`, `kotoba-whisper-v2.2-faster`: `python3.11 -m pip install -r ./python/requirements-asr-whisperx.txt`
+> - `kotoba-whisper-v2.2`: `python3.11 -m pip install -r ./python/requirements-asr-transformers.txt`
+> - 全部まとめて入れる場合: `python3.11 -m pip install -r ./python/requirements-asr.txt`
 >
 > SenseVoice / WhisperX 系は `ffmpeg` も PATH から参照できるようにしてください。
 

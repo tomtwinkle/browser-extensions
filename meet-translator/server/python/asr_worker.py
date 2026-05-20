@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import inspect
 import json
 import os
 import re
@@ -13,6 +14,7 @@ import numpy as np
 
 
 SENSEVOICE_LANG_RE = re.compile(r"<\|(zh|en|yue|ja|ko|nospeech)\|>")
+WHISPERX_CHUNK_SIZE = 30
 
 os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 
@@ -135,25 +137,48 @@ class SenseVoiceBackend:
 
 class WhisperXBackend:
     def __init__(self, model_ref, device):
+        import torch
         import whisperx
+        from whisperx.audio import SAMPLE_RATE
+        from whisperx.vad import merge_chunks
 
         compute_type = "int8" if device == "cpu" else "float16"
-        self._model = whisperx.load_model(
-            model_ref,
-            device=device,
-            compute_type=compute_type,
-            vad_method="silero",
-            asr_options={"condition_on_previous_text": False},
-        )
+        load_model_kwargs = {
+            "device": device,
+            "compute_type": compute_type,
+            "asr_options": {"condition_on_previous_text": False},
+        }
+        if "vad_method" in inspect.signature(whisperx.load_model).parameters:
+            load_model_kwargs["vad_method"] = "silero"
+        self._merge_chunks = merge_chunks
+        self._model = whisperx.load_model(model_ref, **load_model_kwargs)
+        self._sample_rate = SAMPLE_RATE
+        self._torch = torch
 
     def transcribe(self, audio_path, language, prompt):
         whisperx_lang = normalize_whisperx_language(language)
-        self._model.options = replace(self._model.options, initial_prompt=(prompt or None))
         audio = load_wav_float32(audio_path)
+        if not self._speech_segments(audio):
+            return "", whisperx_lang or ""
+        self._model.options = replace(self._model.options, initial_prompt=(prompt or None))
         result = self._model.transcribe(audio, batch_size=8, language=whisperx_lang)
         text = "".join(segment.get("text", "") for segment in result.get("segments", [])).strip()
         detected = result.get("language") or (whisperx_lang or "")
         return text, detected
+
+    def _speech_segments(self, audio):
+        if len(audio) == 0:
+            return []
+        vad_segments = self._model.vad_model({
+            "waveform": self._torch.from_numpy(audio).unsqueeze(0),
+            "sample_rate": self._sample_rate,
+        })
+        return self._merge_chunks(
+            vad_segments,
+            WHISPERX_CHUNK_SIZE,
+            onset=self._model._vad_params["vad_onset"],
+            offset=self._model._vad_params["vad_offset"],
+        )
 
 
 class TransformersWhisperBackend:

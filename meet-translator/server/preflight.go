@@ -77,7 +77,7 @@ func printWhisperHelp(w io.Writer) {
 	fmt.Fprintf(w, "  Advanced: sensevoice:<model-ref> / whisperx:<model-name>\n")
 	fmt.Fprintf(w, "  SenseVoice / WhisperX use the local Python worker.\n")
 	fmt.Fprintf(w, "  If uv is installed, dependencies are provisioned automatically in an isolated env.\n")
-	fmt.Fprintf(w, "  Otherwise install the backend-specific requirements manually:\n")
+	fmt.Fprintf(w, "  Otherwise install the backend-specific requirements manually with Python 3.11:\n")
 	fmt.Fprintf(w, "    sensevoice -> ./python/requirements-asr-sensevoice.txt\n")
 	fmt.Fprintf(w, "    whisperx / kotoba-whisper-v2.2-faster -> ./python/requirements-asr-whisperx.txt\n")
 	fmt.Fprintf(w, "    kotoba-whisper-v2.2 -> ./python/requirements-asr-transformers.txt\n")

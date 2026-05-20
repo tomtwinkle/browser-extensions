@@ -27,7 +27,7 @@ func TestASRRequirementsSpec(t *testing.T) {
 			name:         "whisperx",
 			backend:      asrBackendWhisperX,
 			wantFile:     "requirements-asr-whisperx.txt",
-			wantContains: []string{"whisperx", "torch"},
+			wantContains: []string{"matplotlib", "numpy<2", "transformers<5", "whisperx", "torch"},
 			wantNotContains: []string{
 				"funasr",
 				"modelscope",
@@ -108,6 +108,9 @@ func TestPythonInstallHintUsesBackendSpecificRequirements(t *testing.T) {
 			got := pythonInstallHint(tc.requirements)
 			if !strings.Contains(got, tc.wantPath) {
 				t.Fatalf("hint missing %q:\n%s", tc.wantPath, got)
+			}
+			if !strings.Contains(got, "python3.11 -m pip install -r") {
+				t.Fatalf("hint missing python3.11 install command:\n%s", got)
 			}
 			hasFFmpeg := strings.Contains(got, "ffmpeg")
 			if hasFFmpeg != tc.wantFFmpeg {

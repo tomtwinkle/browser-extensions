@@ -328,7 +328,7 @@ jobs:
               python -m pip install torch "transformers>=4.39"
               ;;
             whisperx*|whisperX*|kotoba-whisper-v2.2-faster|RoachLin/kotoba-whisper-v2.2-faster)
-              python -m pip install torch whisperx
+              python -m pip install matplotlib "numpy<2" torch "transformers<5" whisperx
               ;;
           esac
 
@@ -625,6 +625,27 @@ jobs:
             throw new Error(`want status=ok, got: ${JSON.stringify(data)}`);
           }
           console.log('PASS: /health returned status=ok');
+          JSEOF
+
+      # ── POST /transcribe ──────────────────────────────────────────────────
+      # 無音 WAV を送信しても 500 ではなく空文字の transcription を返すこと
+      - name: Test POST /transcribe
+        if: matrix.expect_startup_failure != true
+        run: |
+          curl -sf -X POST http://localhost:7070/transcribe \
+            -F "audio=@test_silence.wav" \
+            -o transcribe.json
+          cat transcribe.json
+          node - <<'JSEOF'
+          const fs = require('node:fs');
+          const data = JSON.parse(fs.readFileSync('transcribe.json', 'utf8'));
+          if (!Object.hasOwn(data, 'transcription')) {
+            throw new Error(`missing transcription field: ${JSON.stringify(data)}`);
+          }
+          if (typeof data.transcription !== 'string') {
+            throw new Error(`transcription must be string: ${JSON.stringify(data)}`);
+          }
+          console.log('PASS: /transcribe returned valid JSON:', data);
           JSEOF
 
       # ── POST /transcribe-and-translate ────────────────────────────────────

@@ -1,3 +1,6 @@
 # External dependency: ffmpeg must also be installed and available on PATH.
+matplotlib
+numpy<2
 torch
+transformers<5
 whisperx
