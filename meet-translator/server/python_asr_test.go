@@ -27,7 +27,7 @@ func TestASRRequirementsSpec(t *testing.T) {
 			name:         "whisperx",
 			backend:      asrBackendWhisperX,
 			wantFile:     "requirements-asr-whisperx.txt",
-			wantContains: []string{"matplotlib", "numpy<2", "transformers<5", "whisperx", "torch"},
+			wantContains: []string{"matplotlib", "numpy<2", "torch==2.2.2", "torchaudio==2.2.2", "transformers<5", "whisperx"},
 			wantNotContains: []string{
 				"funasr",
 				"modelscope",

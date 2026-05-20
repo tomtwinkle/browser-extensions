@@ -328,7 +328,7 @@ jobs:
               python -m pip install torch "transformers>=4.39"
               ;;
             whisperx*|whisperX*|kotoba-whisper-v2.2-faster|RoachLin/kotoba-whisper-v2.2-faster)
-              python -m pip install matplotlib "numpy<2" torch "transformers<5" whisperx
+              python -m pip install matplotlib "numpy<2" "torch==2.2.2" "torchaudio==2.2.2" "transformers<5" whisperx
               ;;
           esac
 
