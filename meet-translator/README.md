@@ -248,10 +248,10 @@ SenseVoice / WhisperX use the local Python worker. If `uv` is installed, the wor
 
 ```bash
 cd server
-python3 -m pip install -r ./python/requirements-asr-whisperx.txt
+python3.11 -m pip install -r ./python/requirements-asr-whisperx.txt
 ```
 
-Use `./python/requirements-asr-sensevoice.txt` for SenseVoice, `./python/requirements-asr-transformers.txt` for `kotoba-whisper-v2.2`, or `./python/requirements-asr.txt` to install every ASR Python backend at once. Make sure `ffmpeg` is available on your `PATH` for SenseVoice / WhisperX backends.
+Use `./python/requirements-asr-sensevoice.txt` for SenseVoice, `./python/requirements-asr-transformers.txt` for `kotoba-whisper-v2.2`, or `./python/requirements-asr.txt` to install every ASR Python backend at once. When installing manually, use Python 3.11 for the WhisperX-backed models. Make sure `ffmpeg` is available on your `PATH` for SenseVoice / WhisperX backends.
 
 ### LLM models (translation)
 

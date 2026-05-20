@@ -17,6 +17,7 @@ const (
 )
 
 var execLookPath = exec.LookPath
+var pythonLauncherDirectCandidates = []string{"python3.11", "python3", "python"}
 
 type pythonLaunchSpec struct {
 	bin            string
@@ -62,11 +63,8 @@ func resolveAutoPythonLaunchSpec(explicitPython, requirementsPath string) (pytho
 		return pythonLaunchSpec{bin: explicitPython}, nil
 	}
 
-	if path, err := execLookPath("python3"); err == nil {
-		return pythonLaunchSpec{bin: path, canRetryWithUV: true}, nil
-	}
-	if path, err := execLookPath("python"); err == nil {
-		return pythonLaunchSpec{bin: path, canRetryWithUV: true}, nil
+	if spec, err := resolveDirectPythonLaunchSpec("", true); err == nil {
+		return spec, nil
 	}
 
 	if spec, err := resolveUVLaunchSpec(requirementsPath); err == nil {
@@ -81,11 +79,10 @@ func resolveDirectPythonLaunchSpec(explicitPython string, canRetryWithUV bool) (
 		return pythonLaunchSpec{bin: explicitPython, canRetryWithUV: canRetryWithUV}, nil
 	}
 
-	if path, err := execLookPath("python3"); err == nil {
-		return pythonLaunchSpec{bin: path, canRetryWithUV: canRetryWithUV}, nil
-	}
-	if path, err := execLookPath("python"); err == nil {
-		return pythonLaunchSpec{bin: path, canRetryWithUV: canRetryWithUV}, nil
+	for _, candidate := range pythonLauncherDirectCandidates {
+		if path, err := execLookPath(candidate); err == nil {
+			return pythonLaunchSpec{bin: path, canRetryWithUV: canRetryWithUV}, nil
+		}
 	}
 
 	return pythonLaunchSpec{}, fmt.Errorf("python backend selected but neither python3 nor python was found in PATH")

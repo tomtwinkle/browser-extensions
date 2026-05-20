@@ -301,7 +301,7 @@ func pythonInstallHint(requirementsPath string) string {
 		installPath = "./python/requirements-asr-transformers.txt"
 	}
 
-	hint := "\n  install uv to auto-provision Python dependencies on demand, or install them manually with: python3 -m pip install -r " + installPath
+	hint := "\n  install uv to auto-provision Python dependencies on demand, or install them manually with Python 3.11: python3.11 -m pip install -r " + installPath
 	if installPath == "./python/requirements-asr-transformers.txt" {
 		return hint
 	}
