@@ -18,6 +18,13 @@ const (
 
 var execLookPath = exec.LookPath
 var pythonLauncherDirectCandidates = []string{"python3.11", "python3", "python"}
+var detectPythonMachine = func(path string) (string, error) {
+	out, err := exec.Command(path, "-c", "import platform; print(platform.machine())").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.ToLower(strings.TrimSpace(string(out))), nil
+}
 
 type pythonLaunchSpec struct {
 	bin            string
@@ -81,6 +88,9 @@ func resolveDirectPythonLaunchSpec(explicitPython string, canRetryWithUV bool) (
 
 	for _, candidate := range pythonLauncherDirectCandidates {
 		if path, err := execLookPath(candidate); err == nil {
+			if !pythonInterpreterMatchesCurrentArch(path) {
+				continue
+			}
 			return pythonLaunchSpec{bin: path, canRetryWithUV: canRetryWithUV}, nil
 		}
 	}
@@ -94,18 +104,42 @@ func resolveUVLaunchSpec(requirementsPath string) (pythonLaunchSpec, error) {
 		return pythonLaunchSpec{}, fmt.Errorf("uv is not available in PATH")
 	}
 
+	args := []string{
+		"run",
+		"--quiet",
+		"--isolated",
+		"--no-project",
+	}
+	args = append(args, uvManagedPythonArgs()...)
+	args = append(args,
+		"--python", pythonLauncherUVPython,
+		"--with-requirements", requirementsPath,
+		"python",
+	)
+
 	return pythonLaunchSpec{
-		bin: uvPath,
-		args: []string{
-			"run",
-			"--quiet",
-			"--isolated",
-			"--no-project",
-			"--python", pythonLauncherUVPython,
-			"--with-requirements", requirementsPath,
-			"python",
-		},
+		bin:  uvPath,
+		args: args,
 	}, nil
+}
+
+func uvManagedPythonArgs() []string {
+	if currentGOOS == "darwin" && currentGOARCH == "arm64" {
+		return []string{"--managed-python"}
+	}
+	return nil
+}
+
+func pythonInterpreterMatchesCurrentArch(path string) bool {
+	if currentGOOS != "darwin" || currentGOARCH != "arm64" {
+		return true
+	}
+
+	machine, err := detectPythonMachine(path)
+	if err != nil {
+		return false
+	}
+	return machine == "arm64" || machine == "aarch64"
 }
 
 func (spec pythonLaunchSpec) command(scriptPath string, scriptArgs ...string) *exec.Cmd {
