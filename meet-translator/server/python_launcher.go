@@ -150,7 +150,7 @@ func (spec pythonLaunchSpec) command(scriptPath string, scriptArgs ...string) *e
 }
 
 func retryWithUV(spec pythonLaunchSpec, requirementsPath, failureText string) (pythonLaunchSpec, bool, error) {
-	if !spec.canRetryWithUV || !looksLikeMissingPythonDependency(failureText) {
+	if !spec.canRetryWithUV || !looksLikePythonDependencyFailure(failureText) {
 		return pythonLaunchSpec{}, false, nil
 	}
 
@@ -161,12 +161,36 @@ func retryWithUV(spec pythonLaunchSpec, requirementsPath, failureText string) (p
 	return uvSpec, true, nil
 }
 
-func looksLikeMissingPythonDependency(message string) bool {
+func looksLikePythonDependencyFailure(message string) bool {
 	lower := strings.ToLower(message)
 	return strings.Contains(lower, "no module named") ||
 		strings.Contains(lower, "modulenotfounderror") ||
 		strings.Contains(lower, "importerror:") ||
-		strings.Contains(lower, "cannot import name")
+		strings.Contains(lower, "cannot import name") ||
+		strings.Contains(lower, "unexpected keyword argument") ||
+		strings.Contains(lower, "numpy is not available") ||
+		looksLikePythonDependencyAttributeError(lower)
+}
+
+func looksLikePythonDependencyAttributeError(message string) bool {
+	if !strings.Contains(message, "has no attribute") {
+		return false
+	}
+	for _, dependency := range []string{
+		"torch",
+		"torchaudio",
+		"numpy",
+		"transformers",
+		"whisperx",
+		"mlx",
+		"mlx_lm",
+		"funasr",
+	} {
+		if strings.Contains(message, dependency) {
+			return true
+		}
+	}
+	return false
 }
 
 func isExpectedPythonWorkerShutdownError(err error, stderr string) bool {

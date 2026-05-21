@@ -180,30 +180,61 @@ func TestResolvePythonLaunchSpec_InvalidPreference(t *testing.T) {
 	}
 }
 
-func TestRetryWithUV_OnlyOnImportLikeFailures(t *testing.T) {
+func TestRetryWithUV_OnDependencyFailures(t *testing.T) {
 	patchCurrentPlatform(t, "linux", "amd64")
 	patchExecLookPath(t, map[string]string{
 		"uv": "/usr/bin/uv",
 	})
 
 	spec := pythonLaunchSpec{bin: "/usr/bin/python3", canRetryWithUV: true}
-	uvSpec, ok, err := retryWithUV(spec, "/tmp/requirements.txt", "ModuleNotFoundError: No module named 'mlx_lm'")
-	if err != nil {
-		t.Fatalf("retryWithUV() error = %v", err)
-	}
-	if !ok {
-		t.Fatal("expected UV retry for import error")
-	}
-	if uvSpec.bin != "/usr/bin/uv" {
-		t.Fatalf("uv bin = %q, want %q", uvSpec.bin, "/usr/bin/uv")
+	tests := []struct {
+		name      string
+		failure   string
+		wantRetry bool
+	}{
+		{
+			name:      "missing module",
+			failure:   "ModuleNotFoundError: No module named 'mlx_lm'",
+			wantRetry: true,
+		},
+		{
+			name:      "dependency attribute mismatch",
+			failure:   "AttributeError: module 'torchaudio' has no attribute 'AudioMetaData'",
+			wantRetry: true,
+		},
+		{
+			name:      "dependency api mismatch",
+			failure:   "TypeError: load_model() got an unexpected keyword argument 'vad_method'",
+			wantRetry: true,
+		},
+		{
+			name:      "dependency runtime unavailable",
+			failure:   "RuntimeError: Numpy is not available",
+			wantRetry: true,
+		},
+		{
+			name:      "non dependency failure",
+			failure:   "ffmpeg not found",
+			wantRetry: false,
+		},
 	}
 
-	_, ok, err = retryWithUV(spec, "/tmp/requirements.txt", "ffmpeg not found")
-	if err != nil {
-		t.Fatalf("retryWithUV() error = %v", err)
-	}
-	if ok {
-		t.Fatal("did not expect UV retry for non-import error")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			uvSpec, ok, err := retryWithUV(spec, "/tmp/requirements.txt", tc.failure)
+			if err != nil {
+				t.Fatalf("retryWithUV() error = %v", err)
+			}
+			if ok != tc.wantRetry {
+				t.Fatalf("retryWithUV() retry = %v, want %v", ok, tc.wantRetry)
+			}
+			if !tc.wantRetry {
+				return
+			}
+			if uvSpec.bin != "/usr/bin/uv" {
+				t.Fatalf("uv bin = %q, want %q", uvSpec.bin, "/usr/bin/uv")
+			}
+		})
 	}
 }
 
