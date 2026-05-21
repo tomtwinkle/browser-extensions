@@ -8,6 +8,15 @@ import (
 	"testing"
 )
 
+func patchCurrentPlatform(t *testing.T, goos, goarch string) {
+	t.Helper()
+	origGOOS, origGOARCH := currentGOOS, currentGOARCH
+	currentGOOS, currentGOARCH = goos, goarch
+	t.Cleanup(func() {
+		currentGOOS, currentGOARCH = origGOOS, origGOARCH
+	})
+}
+
 func patchExecLookPath(t *testing.T, paths map[string]string) {
 	t.Helper()
 	orig := execLookPath
@@ -20,7 +29,20 @@ func patchExecLookPath(t *testing.T, paths map[string]string) {
 	t.Cleanup(func() { execLookPath = orig })
 }
 
+func patchDetectPythonMachine(t *testing.T, machines map[string]string) {
+	t.Helper()
+	orig := detectPythonMachine
+	detectPythonMachine = func(path string) (string, error) {
+		if machine, ok := machines[path]; ok {
+			return machine, nil
+		}
+		return "", errors.New("unknown python machine")
+	}
+	t.Cleanup(func() { detectPythonMachine = orig })
+}
+
 func TestResolvePythonLaunchSpec_AutoPrefersPython311(t *testing.T) {
+	patchCurrentPlatform(t, "linux", "amd64")
 	patchExecLookPath(t, map[string]string{
 		"python3.11": "/usr/bin/python3.11",
 		"python3":    "/usr/bin/python3",
@@ -43,6 +65,7 @@ func TestResolvePythonLaunchSpec_AutoPrefersPython311(t *testing.T) {
 }
 
 func TestResolvePythonLaunchSpec_AutoFallsBackToPython3WhenPython311Missing(t *testing.T) {
+	patchCurrentPlatform(t, "linux", "amd64")
 	patchExecLookPath(t, map[string]string{
 		"python3": "/usr/bin/python3",
 		"uv":      "/usr/bin/uv",
@@ -58,6 +81,7 @@ func TestResolvePythonLaunchSpec_AutoFallsBackToPython3WhenPython311Missing(t *t
 }
 
 func TestResolvePythonLaunchSpec_AutoFallsBackToUV(t *testing.T) {
+	patchCurrentPlatform(t, "linux", "amd64")
 	patchExecLookPath(t, map[string]string{
 		"uv": "/usr/bin/uv",
 	})
@@ -87,6 +111,7 @@ func TestResolvePythonLaunchSpec_AutoFallsBackToUV(t *testing.T) {
 }
 
 func TestResolvePythonLaunchSpec_ForceUV(t *testing.T) {
+	patchCurrentPlatform(t, "linux", "amd64")
 	t.Setenv(pythonLauncherEnvVar, pythonLauncherUV)
 	patchExecLookPath(t, map[string]string{
 		"python3": "/usr/bin/python3",
@@ -103,6 +128,7 @@ func TestResolvePythonLaunchSpec_ForceUV(t *testing.T) {
 }
 
 func TestResolvePythonLaunchSpec_ForcePython(t *testing.T) {
+	patchCurrentPlatform(t, "linux", "amd64")
 	t.Setenv(pythonLauncherEnvVar, pythonLauncherDirect)
 	patchExecLookPath(t, map[string]string{
 		"python3.11": "/usr/bin/python3.11",
@@ -123,6 +149,7 @@ func TestResolvePythonLaunchSpec_ForcePython(t *testing.T) {
 }
 
 func TestResolvePythonLaunchSpec_ExplicitPythonOverrideSkipsUVFallback(t *testing.T) {
+	patchCurrentPlatform(t, "linux", "amd64")
 	t.Setenv("LLM_PYTHON_BIN", "/custom/python")
 	patchExecLookPath(t, map[string]string{
 		"uv": "/usr/bin/uv",
@@ -141,6 +168,7 @@ func TestResolvePythonLaunchSpec_ExplicitPythonOverrideSkipsUVFallback(t *testin
 }
 
 func TestResolvePythonLaunchSpec_InvalidPreference(t *testing.T) {
+	patchCurrentPlatform(t, "linux", "amd64")
 	t.Setenv(pythonLauncherEnvVar, "bogus")
 	patchExecLookPath(t, map[string]string{
 		"python3": "/usr/bin/python3",
@@ -153,6 +181,7 @@ func TestResolvePythonLaunchSpec_InvalidPreference(t *testing.T) {
 }
 
 func TestRetryWithUV_OnlyOnImportLikeFailures(t *testing.T) {
+	patchCurrentPlatform(t, "linux", "amd64")
 	patchExecLookPath(t, map[string]string{
 		"uv": "/usr/bin/uv",
 	})
@@ -179,6 +208,7 @@ func TestRetryWithUV_OnlyOnImportLikeFailures(t *testing.T) {
 }
 
 func TestResolvePythonLaunchSpec_NoPythonOrUV(t *testing.T) {
+	patchCurrentPlatform(t, "linux", "amd64")
 	patchExecLookPath(t, map[string]string{})
 
 	_, err := resolvePythonLaunchSpec("ASR_PYTHON_BIN", "/tmp/requirements.txt")
@@ -187,6 +217,59 @@ func TestResolvePythonLaunchSpec_NoPythonOrUV(t *testing.T) {
 	}
 	if !errors.Is(err, exec.ErrNotFound) && err.Error() == "" {
 		t.Fatalf("unexpected empty error: %v", err)
+	}
+}
+
+func TestResolvePythonLaunchSpec_AutoSkipsIntelPythonOnAppleSilicon(t *testing.T) {
+	patchCurrentPlatform(t, "darwin", "arm64")
+	patchExecLookPath(t, map[string]string{
+		"python3.11": "/usr/local/bin/python3.11",
+		"python3":    "/opt/homebrew/bin/python3",
+		"uv":         "/usr/bin/uv",
+	})
+	patchDetectPythonMachine(t, map[string]string{
+		"/usr/local/bin/python3.11": "x86_64",
+		"/opt/homebrew/bin/python3": "arm64",
+	})
+
+	spec, err := resolvePythonLaunchSpec("LLM_PYTHON_BIN", "/tmp/requirements.txt")
+	if err != nil {
+		t.Fatalf("resolvePythonLaunchSpec() error = %v", err)
+	}
+	if spec.bin != "/opt/homebrew/bin/python3" {
+		t.Fatalf("bin = %q, want %q", spec.bin, "/opt/homebrew/bin/python3")
+	}
+}
+
+func TestResolvePythonLaunchSpec_AutoFallsBackToManagedUVWhenOnlyIntelPythonExistsOnAppleSilicon(t *testing.T) {
+	patchCurrentPlatform(t, "darwin", "arm64")
+	patchExecLookPath(t, map[string]string{
+		"python3.11": "/usr/local/bin/python3.11",
+		"uv":         "/usr/bin/uv",
+	})
+	patchDetectPythonMachine(t, map[string]string{
+		"/usr/local/bin/python3.11": "x86_64",
+	})
+
+	spec, err := resolvePythonLaunchSpec("LLM_PYTHON_BIN", "/tmp/requirements.txt")
+	if err != nil {
+		t.Fatalf("resolvePythonLaunchSpec() error = %v", err)
+	}
+	wantArgs := []string{
+		"run",
+		"--quiet",
+		"--isolated",
+		"--no-project",
+		"--managed-python",
+		"--python", pythonLauncherUVPython,
+		"--with-requirements", "/tmp/requirements.txt",
+		"python",
+	}
+	if spec.bin != "/usr/bin/uv" {
+		t.Fatalf("bin = %q, want %q", spec.bin, "/usr/bin/uv")
+	}
+	if !reflect.DeepEqual(spec.args, wantArgs) {
+		t.Fatalf("args = %v, want %v", spec.args, wantArgs)
 	}
 }
 
