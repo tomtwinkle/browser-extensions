@@ -119,3 +119,38 @@ func TestPythonInstallHintUsesBackendSpecificRequirements(t *testing.T) {
 		})
 	}
 }
+
+func TestPythonWorkerEnv_WhisperXForcesLegacyTorchLoad(t *testing.T) {
+	got := pythonWorkerEnv([]string{
+		"PATH=/usr/bin",
+		"TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=0",
+	}, asrBackendWhisperX)
+
+	if !strings.Contains(strings.Join(got, "\n"), "PATH=/usr/bin") {
+		t.Fatalf("pythonWorkerEnv() dropped unrelated env vars: %v", got)
+	}
+	want := torchForceNoWeightsOnlyLoadEnv
+	count := 0
+	for _, entry := range got {
+		if strings.HasPrefix(entry, "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=") {
+			count++
+			if entry != want {
+				t.Fatalf("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD entry = %q, want %q", entry, want)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD entry count = %d, want 1 (env=%v)", count, got)
+	}
+}
+
+func TestPythonWorkerEnv_OtherBackendsDoNotForceLegacyTorchLoad(t *testing.T) {
+	for _, backend := range []ASRBackendKind{asrBackendSenseVoice, asrBackendTransformersWhisper} {
+		got := pythonWorkerEnv([]string{"PATH=/usr/bin"}, backend)
+		for _, entry := range got {
+			if strings.HasPrefix(entry, "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=") {
+				t.Fatalf("backend %s unexpectedly set TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD: %v", backend, got)
+			}
+		}
+	}
+}

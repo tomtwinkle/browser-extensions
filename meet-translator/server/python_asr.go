@@ -62,6 +62,8 @@ type pythonRequirementsSpec struct {
 	content  string
 }
 
+const torchForceNoWeightsOnlyLoadEnv = "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1"
+
 func newPythonWorkerTranscriber(backend ASRBackendKind, modelRef string) (transcriber, error) {
 	requirementsSpec, err := asrRequirementsSpec(backend)
 	if err != nil {
@@ -110,6 +112,7 @@ func startPythonWorkerTranscriber(
 		"--device", device,
 		"--requirements-path", requirementsPath,
 	)
+	cmd.Env = pythonWorkerEnv(os.Environ(), backend)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -246,6 +249,22 @@ func (w *pythonWorkerTranscriber) stderrSuffix() string {
 		return ""
 	}
 	return "\n  worker stderr: " + msg
+}
+
+func pythonWorkerEnv(baseEnv []string, backend ASRBackendKind) []string {
+	env := append([]string{}, baseEnv...)
+	if backend != asrBackendWhisperX {
+		return env
+	}
+
+	const key = "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD="
+	for i, entry := range env {
+		if strings.HasPrefix(entry, key) {
+			env[i] = torchForceNoWeightsOnlyLoadEnv
+			return env
+		}
+	}
+	return append(env, torchForceNoWeightsOnlyLoadEnv)
 }
 
 func asrRequirementsSpec(backend ASRBackendKind) (pythonRequirementsSpec, error) {
