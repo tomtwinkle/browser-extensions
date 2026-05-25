@@ -110,8 +110,8 @@ func TestExecuteTestWorkflowPinsWhisperXDependencies(t *testing.T) {
 	text := string(content)
 	wantSnippets := []string{
 		`whisperx*|whisperX*|kotoba-whisper-v2.2-faster|RoachLin/kotoba-whisper-v2.2-faster)`,
-		`"torch==2.2.2"`,
-		`"torchaudio==2.2.2"`,
+		`"torch==2.8.0"`,
+		`"torchaudio==2.8.0"`,
 		`"transformers<5"`,
 		`"numpy<2"`,
 		`matplotlib`,
