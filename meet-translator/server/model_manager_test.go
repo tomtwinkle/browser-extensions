@@ -207,8 +207,8 @@ func TestResolveWhisperModel_WhisperXAlias(t *testing.T) {
 	if got.Backend != asrBackendWhisperX {
 		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendWhisperX)
 	}
-	if got.ResolvedSpec != "large-v3" {
-		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, "large-v3")
+	if got.ResolvedSpec != whisperXLatestModelRef {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, whisperXLatestModelRef)
 	}
 }
 
@@ -222,6 +222,45 @@ func TestResolveWhisperModel_WhisperXPrefix(t *testing.T) {
 	}
 	if got.ResolvedSpec != "small" {
 		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, "small")
+	}
+}
+
+func TestResolveWhisperModel_WhisperXLatestCompatibilityPrefix(t *testing.T) {
+	got, err := resolveWhisperModel("whisperx:large-v3-turbo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != asrBackendWhisperX {
+		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendWhisperX)
+	}
+	if got.ResolvedSpec != whisperXLatestModelRef {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, whisperXLatestModelRef)
+	}
+}
+
+func TestResolveWhisperModel_WhisperXTurboAlias(t *testing.T) {
+	got, err := resolveWhisperModel("whisperx-turbo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != asrBackendWhisperX {
+		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendWhisperX)
+	}
+	if got.ResolvedSpec != whisperXLatestModelRef {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, whisperXLatestModelRef)
+	}
+}
+
+func TestResolveWhisperModel_WhisperXLargeV3Alias(t *testing.T) {
+	got, err := resolveWhisperModel("whisperx-large-v3")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Backend != asrBackendWhisperX {
+		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendWhisperX)
+	}
+	if got.ResolvedSpec != whisperXLargeV3ModelRef {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, whisperXLargeV3ModelRef)
 	}
 }
 
@@ -285,8 +324,8 @@ func TestResolveWhisperModel_WhisperXUppercaseAlias(t *testing.T) {
 	if got.Backend != asrBackendWhisperX {
 		t.Fatalf("backend = %q, want %q", got.Backend, asrBackendWhisperX)
 	}
-	if got.ResolvedSpec != "large-v3" {
-		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, "large-v3")
+	if got.ResolvedSpec != whisperXLatestModelRef {
+		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, whisperXLatestModelRef)
 	}
 }
 
