@@ -35,8 +35,8 @@ const (
 	bonsai8BMLXModelRef  = "prism-ml/Ternary-Bonsai-8B-mlx-2bit"
 	bonsai4BMLXModelRef  = "prism-ml/Ternary-Bonsai-4B-mlx-2bit"
 	bonsai17BMLXModelRef = "prism-ml/Ternary-Bonsai-1.7B-mlx-2bit"
-	hyMT218BQ4KMURL      = "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf"
-	hyMT27BQ4KMURL       = "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/main/Hy-MT2-7B-Q4_K_M.gguf"
+	hyMT218BQ4KMURL      = "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/1cd5208700acedef4ef93019b6cfc148b8522d45/Hy-MT2-1.8B-Q4_K_M.gguf"
+	hyMT27BQ4KMURL       = "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/ab8472660ac61fac25f1af43fac2599d52a8a775/Hy-MT2-7B-Q4_K_M.gguf"
 )
 
 // ─── Whisper レジストリ ───────────────────────────────────────────────────────
