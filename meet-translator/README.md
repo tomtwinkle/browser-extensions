@@ -260,9 +260,11 @@ Specify a model name with `--llama-model` and it will be downloaded automaticall
 | Model | Size | License | Notes |
 |---|---|---|---|
 | `qwen3.5:0.8b-q4_k_m` | ≈ 0.6 GB | Apache 2.0 | **Default floor**, Thinking-capable |
+| `tencent/Hy-MT2-1.8B` / `Hy-MT2-1.8B-GGUF` | ≈ 1.1 GB | Tencent HY Community License Agreement | Official Tencent Hy 1.8B alias, downloads the Q4_K_M GGUF build |
 | `bonsai-8b` | ≈ 1.15 GB / MLX repo | Apache 2.0 | **First step-up**, Thinking-capable, MLX on Apple Silicon, PrismML elsewhere |
 | `bonsai-4b` | MLX repo | Apache 2.0 | Apple Silicon-only MLX Bonsai, Thinking-capable |
 | `bonsai-1.7b` | MLX repo | Apache 2.0 | Apple Silicon-only MLX Bonsai, Thinking-capable |
+| `tencent/Hy-MT2-7B` / `Hy-MT2-7B` / `Hy-MT2-7B-GGUF` | ≈ 4.6 GB | Tencent HY Community License Agreement | Official Tencent Hy 7B aliases, download the Q4_K_M GGUF build (`Hy-MT2-7BGGUF` is also accepted) |
 | `qwen3:8b-q4_k_m` | ≈ 5.2 GB | Apache 2.0 | Higher tier, Thinking-capable |
 | `calm3:22b-q4_k_m` | ≈ 13 GB | Apache 2.0 | Top tier, Japanese/English specialist, requires 16 GB VRAM |
 | `gemma4:e4b-q4_k_m` | ≈ 2.6 GB | Apache 2.0 | Fast & lightweight (Google Gemma 4) |
@@ -289,6 +291,9 @@ Specify a model name with `--llama-model` and it will be downloaded automaticall
 > If you build only the standard binary, run `make prism` before using `bonsai-8b`.
 > Known MLX repo IDs are also accepted directly, for example
 > `prism-ml/Ternary-Bonsai-8B-mlx-2bit` or `mlx-community/Qwen3-0.6B-4bit`.
+> `tencent/Hy-MT2-1.8B`, `Hy-MT2-1.8B-GGUF`, `Hy-MT2-7B`, and `Hy-MT2-7BGGUF`
+> resolve to Tencent's official `Q4_K_M` GGUF builds so they can run on the
+> bundled `llama.cpp` backend.
 
 You can also specify a file path directly:
 
@@ -544,8 +549,8 @@ Two workflow types run across 4 platforms on every pull request:
 This software embeds [whisper.cpp](https://github.com/ggerganov/whisper.cpp) **v1.8.4** and
 [llama.cpp](https://github.com/ggerganov/llama.cpp) **b8699**, both released under the MIT License.
 
-Models downloaded at runtime (Whisper, Qwen3.5, Qwen3, Qwen2.5-7B/14B, Gemma4) are released
-under MIT or Apache 2.0. Qwen2.5-3B is excluded from the registry as it carries a
-non-commercial-only license.
+Models downloaded at runtime (Whisper, Qwen3.5, Qwen3, Qwen2.5-7B/14B, Gemma4, Hy-MT2)
+are released under MIT, Apache 2.0, or the Tencent HY Community License Agreement.
+Qwen2.5-3B is excluded from the registry as it carries a non-commercial-only license.
 
 See [THIRDPARTY.md](../THIRDPARTY.md) for full copyright notices and model license details.

@@ -263,9 +263,11 @@ SenseVoice なら `./python/requirements-asr-sensevoice.txt`、`kotoba-whisper-v
 | モデル名 | サイズ | ライセンス | 備考 |
 |---|---|---|---|
 | `qwen3.5:0.8b-q4_k_m` | ≈ 0.6 GB | Apache 2.0 | **default floor**、Thinking 対応 |
+| `tencent/Hy-MT2-1.8B` / `Hy-MT2-1.8B-GGUF` | ≈ 1.1 GB | Tencent HY Community License Agreement | Tencent Hy 公式 1.8B alias。`Q4_K_M` GGUF をダウンロード |
 | `bonsai-8b` | ≈ 1.15 GB / MLX repo | Apache 2.0 | **最初の step-up**、Thinking 対応、Apple Silicon は MLX、その他は PrismML |
 | `bonsai-4b` | MLX repo | Apache 2.0 | Apple Silicon 専用の MLX Bonsai、Thinking 対応 |
 | `bonsai-1.7b` | MLX repo | Apache 2.0 | Apple Silicon 専用の MLX Bonsai、Thinking 対応 |
+| `tencent/Hy-MT2-7B` / `Hy-MT2-7B` / `Hy-MT2-7B-GGUF` | ≈ 4.6 GB | Tencent HY Community License Agreement | Tencent Hy 公式 7B alias。`Q4_K_M` GGUF をダウンロード（`Hy-MT2-7BGGUF` も可） |
 | `qwen3:8b-q4_k_m` | ≈ 5.2 GB | Apache 2.0 | 上位 tier、Thinking 対応 |
 | `calm3:22b-q4_k_m` | ≈ 13 GB | Apache 2.0 | 最上位 tier、日英特化、要 16 GB VRAM |
 | `gemma4:e4b-q4_k_m` | ≈ 2.6 GB | Apache 2.0 | 高速・軽量 (Google Gemma 4) |
@@ -293,6 +295,9 @@ SenseVoice なら `./python/requirements-asr-sensevoice.txt`、`kotoba-whisper-v
 > 登録済みの MLX repo ID を直接指定することもでき、たとえば
 > `prism-ml/Ternary-Bonsai-8B-mlx-2bit` や `mlx-community/Qwen3-0.6B-4bit`
 > を受け付けます。
+> `tencent/Hy-MT2-1.8B`、`Hy-MT2-1.8B-GGUF`、`Hy-MT2-7B`、`Hy-MT2-7BGGUF`
+> は Tencent 公式の `Q4_K_M` GGUF に解決され、同梱の `llama.cpp`
+> backend でそのまま実行できます。
 
 ファイルパスを直接指定することも可能です:
 
@@ -552,7 +557,8 @@ Score = quality×0.6 + speed×0.4  (speed = 1/(1 + latency/300ms))
 本ソフトウェアは [whisper.cpp](https://github.com/ggerganov/whisper.cpp) **v1.8.4** および
 [llama.cpp](https://github.com/ggerganov/llama.cpp) **b8699** を組み込んでいます。いずれも MIT ライセンスで公開されています。
 
-実行時にダウンロードされるモデル（Whisper、Qwen3.5、Qwen3、Qwen2.5-7B/14B、Gemma4）は
-MIT または Apache 2.0 で公開されています。Qwen2.5-3B は非商用限定ライセンスのためレジストリ対象外です。
+実行時にダウンロードされるモデル（Whisper、Qwen3.5、Qwen3、Qwen2.5-7B/14B、Gemma4、Hy-MT2）は
+MIT / Apache 2.0 / Tencent HY Community License Agreement のいずれかで公開されています。
+Qwen2.5-3B は非商用限定ライセンスのためレジストリ対象外です。
 
 完全な著作権表示およびモデルのライセンス詳細は [THIRDPARTY.md](../THIRDPARTY.md) を参照してください。

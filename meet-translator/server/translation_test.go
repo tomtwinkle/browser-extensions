@@ -43,6 +43,26 @@ func TestBuildGemmaPrompt(t *testing.T) {
 	assertNotContains(t, got, "<|im_start|>")
 }
 
+func TestBuildHyPrompt(t *testing.T) {
+	got := buildTranslationPrompt("Hello", "en", "ja", "hy", ModelOptions{}, nil, "")
+	assertContains(t, got, "<｜hy_begin▁of▁sentence｜>")
+	assertContains(t, got, "<｜hy_User｜>")
+	assertContains(t, got, "<｜hy_Assistant｜>")
+	assertContains(t, got, "Translate from English to Japanese")
+	assertContains(t, got, "Hello")
+	assertNotContains(t, got, "<|im_start|>")
+}
+
+func TestBuildHy7Prompt(t *testing.T) {
+	got := buildTranslationPrompt("Hello", "en", "ja", "hy7", ModelOptions{}, nil, "")
+	assertContains(t, got, "<|startoftext|>")
+	assertContains(t, got, "<|extra_4|>")
+	assertContains(t, got, "<|extra_0|>")
+	assertContains(t, got, "Translate from English to Japanese")
+	assertContains(t, got, "Hello")
+	assertNotContains(t, got, "<|im_start|>")
+}
+
 func TestBuildTranslationPrompt_UnknownTemplateUsesQwen(t *testing.T) {
 	got := buildTranslationPrompt("Hi", "en", "fr", "unknown-template", ModelOptions{}, nil, "")
 	assertContains(t, got, "<|im_start|>system")
@@ -76,6 +96,15 @@ func TestBuildGemmaPrompt_WithHistory(t *testing.T) {
 	currentIdx := strings.Index(got, "Hello")
 	if historyIdx >= currentIdx {
 		t.Errorf("history should appear before current text in prompt")
+	}
+}
+
+func TestTemplateFor_HyMT2Aliases(t *testing.T) {
+	if got := templateFor("tencent/Hy-MT2-1.8B"); got != "hy" {
+		t.Errorf("templateFor(1.8B) = %q, want %q", got, "hy")
+	}
+	if got := templateFor("Hy-MT2-7BGGUF"); got != "hy7" {
+		t.Errorf("templateFor(7B) = %q, want %q", got, "hy7")
 	}
 }
 
@@ -200,6 +229,16 @@ func TestStripLLMArtifacts(t *testing.T) {
 		{
 			name:  "qwen im_start assistant",
 			input: "<|im_start|>assistant\nこんにちは<|im_end|>",
+			want:  "こんにちは",
+		},
+		{
+			name:  "hy 1.8b tokens",
+			input: "<｜hy_Assistant｜>\nこんにちは<｜hy_place▁holder▁no▁2｜>",
+			want:  "こんにちは",
+		},
+		{
+			name:  "hy 7b tokens",
+			input: "<|startoftext|><|extra_0|>こんにちは<|eos|>",
 			want:  "こんにちは",
 		},
 		{

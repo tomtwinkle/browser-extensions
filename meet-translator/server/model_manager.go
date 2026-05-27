@@ -35,6 +35,8 @@ const (
 	bonsai8BMLXModelRef  = "prism-ml/Ternary-Bonsai-8B-mlx-2bit"
 	bonsai4BMLXModelRef  = "prism-ml/Ternary-Bonsai-4B-mlx-2bit"
 	bonsai17BMLXModelRef = "prism-ml/Ternary-Bonsai-1.7B-mlx-2bit"
+	hyMT218BQ4KMURL      = "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf"
+	hyMT27BQ4KMURL       = "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/main/Hy-MT2-7B-Q4_K_M.gguf"
 )
 
 // ─── Whisper レジストリ ───────────────────────────────────────────────────────
@@ -154,7 +156,7 @@ var whisperRegistry = map[string]WhisperEntry{
 type LlamaEntry struct {
 	URL         string
 	MLXModelRef string
-	Template    string // "qwen" | "qwen3" | "gemma"
+	Template    string // "qwen" | "qwen3" | "gemma" | "hy" | "hy7"
 	HasThinking bool   // Qwen3 の thinking モードに対応しているか
 	NeedsPrism  bool   // PrismML ビルドが必要 (Q1_0_g128 量子化を使用するモデル)
 }
@@ -224,6 +226,44 @@ var llamaRegistry = map[string]LlamaEntry{
 		MLXModelRef: "mlx-community/Qwen3.5-9B-MLX-4bit",
 		Template:    "qwen3",
 		HasThinking: true,
+	},
+
+	// ── Hy-MT2 (Tencent Hy, official repo IDs resolve to Q4_K_M GGUF) ────────
+	"tencent/Hy-MT2-1.8B": {
+		URL:      hyMT218BQ4KMURL,
+		Template: "hy",
+	},
+	"Hy-MT2-1.8B": {
+		URL:      hyMT218BQ4KMURL,
+		Template: "hy",
+	},
+	"Hy-MT2-1.8B-GGUF": {
+		URL:      hyMT218BQ4KMURL,
+		Template: "hy",
+	},
+	"tencent/Hy-MT2-1.8B-GGUF": {
+		URL:      hyMT218BQ4KMURL,
+		Template: "hy",
+	},
+	"tencent/Hy-MT2-7B": {
+		URL:      hyMT27BQ4KMURL,
+		Template: "hy7",
+	},
+	"Hy-MT2-7B": {
+		URL:      hyMT27BQ4KMURL,
+		Template: "hy7",
+	},
+	"Hy-MT2-7B-GGUF": {
+		URL:      hyMT27BQ4KMURL,
+		Template: "hy7",
+	},
+	"Hy-MT2-7BGGUF": {
+		URL:      hyMT27BQ4KMURL,
+		Template: "hy7",
+	},
+	"tencent/Hy-MT2-7B-GGUF": {
+		URL:      hyMT27BQ4KMURL,
+		Template: "hy7",
 	},
 
 	// ── CALM3 (日英特化, CyberAgent, Apache 2.0) ──────────────────────────────

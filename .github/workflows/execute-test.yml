@@ -243,6 +243,17 @@ jobs:
             bin: server
             whisper_model: whisperX:small
             llama_model: qwen3:0.6b-q4_k_m
+          # ── 新規: Hy-MT2 translation models (Linux only) ──────────────────────
+          - os: ubuntu-latest
+            name: ubuntu-amd64
+            bin: server
+            whisper_model: tiny
+            llama_model: Hy-MT2-1.8B-GGUF
+          - os: ubuntu-latest
+            name: ubuntu-amd64
+            bin: server
+            whisper_model: tiny
+            llama_model: Hy-MT2-7B-GGUF
 
     env:
       WHISPER_MODEL: ${{ matrix.whisper_model }}
@@ -440,6 +451,14 @@ jobs:
             gemma4:e2b-q4_k_m)
               DEST="$MODEL_CACHE_DIR/llama/google_gemma-4-E2B-it-Q4_K_M.gguf"
               URL="https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/2b078a823b3180e03bcbe6c2dfc96afde936857b/google_gemma-4-E2B-it-Q4_K_M.gguf"
+              ;;
+            Hy-MT2-1.8B-GGUF)
+              DEST="$MODEL_CACHE_DIR/llama/Hy-MT2-1.8B-Q4_K_M.gguf"
+              URL="https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf"
+              ;;
+            Hy-MT2-7B-GGUF)
+              DEST="$MODEL_CACHE_DIR/llama/Hy-MT2-7B-Q4_K_M.gguf"
+              URL="https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/main/Hy-MT2-7B-Q4_K_M.gguf"
               ;;
             *)
               # その他のモデルはサーバー起動時に自動ダウンロード
