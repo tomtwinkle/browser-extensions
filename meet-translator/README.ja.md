@@ -243,9 +243,10 @@ curl http://localhost:7070/health
 | `kotoba-whisper-v2.2` / `kotoba-tech/kotoba-whisper-v2.2` | モデル側で管理 | ◎◎ ローカル Python Transformers worker 経由の Kotoba-Whisper v2.2 |
 | `kotoba-whisper-v2.2-faster` / `RoachLin/kotoba-whisper-v2.2-faster` | モデル側で管理 | ◎◎ WhisperX / faster-whisper 経由の Kotoba-Whisper v2.2 |
 | `sensevoice` | モデル側で管理 | ◎ ローカル Python worker 経由の高速多言語 ASR |
-| `whisperx` / `whisperX` | モデル側で管理 | ◎ ローカル Python worker 経由の WhisperX large-v3 |
+| `whisperx` / `whisperX` / `whisperx-turbo` | モデル側で管理 | ◎ ローカル Python worker 経由の WhisperX `turbo`（最新の公式 Whisper モデル） |
+| `whisperx-large-v3` | モデル側で管理 | ◎◎ ローカル Python worker 経由の WhisperX `large-v3` |
 
-`sensevoice:<model-ref>` と `whisperx:<model-name>`（`whisperX:<model-name>` も可）の高度な指定にも対応します。
+`sensevoice:<model-ref>` と `whisperx:<model-name>`（`whisperX:<model-name>` も可）の高度な指定にも対応します。例: `whisperx:turbo`, `whisperx:distil-large-v3`。また、server 側の互換 alias として `whisperx:large-v3-turbo` も受け付け、WhisperX / faster-whisper の `turbo` に正規化します。
 
 SenseVoice / WhisperX はローカル Python worker を使います。`uv` が入っていれば、選んだ backend に必要な依存だけ isolated 環境へ自動で入ります。手動で入れる場合は、先に対応する Python 依存を入れてください。
 

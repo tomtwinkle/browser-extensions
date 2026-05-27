@@ -139,6 +139,15 @@ func loadConfig() config {
 		fmt.Fprintf(w, "Config file: %s\n\n", configFilePath())
 		fmt.Fprintf(w, "Options:\n")
 		flag.PrintDefaults()
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "%s━━ whisper model (speech recognition) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n", colorYellow, colorReset)
+		printWhisperHelp(w)
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "%s━━ llama model (translation LLM) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%s\n", colorYellow, colorReset)
+		printLlamaHelp(w)
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "%sExample:%s\n", colorYellow, colorReset)
+		fmt.Fprintf(w, "  meet-translator-server --whisper-model %s --llama-model %s\n", firstRunWhisperModel, firstRunLlamaModel)
 	}
 	flag.Parse()
 

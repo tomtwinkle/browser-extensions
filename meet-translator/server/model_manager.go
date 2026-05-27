@@ -32,11 +32,13 @@ var (
 )
 
 const (
-	bonsai8BMLXModelRef  = "prism-ml/Ternary-Bonsai-8B-mlx-2bit"
-	bonsai4BMLXModelRef  = "prism-ml/Ternary-Bonsai-4B-mlx-2bit"
-	bonsai17BMLXModelRef = "prism-ml/Ternary-Bonsai-1.7B-mlx-2bit"
-	hyMT218BQ4KMURL      = "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/1cd5208700acedef4ef93019b6cfc148b8522d45/Hy-MT2-1.8B-Q4_K_M.gguf"
-	hyMT27BQ4KMURL       = "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/ab8472660ac61fac25f1af43fac2599d52a8a775/Hy-MT2-7B-Q4_K_M.gguf"
+	bonsai8BMLXModelRef     = "prism-ml/Ternary-Bonsai-8B-mlx-2bit"
+	bonsai4BMLXModelRef     = "prism-ml/Ternary-Bonsai-4B-mlx-2bit"
+	bonsai17BMLXModelRef    = "prism-ml/Ternary-Bonsai-1.7B-mlx-2bit"
+	hyMT218BQ4KMURL         = "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/1cd5208700acedef4ef93019b6cfc148b8522d45/Hy-MT2-1.8B-Q4_K_M.gguf"
+	hyMT27BQ4KMURL          = "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/ab8472660ac61fac25f1af43fac2599d52a8a775/Hy-MT2-7B-Q4_K_M.gguf"
+	whisperXLatestModelRef  = "turbo"
+	whisperXLargeV3ModelRef = "large-v3"
 )
 
 // ─── Whisper レジストリ ───────────────────────────────────────────────────────
@@ -138,15 +140,23 @@ var whisperRegistry = map[string]WhisperEntry{
 	},
 	"whisperx": {
 		Backend:  asrBackendWhisperX,
-		ModelRef: "large-v3",
+		ModelRef: whisperXLatestModelRef,
 	},
 	"whisperX": {
 		Backend:  asrBackendWhisperX,
-		ModelRef: "large-v3",
+		ModelRef: whisperXLatestModelRef,
+	},
+	"whisperx-turbo": {
+		Backend:  asrBackendWhisperX,
+		ModelRef: whisperXLatestModelRef,
 	},
 	"whisperx-large-v3": {
 		Backend:  asrBackendWhisperX,
-		ModelRef: "large-v3",
+		ModelRef: whisperXLargeV3ModelRef,
+	},
+	"whisperx-large-v3-turbo": {
+		Backend:  asrBackendWhisperX,
+		ModelRef: whisperXLatestModelRef,
 	},
 }
 
@@ -557,7 +567,7 @@ func resolveSpecialWhisperSpec(spec string) (ResolvedWhisperModel, bool, error) 
 		return ResolvedWhisperModel{
 			Backend:      asrBackendWhisperX,
 			Spec:         spec,
-			ResolvedSpec: ref,
+			ResolvedSpec: normalizeWhisperXModelRef(ref),
 		}, true, nil
 	}
 
@@ -566,9 +576,32 @@ func resolveSpecialWhisperSpec(spec string) (ResolvedWhisperModel, bool, error) 
 
 func resolvedPythonWhisperModelRef(spec string, entry WhisperEntry) string {
 	if entry.ModelRef != "" {
+		if entry.Backend == asrBackendWhisperX {
+			return normalizeWhisperXModelRef(entry.ModelRef)
+		}
 		return entry.ModelRef
 	}
+	if entry.Backend == asrBackendWhisperX {
+		return normalizeWhisperXModelRef(spec)
+	}
 	return spec
+}
+
+// WhisperX/faster-whisper exposes the latest OpenAI Whisper checkpoint as
+// "turbo", while the native whisper.cpp backend uses the server-facing
+// "large-v3-turbo" naming. Normalize the common server alias here so both
+// backends can be selected consistently.
+func normalizeWhisperXModelRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ref
+	}
+	switch strings.ToLower(ref) {
+	case "large-v3-turbo":
+		return whisperXLatestModelRef
+	default:
+		return ref
+	}
 }
 
 func normalizeSenseVoiceModelRef(ref string) string {

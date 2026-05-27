@@ -240,9 +240,10 @@ Specify a model name with `--whisper-model` and it will be downloaded automatica
 | `kotoba-whisper-v2.2` / `kotoba-tech/kotoba-whisper-v2.2` | model-managed | ◎◎ Kotoba-Whisper v2.2 via local Python Transformers worker |
 | `kotoba-whisper-v2.2-faster` / `RoachLin/kotoba-whisper-v2.2-faster` | model-managed | ◎◎ Kotoba-Whisper v2.2 via WhisperX / faster-whisper |
 | `sensevoice` | model-managed | ◎ Fast multilingual ASR via local Python worker |
-| `whisperx` / `whisperX` | model-managed | ◎ WhisperX large-v3 via local Python worker |
+| `whisperx` / `whisperX` / `whisperx-turbo` | model-managed | ◎ WhisperX `turbo` via local Python worker (latest official Whisper model) |
+| `whisperx-large-v3` | model-managed | ◎◎ WhisperX `large-v3` via local Python worker |
 
-Advanced forms are also supported: `sensevoice:<model-ref>` and `whisperx:<model-name>` (also `whisperX:<model-name>`).
+Advanced forms are also supported: `sensevoice:<model-ref>` and `whisperx:<model-name>` (also `whisperX:<model-name>`). For example: `whisperx:turbo`, `whisperx:distil-large-v3`. The server also accepts `whisperx:large-v3-turbo` and normalizes it to WhisperX's `turbo` model name.
 
 SenseVoice / WhisperX use the local Python worker. If `uv` is installed, the worker provisions only the dependencies needed for the selected backend automatically. Otherwise, install the matching local Python dependencies first:
 

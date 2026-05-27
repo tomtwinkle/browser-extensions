@@ -55,7 +55,7 @@ curl -L -o ggml-base.bin \
 | `ggml-kotoba-whisper-v2.0.bin` | 3.1 GB | ◎◎ JA-focused |
 | `ggml-kotoba-whisper-v2.0-q5_0.bin` | ≈ 1.0 GB | ◎ JA-focused (quantized) |
 
-モデル名でも指定できます: `large-v3-turbo`, `kotoba-whisper`, `kotoba-whisper-q5_0`, `kotoba-whisper-v2.2`, `kotoba-whisper-v2.2-faster`, `whisperx`
+モデル名でも指定できます: `large-v3-turbo`, `kotoba-whisper`, `kotoba-whisper-q5_0`, `kotoba-whisper-v2.2`, `kotoba-whisper-v2.2-faster`, `whisperx`, `whisperx-turbo`, `whisperx-large-v3`
 
 Python バックエンドも `--whisper-model` で選択できます:
 
@@ -64,15 +64,18 @@ Python バックエンドも `--whisper-model` で選択できます:
 | `kotoba-whisper-v2.2` / `kotoba-tech/kotoba-whisper-v2.2` | Transformers Whisper | Kotoba-Whisper v2.2、ローカル Python worker |
 | `kotoba-whisper-v2.2-faster` / `RoachLin/kotoba-whisper-v2.2-faster` | WhisperX (faster-whisper backend) | Kotoba-Whisper v2.2 の faster-whisper 変換版 |
 | `sensevoice` / `sensevoice-small` | FunASR SenseVoiceSmall | 高速な多言語 ASR、ローカル Python worker |
-| `whisperx` / `whisperX` / `whisperx-large-v3` | WhisperX (faster-whisper backend) | VAD 付き、多言語 ASR、ローカル Python worker |
+| `whisperx` / `whisperX` / `whisperx-turbo` | WhisperX (faster-whisper backend) | VAD 付き、多言語 ASR。最新の OpenAI Whisper `turbo` をローカル Python worker で実行 |
+| `whisperx-large-v3` | WhisperX (faster-whisper backend) | VAD 付き、多言語 ASR。`large-v3` を明示利用したい場合の alias |
 | `sensevoice:<model-ref>` | FunASR | 任意の SenseVoice 系 model ref |
-| `whisperx:<model-name>` | WhisperX | 任意の WhisperX / faster-whisper モデル名（`whisperX:` でも可） |
+| `whisperx:<model-name>` | WhisperX | 任意の WhisperX / faster-whisper モデル名（`whisperX:` でも可。例: `whisperx:turbo`, `whisperx:distil-large-v3`） |
+
+`whisperx:large-v3-turbo` も server 側の互換 alias として受け付け、WhisperX / faster-whisper の `turbo` に正規化します。
 
 > **Python バックエンドの準備**:
 > `uv` が入っていれば、選んだ backend に必要な依存だけ isolated 環境へ自動で入ります。
 > 手動で入れる場合は Python 3.11 を使い、backend に合わせて次を選んでください:
 > - `sensevoice`: `python3.11 -m pip install -r ./python/requirements-asr-sensevoice.txt`
-> - `whisperx`, `whisperX`, `kotoba-whisper-v2.2-faster`: `python3.11 -m pip install -r ./python/requirements-asr-whisperx.txt`
+> - `whisperx*`, `whisperX*`, `kotoba-whisper-v2.2-faster`: `python3.11 -m pip install -r ./python/requirements-asr-whisperx.txt`
 > - `kotoba-whisper-v2.2`: `python3.11 -m pip install -r ./python/requirements-asr-transformers.txt`
 > - 全部まとめて入れる場合: `python3.11 -m pip install -r ./python/requirements-asr.txt`
 >
