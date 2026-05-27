@@ -401,6 +401,41 @@ func TestResolveLlamaModel_Download(t *testing.T) {
 	}
 }
 
+func TestResolveLlamaModel_HyMT2AliasesUseCache(t *testing.T) {
+	patchPlatform(t, "linux", "amd64")
+	cacheDir := setTestModelCacheDir(t)
+	t.Setenv("OLLAMA_MODELS", t.TempDir())
+
+	path18 := setupLlamaCache(t, cacheDir, "Hy-MT2-1.8B-Q4_K_M.gguf")
+	path7 := setupLlamaCache(t, cacheDir, "Hy-MT2-7B-Q4_K_M.gguf")
+
+	tests := []struct {
+		spec string
+		want string
+	}{
+		{spec: "tencent/Hy-MT2-1.8B", want: path18},
+		{spec: "Hy-MT2-1.8B-GGUF", want: path18},
+		{spec: "tencent/Hy-MT2-7B", want: path7},
+		{spec: "Hy-MT2-7B-GGUF", want: path7},
+		{spec: "Hy-MT2-7BGGUF", want: path7},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.spec, func(t *testing.T) {
+			got, err := resolveLlamaModel(tt.spec)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.Backend != llmBackendLlamaCPP {
+				t.Fatalf("backend = %q, want %q", got.Backend, llmBackendLlamaCPP)
+			}
+			if got.ResolvedSpec != tt.want {
+				t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveLlamaModel_UnknownName(t *testing.T) {
 	setTestModelCacheDir(t)
 	t.Setenv("OLLAMA_MODELS", t.TempDir())

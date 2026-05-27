@@ -95,6 +95,15 @@ SOFTWARE.
 - **ライセンス**: Apache License 2.0
 - **著作権**: Copyright (c) Alibaba Cloud
 
+### Hy-MT2-1.8B / 7B (Tencent Hunyuan, official GGUF releases)
+
+- **配布元**:
+  - https://huggingface.co/tencent/Hy-MT2-1.8B
+  - https://huggingface.co/tencent/Hy-MT2-7B
+  - GGUF: https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF / https://huggingface.co/tencent/Hy-MT2-7B-GGUF
+- **ライセンス**: Tencent HY Community License Agreement
+- **備考**: このプロジェクトでは公式 `Q4_K_M` GGUF 版を自動ダウンロード対象に含みます。ライセンス本文には EU 非適用および territory 制限が含まれるため、利用前に必ず確認してください。
+
 ### Gemma 4 E2B / E4B / 26B (Google LLC, bartowski GGUF)
 
 - **配布元**: https://huggingface.co/bartowski/ (bartowski による GGUF 量子化版)

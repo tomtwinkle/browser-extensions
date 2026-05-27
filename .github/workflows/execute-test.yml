@@ -243,6 +243,17 @@ jobs:
             bin: server
             whisper_model: whisperX:small
             llama_model: qwen3:0.6b-q4_k_m
+          # ── 新規: Hy-MT2 translation models (Linux only) ──────────────────────
+          - os: ubuntu-latest
+            name: ubuntu-amd64
+            bin: server
+            whisper_model: tiny
+            llama_model: Hy-MT2-1.8B-GGUF
+          - os: ubuntu-latest
+            name: ubuntu-amd64
+            bin: server
+            whisper_model: tiny
+            llama_model: Hy-MT2-7B-GGUF
 
     env:
       WHISPER_MODEL: ${{ matrix.whisper_model }}
@@ -419,7 +430,7 @@ jobs:
         timeout-minutes: 20
         run: |
           # model_manager.go の resolveLlamaModel と同じパスにダウンロードする
-          # mutable な resolve/main は supply-chain 上避け、固定 revision に pin する
+          # Hugging Face の参照は immutable revision に pin する
           if [ "${{ runner.os }}" = "macOS" ]; then
             case "${{ matrix.llama_model }}" in
               bonsai-8b|bonsai-4b|bonsai-1.7b|prism-ml/Ternary-Bonsai-*|qwen2.5:7b-instruct-q4_k_m|qwen2.5:14b-instruct-q4_k_m|qwen3:0.6b-q4_k_m|qwen3:1.7b-q4_k_m|qwen3:4b-q4_k_m|qwen3:8b-q4_k_m|qwen3.5:0.8b-q4_k_m|qwen3.5:2b-q4_k_m|qwen3.5:4b-q4_k_m|qwen3.5:9b-q4_k_m|calm3:22b-q4_k_m|gemma4:e2b-q4_k_m|gemma4:e4b-q4_k_m|gemma4:26b-q4_k_m|mlx-community/*)
@@ -440,6 +451,14 @@ jobs:
             gemma4:e2b-q4_k_m)
               DEST="$MODEL_CACHE_DIR/llama/google_gemma-4-E2B-it-Q4_K_M.gguf"
               URL="https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF/resolve/2b078a823b3180e03bcbe6c2dfc96afde936857b/google_gemma-4-E2B-it-Q4_K_M.gguf"
+              ;;
+            Hy-MT2-1.8B-GGUF)
+              DEST="$MODEL_CACHE_DIR/llama/Hy-MT2-1.8B-Q4_K_M.gguf"
+              URL="https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/1cd5208700acedef4ef93019b6cfc148b8522d45/Hy-MT2-1.8B-Q4_K_M.gguf"
+              ;;
+            Hy-MT2-7B-GGUF)
+              DEST="$MODEL_CACHE_DIR/llama/Hy-MT2-7B-Q4_K_M.gguf"
+              URL="https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/ab8472660ac61fac25f1af43fac2599d52a8a775/Hy-MT2-7B-Q4_K_M.gguf"
               ;;
             *)
               # その他のモデルはサーバー起動時に自動ダウンロード

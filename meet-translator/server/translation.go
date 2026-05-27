@@ -38,6 +38,10 @@ func buildTranslationPrompt(text, sourceLang, targetLang, template string, opts 
 		return buildQwen3Prompt(text, src, tgt, opts, history, termsHint)
 	case "gemma":
 		return buildGemmaPrompt(text, src, tgt, termsHint, history)
+	case "hy":
+		return buildHyPrompt(text, src, tgt, termsHint, history)
+	case "hy7":
+		return buildHy7Prompt(text, src, tgt, termsHint, history)
 	default: // "qwen" (Qwen2.5) およびその他
 		return buildQwenPrompt(text, src, tgt, termsHint, history)
 	}
@@ -101,6 +105,91 @@ func buildGemmaPrompt(text, src, tgt, termsHint string, history []contextEntry) 
 	return sb.String()
 }
 
+type chatMessage struct {
+	role    string
+	content string
+}
+
+func translationMessages(text, src, tgt string, history []contextEntry) []chatMessage {
+	messages := make([]chatMessage, 0, len(history)*2+1)
+	for _, h := range history {
+		messages = append(messages,
+			chatMessage{
+				role:    "user",
+				content: fmt.Sprintf("Translate from %s to %s:\n%s", src, tgt, h.Transcription),
+			},
+			chatMessage{
+				role:    "assistant",
+				content: h.Translation,
+			},
+		)
+	}
+	messages = append(messages, chatMessage{
+		role:    "user",
+		content: fmt.Sprintf("Translate from %s to %s:\n%s", src, tgt, text),
+	})
+	return messages
+}
+
+func buildHyPrompt(text, src, tgt, termsHint string, history []contextEntry) string {
+	return buildHyChatPrompt(systemPrompt(termsHint), translationMessages(text, src, tgt, history))
+}
+
+func buildHy7Prompt(text, src, tgt, termsHint string, history []contextEntry) string {
+	return buildHy7ChatPrompt(systemPrompt(termsHint), translationMessages(text, src, tgt, history))
+}
+
+func buildHyChatPrompt(system string, messages []chatMessage) string {
+	var sb strings.Builder
+	sb.WriteString("<｜hy_begin▁of▁sentence｜>")
+	if system != "" {
+		sb.WriteString(system)
+		sb.WriteString("<｜hy_place▁holder▁no▁3｜>")
+	}
+	for _, msg := range messages {
+		switch msg.role {
+		case "user":
+			sb.WriteString("<｜hy_User｜>")
+			sb.WriteString(msg.content)
+		case "assistant":
+			sb.WriteString("<｜hy_Assistant｜>")
+			sb.WriteString(msg.content)
+			sb.WriteString("<｜hy_place▁holder▁no▁2｜>")
+		}
+	}
+	if len(messages) == 0 || messages[len(messages)-1].role != "assistant" {
+		sb.WriteString("<｜hy_Assistant｜>")
+	}
+	return sb.String()
+}
+
+func buildHy7ChatPrompt(system string, messages []chatMessage) string {
+	var sb strings.Builder
+	bareNextUser := false
+	if system != "" {
+		sb.WriteString("<|startoftext|>")
+		sb.WriteString(system)
+		sb.WriteString("<|extra_4|>")
+		bareNextUser = true
+	}
+	for _, msg := range messages {
+		switch msg.role {
+		case "user":
+			if !bareNextUser {
+				sb.WriteString("<|startoftext|>")
+			}
+			sb.WriteString(msg.content)
+			sb.WriteString("<|extra_0|>")
+			bareNextUser = false
+		case "assistant":
+			sb.WriteString(msg.content)
+			sb.WriteString("<|eos|>")
+			bareNextUser = false
+		}
+	}
+	return sb.String()
+}
+
 // stripThinkingTokens は Qwen3 thinking モードの <think>...</think> ブロックを除去する。
 // 閉じタグ </think> が存在しない場合（max_tokens による途中切断）は
 // <think> 以降をすべて除去する。
@@ -128,6 +217,10 @@ var llmArtifactRe = regexp.MustCompile(
 	`<start_of_turn>\w*|<end_of_turn>` +
 		// Qwen: <|im_start|>assistant など / <|im_end|>
 		`|<\|im_start\|>\w*|<\|im_end\|>` +
+		// Hy-MT2 7B: <|startoftext|> / <|extra_0|> / <|extra_4|> / <|eos|>
+		`|<\|startoftext\|>|<\|eos\|>|<\|extra_\d+\|>` +
+		// Hy-MT2 1.8B: <｜hy_Assistant｜> / <｜hy_place▁holder▁no▁2｜> など
+		`|<｜hy_[^｜]+｜>` +
 		// Llama 2/3 instruct: [INST] [/INST] <<SYS>> <</SYS>>
 		`|\[/?INST\]|<</?SYS>>` +
 		// その他よくある EOS/BOS トークン表記
@@ -184,6 +277,10 @@ func buildAnalysisPrompt(records []TranslationRecord, template string) string {
 			"<start_of_turn>user\n%s\n%s<end_of_turn>\n<start_of_turn>model\n",
 			sys, userContent,
 		)
+	case "hy":
+		return buildHyChatPrompt(sys, []chatMessage{{role: "user", content: userContent}})
+	case "hy7":
+		return buildHy7ChatPrompt(sys, []chatMessage{{role: "user", content: userContent}})
 	default:
 		return fmt.Sprintf(
 			"<|im_start|>system\n%s<|im_end|>\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n",

@@ -97,6 +97,7 @@ func printLlamaHelp(w io.Writer) {
 	fmt.Fprintf(w, "    %s--llama-model qwen3:8b-q4_k_m%s     (higher tier, 5.2GB, Thinking)\n", colorCyan, colorReset)
 	fmt.Fprintf(w, "    %s--llama-model calm3:22b-q4_k_m%s    (top tier, JA/EN specialist, 13GB, needs ~16GB VRAM)\n", colorCyan, colorReset)
 	fmt.Fprintf(w, "  Also available manually: bonsai-4b, bonsai-1.7b, qwen3.5:2b/4b/9b, qwen3:0.6b/1.7b/4b, qwen2.5:7b/14b, gemma4:e2b/e4b/26b.\n")
+	fmt.Fprintf(w, "  Hy-MT2 aliases: tencent/Hy-MT2-1.8B, Hy-MT2-1.8B-GGUF, Hy-MT2-7B, Hy-MT2-7BGGUF (downloads Tencent's official Q4_K_M GGUF builds).\n")
 	fmt.Fprintf(w, "  Apple Silicon (darwin/arm64): models with a known MLX variant use MLX automatically.\n")
 	fmt.Fprintf(w, "    current coverage: bonsai, qwen2.5, qwen3/3.5, gemma4, calm3\n")
 	fmt.Fprintf(w, "    if uv is installed, MLX dependencies are provisioned automatically\n")

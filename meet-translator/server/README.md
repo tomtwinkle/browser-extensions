@@ -86,9 +86,11 @@ Ollama でダウンロード済みの GGUF があれば自動的に検索・再�
 | モデル名 | サイズ | 備考 |
 |---|---|---|
 | `qwen3.5:0.8b-q4_k_m` | ≈ 0.6 GB | default floor、Thinking 対応 |
+| `tencent/Hy-MT2-1.8B` / `Hy-MT2-1.8B-GGUF` | ≈ 1.1 GB | Tencent Hy 公式 1.8B alias。`Q4_K_M` GGUF をダウンロード |
 | `bonsai-8b`           | ≈ 1.15 GB / MLX repo | 最初の step-up、Thinking 対応。Apple Silicon では MLX 自動選択、その他は PrismML |
 | `bonsai-4b`           | MLX repo | Apple Silicon 専用、Thinking 対応 |
 | `bonsai-1.7b`         | MLX repo | Apple Silicon 専用、Thinking 対応 |
+| `tencent/Hy-MT2-7B` / `Hy-MT2-7B` / `Hy-MT2-7B-GGUF` | ≈ 4.6 GB | Tencent Hy 公式 7B alias。`Hy-MT2-7BGGUF` も受け付け、`Q4_K_M` GGUF をダウンロード |
 | `qwen3:8b-q4_k_m`     | ≈ 5.2 GB | 上位 tier、Thinking 対応 |
 | `qwen3.5:2b-q4_k_m`   | ≈ 1.4 GB | 軽量、Thinking 対応 |
 | `qwen3.5:4b-q4_k_m`   | ≈ 3.2 GB | Thinking 対応 |
@@ -109,6 +111,9 @@ Ollama でダウンロード済みの GGUF があれば自動的に検索・再�
 > 登録済みの MLX repo ID を直接指定することもでき、たとえば
 > `prism-ml/Ternary-Bonsai-8B-mlx-2bit` や `mlx-community/Qwen3-0.6B-4bit`
 > を受け付けます。
+> `tencent/Hy-MT2-1.8B`、`Hy-MT2-1.8B-GGUF`、`Hy-MT2-7B`、`Hy-MT2-7BGGUF`
+> は Tencent 公式の `Q4_K_M` GGUF へ解決されます。ライセンスは
+> `Tencent HY Community License Agreement` です。
 
 GGUF ファイルを直接指定することも可能です:
 
