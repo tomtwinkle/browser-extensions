@@ -1,6 +1,6 @@
 # Compression and compact-model benchmark screen
 
-Reviewed: 2026-09-29. This is a published-results pre-screen for bounded local
+Reviewed: 2026-09-30. This is a published-results pre-screen for bounded local
 experiments, not application qualification. Model, artifact, runtime, template,
 quality, memory, final-caption latency, and M1 integration gates still apply.
 
@@ -68,6 +68,8 @@ selectable catalog. It is not a published-benchmark pass or a selected model.
 | CULL-MT layer pruning | The paper's pruning results cover Persian, French, and German to English; it does not provide Japanese-English measurements for the method. | Do not shortlist for this product. |
 | Gemma 4 QAT Q4_0 | The reviewed exact quantized repository does not publish relevant JA↔EN translation quality numbers. | Do not shortlist until exact-variant translation scores exist. |
 | Knowledge distillation | Distilled Kotoba-Whisper-Bilingual v1.0 has Japanese CER 16.8 versus 14.9 for Whisper large-v3; no reviewed distilled JA↔EN translation artifact passes the score screen. | Screen out this ASR example; defer translation models without numeric bilingual scores. |
+| ARK-ASR-0.6B teacher-data adaptation + on-policy distillation | Author-reported English average WER is 6.55 vs 6.93 for Qwen3-ASR-0.6B and 6.25 for Qwen3-ASR-1.7B; Chinese average CER is 4.30 vs 4.36 and 3.58. Japanese is listed as supported, but the card and paper give no Japanese score. The model has a 0.6B decoder plus a separate 0.6B-scale audio encoder/adapter. | `DEFERRED`; no Japanese numerical quality result, and the three additional-ASR comparison slots are already allocated. The community BF16 MLX conversion has no M1 Max qualification. |
+| Qwen3-ASR-0.6B MLX quantization variants | Community report gives 8-bit g64 English LibriSpeech WER 2.33%/4.14% against FP16 2.33%/4.30% (test-clean/test-other). Its published 4-bit artifact is decoder 4-bit + encoder 8-bit and reports 2.37% test-clean WER vs 2.33% FP16; no test-other score is reported for that exact artifact. A separate all-layer 4-bit g64 experiment reports 2.59%/5.74% and 1.71x 10-second speed, which must not be attributed to the published artifact. FP16 Japanese FLEURS CER is 9.3% on 10 samples; the exact quantized artifacts have no Japanese score. | `DEFERRED`; exact quantized variants lack Japanese measurements, and the additional-ASR candidate budget is full. Published speed figures are not M1 Max measurements. |
 | Pruning | CULL-MT reports Persian/French/German→English results, not Japanese-English. | No model is shortlisted without exact-variant Japanese-English scores against a comparable parent. |
 | Low-rank factorization | CAT-Translate reports using LoRA in training, but its released inference weights are not a low-rank adapter or factorized checkpoint. | Do not treat CAT-Translate's scores as evidence for low-rank-compressed inference. |
 | Weight sharing | No reviewed exact Japanese-English artifact with a comparable parent score was found. | Defer until a method-specific artifact passes the same numeric screen. |
