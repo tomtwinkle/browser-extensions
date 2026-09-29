@@ -1,6 +1,12 @@
 # Manual test plan
 
-All audio and meeting tests use a consented test meeting and known test audio. Do not use ordinary meeting recordings in repository fixtures. The measurements below remain blocked until the local model and dataset are authorized and prepared.
+Real meeting tests use a consented test meeting and known test audio. The automated Edge fixture uses only a synthetic local page and tone. Do not use ordinary meeting recordings in repository fixtures. Model measurements remain blocked until the local model and dataset are authorized and prepared.
+
+## Automated Edge browser fixture on the M1 Max
+
+Run `node meet-translator/eval/device/run-browser-e2e.mjs` from the repository root. The suite runs in a disposable Edge profile and checks the native correction side panel, settings save, authenticated loopback API, tab audio capture, private review, correction/undo, approval-only sharing, hostile-text rendering, silence suppression, and stop/restart. See [`../eval/device/README.md`](../eval/device/README.md) for isolation details.
+
+The first 2026-09-29 run, before the current launch-path fix, passed all 13 browser checks on M1 Max / 32 GB / 24-core GPU with Edge 154.0.4258.37 and sent four synthetic WAV requests to a deterministic API double. A later launch attempt crashed before browser checks. After the launcher fix, the isolated Edge rerun passed 13/13 and cleanup completed without error; the ignored report now records that run. A passing fixture validates browser wiring on the physical device; it does not validate a real Google Meet room, screen sharing, model quality, inference memory/latency, Metal execution, or the 60-minute target.
 
 ## M1 Max integration run
 

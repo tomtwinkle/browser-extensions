@@ -20,6 +20,11 @@ test('short speaker-batch flushing does not request the alarms permission', () =
   assert.equal(manifest.permissions.includes('alarms'), false);
 });
 
+test('private correction UI is registered as the browser side panel', () => {
+  assert.ok(manifest.permissions.includes('sidePanel'));
+  assert.deepEqual(manifest.side_panel, { default_path: 'sidepanel.html' });
+});
+
 test('caption pages are bundled and use separate public and private Ports', () => {
   const presenterHtml = fs.readFileSync(path.join(manifestDir, 'caption-presenter.html'), 'utf8');
   const presenterJs = fs.readFileSync(path.join(manifestDir, 'caption-presenter.js'), 'utf8');

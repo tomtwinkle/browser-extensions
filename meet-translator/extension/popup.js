@@ -34,8 +34,34 @@ function openExtensionPage(fileName) {
   });
 }
 
+function isMeetPage(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && parsed.hostname.toLowerCase() === 'meet.google.com' &&
+      !parsed.username && !parsed.password;
+  } catch (_) {
+    return false;
+  }
+}
+
 openCaptionShareButton.addEventListener('click', () => openExtensionPage('caption-presenter.html'));
-openCorrectionPanelButton.addEventListener('click', () => openExtensionPage('sidepanel.html'));
+
+async function openPrivateCorrections() {
+  if (!chrome.sidePanel?.open) {
+    openExtensionPage('sidepanel.html');
+    return;
+  }
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id == null) throw new Error(msgs.errorOpenCorrectionPanel);
+    await chrome.sidePanel.open({ tabId: tab.id });
+  } catch (error) {
+    showError(error.message || msgs.errorOpenCorrectionPanel);
+  }
+}
+
+openCorrectionPanelButton.addEventListener('click', () => openPrivateCorrections());
 
 // ---------------------------------------------------------------------------
 // UI helpers
@@ -95,7 +121,7 @@ overlayEnabledToggle.addEventListener('change', () => {
 chrome.storage.local.get({ sourceLang: '' }, ({ sourceLang }) => {
   msgs = getMessages(sourceLang);
   applyI18n(msgs);
-  migrateLegacyChatSetting(chrome.storage.local).then((showNotice) => {
+  MeetTranslatorShared.migrateLegacyChatSetting(chrome.storage.local).then((showNotice) => {
     if (!showNotice) return;
     migrationNotice.textContent = msgs.chatMigrationNotice;
     migrationNotice.style.display = 'block';
@@ -184,7 +210,7 @@ toggleBtn.addEventListener('click', async () => {
       // Make sure we are on a Meet tab
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-      if (!tab || !tab.url?.startsWith('https://meet.google.com/')) {
+      if (!tab || !isMeetPage(tab.url)) {
         showError(msgs.errorMeetTab);
         setLoading(false);
         return;

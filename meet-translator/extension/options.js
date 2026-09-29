@@ -37,7 +37,7 @@ chrome.storage.local.get(Object.keys(DEFAULTS), (stored) => {
 
   msgs = getMessages(cfg.sourceLang);
   applyI18n(msgs);
-  migrateLegacyChatSetting(chrome.storage.local).then((showNotice) => {
+  MeetTranslatorShared.migrateLegacyChatSetting(chrome.storage.local).then((showNotice) => {
     if (showNotice) showStatus(msgs.chatMigrationNotice, '');
   });
 });
@@ -62,7 +62,7 @@ function updateOverlayOptionsField(enabled) {
 // ---------------------------------------------------------------------------
 $('save-btn').addEventListener('click', () => {
   const cfg = {
-    serverUrl:      normalizeLocalServerURL($('server-url').value.trim()),
+    serverUrl:      MeetTranslatorShared.normalizeLocalServerURL($('server-url').value.trim()),
     apiToken:       $('api-token').value.trim(),
     sourceLang:     $('source-lang').value,
     targetLang:     $('target-lang').value,
@@ -86,7 +86,7 @@ $('save-btn').addEventListener('click', () => {
 // Health check button
 // ---------------------------------------------------------------------------
 $('health-btn').addEventListener('click', async () => {
-  const url = normalizeLocalServerURL($('server-url').value.trim());
+  const url = MeetTranslatorShared.normalizeLocalServerURL($('server-url').value.trim());
   if (!url) {
     showStatus(msgs.msgInvalidServerUrl, 'err');
     return;

@@ -9,7 +9,8 @@
     "scripting",
     "storage",
     "offscreen",
-    "tabs"
+    "tabs",
+    "sidePanel"
   ],
   "host_permissions": [
     "https://meet.google.com/*",
@@ -30,6 +31,9 @@
     }
   },
   "options_page": "options.html",
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
   "content_scripts": [
     {
       "matches": [

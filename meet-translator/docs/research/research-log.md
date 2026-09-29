@@ -198,3 +198,44 @@
 **Decision.** `NO_MATERIAL_CHANGE` to model selection, runtime, quantization, model-specific templates, published-score screens, M1 resource/quality criteria, or the public-caption gate. Keep all ten candidates `DEFERRED`, none `SELECTED`, and `PROFILE_NOT_QUALIFIED`. Keep experimental compression candidates only when public numerical results pass the existing comparable-score screen; passing that screen does not qualify local product quality.
 
 **Evidence and limits.** Extension and EXIF tests pass 76/76 (66 Meet extension tests); the evaluation contract tests pass 14/14. Offline checks still report 66 sources, 10 deferred candidates, 3 published benchmark screens, 0 selected models, and `PROFILE_NOT_QUALIFIED`. No model weights were downloaded and no M1 model run, human-reviewed quality set, or Meet integration test was performed.
+
+## R12 — Edge side panel and physical-device browser harness, 2026-09-29
+
+**Question.** Can the private correction UI run in Edge's native side panel, and what browser-level user activation and local-network rules must the M1 device harness exercise to test actual tab audio safely?
+
+**Search scope.** Reviewed Microsoft Edge's official extension side-panel documentation and Local Network Access guidance; Chrome's official `tabCapture`, `activeTab`, and extension cross-origin fetch documentation; and Chromium's host resolver rule implementation. Exact sources, retrieval date, supported claims, and limitations are recorded in `sources.jsonl`.
+
+**Findings and implementation deltas.**
+
+- Microsoft Edge documents the `sidePanel` permission, `side_panel.default_path`, and `sidePanel.open()` for an extension page. Added the correction page as the native side panel while retaining the normal tab fallback for browsers without the API. The M1 Max Edge fixture confirmed the panel opens and initializes beside the local Meet-host page.
+- `tabCapture` can only capture after an extension invocation; the target tab also requires `activeTab`. The activeTab documentation includes extension action and commands shortcuts as invoking actions. The isolated test copy now declares a test-only action shortcut and the DevTools session dispatches it before capture, exercising browser authorization without using the user's normal profile.
+- Extension pages can fetch cross-origin when host permissions cover the endpoint. Edge's current LNA documentation says extensions with required host permissions are not subject to the new restrictions, and local-to-loopback development requests do not trigger the site permission prompt. This is consistent with the observed Edge fixture request to the loopback API; the fixture mirrors the product server's exact-Origin-when-present and bearer-token authentication contract.
+- Chromium's resolver accepts explicit `MAP` and `EXCLUDE` rules. Updated the disposable browser's resolver to map only the Meet fixture to loopback, fail other hostnames, and exclude the loopback API address from that fail-closed rule.
+- Added a physical-device Edge suite covering settings, authenticated API access, side panel, tab audio, private candidate review, correction/undo, approved-only sharing, hostile-text rendering, silence suppression, and stop/restart.
+
+**Decision.** `NO_MATERIAL_CHANGE` to model candidates, runtime, quantization, M1 quality/resource limits, or caption publication policy. This adds an Edge-native private review surface and a real-browser integration check. `PROFILE_NOT_QUALIFIED` remains locked because the test uses synthetic audio and a deterministic API double.
+
+**Evidence and limits.** The 2026-09-29 run passed 13/13 checks on Apple M1 Max / 32 GB / 24-core GPU, macOS 26.6.2, Edge 154.0.4258.37. Four synthetic WAV requests reached the local API, and the tests verified private-to-approved projection and lifecycle behavior. The test does not enter Google Meet, share a screen, load ASR/translation weights, measure model quality/latency/memory, or prove Metal execution. The ignored report is `eval/private-data/device-browser-e2e.json`.
+
+**Next conditions.** Run the consented real Meet and screen-sharing scenario separately in Edge, then obtain authorized model artifacts and reviewed bilingual development/holdout data before any quality, runtime, model, or qualification decision. Keep the public output gate and selection lock unchanged until those requirements pass.
+
+## R13 — Edge startup crash and launch-path review, 2026-09-29
+
+**Question.** Did the isolated Edge test start far enough to load the extension, and can the harness avoid repeating the observed macOS application-startup crash or orphaning a partially started process?
+
+**Cause-specific primary sources.** Checked Apple's official [Launch Services](https://developer.apple.com/documentation/coreservices/launch_services) and [`CFBundleShortVersionString`](https://developer.apple.com/documentation/bundleresources/information_property_list/cfbundleshortversionstring) documentation. The crash report's Node parent and `HIServices`/AppKit registration frames place the failure during application startup; they do not prove which launch call triggered it or establish that Launch Services alone fixes it. The version read now uses the documented bundle version key through `plutil`, without invoking Edge's executable first.
+
+**Broader current-source check.** Rechecked the official Qwen3-ASR repository/card/report, MLX v0.32.2 release, CAT-Translate author card, Meta Omnilingual ASR repository, and Qwen3-ASR Toolkit release and usage instructions. Details and limitations are recorded under `SRC-QWEN-ASR-REPO`, `SRC-QWEN-ASR-PAPER`, `SRC-MLX-RELEASE-0322`, `SRC-OMNILINGUAL-ASR`, and `SRC-QWEN-ASR-TOOLKIT` in `sources.jsonl`.
+
+**Findings and implementation deltas.**
+
+- The failed run did not reach the DevTools endpoint or execute browser checks. A prior isolated Edge 154 fixture run had passed 13/13, but the crash invalidates the failed run and requires a fresh result before reporting the harness as currently passing.
+- The runner now obtains the installed Edge version from its app-bundle metadata and uses macOS Launch Services for the isolated launch. It closes the browser through that profile's DevTools connection, waits for the exact temporary-profile processes to exit, and never sends PID-based termination signals. If any process remains or exit cannot be confirmed, the temporary profile is preserved and cleanup is reported as a failure.
+- Added model-free tests for the no-executable version lookup, Launch Services arguments, startup timeout, reused-PID observation, refusing PID termination while a helper remains, preserving the profile when a helper survives the browser root, and preserving it when process exit cannot be confirmed. The nested launcher tests are included in the documented evaluation test command.
+- Qwen3-ASR's current official implementation confirms Japanese and English among its language coverage and documents a newer Transformers path, but no official M1 execution route or Japanese Meet-quality score was established. The ASR Toolkit's current release uses the DashScope API and is excluded by the local-only requirement. Omnilingual CTC 300M has author-reported runtime/resource numbers on A100, but no comparable per-direction Japanese quality result was confirmed. MLX v0.32.2 does not establish this extension's model/runtime integration. No new candidate passes the numeric quality screen.
+
+**Decision.** `NO_MATERIAL_CHANGE` to candidate selection, M1 thresholds, model/runtime/quantization/templates, or publication gate. Keep all ten candidates `DEFERRED`, none `SELECTED`, and `PROFILE_NOT_QUALIFIED`. Change only the browser test launch/cleanup path and its regression coverage.
+
+**Evidence and limits.** The focused launcher tests pass 7/7, and the complete evaluation suite passes 21/21 (14 evaluation tests plus 7 launcher tests); JavaScript syntax and whitespace checks pass. Two independent static reviews found no remaining code findings. The corrected isolated Edge fixture passed 13/13 on the M1 Max, with `cleanupError:null`. It exercised only the synthetic Meet-host page, synthetic tab tone, and deterministic local API double; no model weights or meeting audio were downloaded or evaluated.
+
+**Next conditions.** The isolated synthetic Edge fixture is complete. Real Meet, screen sharing, model quality, inference memory/latency, Metal execution, and the 60-minute profile remain unqualified; keep `PROFILE_NOT_QUALIFIED` until their required evidence exists.

@@ -24,7 +24,17 @@ Run the model-free integrity checks from the repository root:
 ```sh
 node meet-translator/eval/check-contracts.mjs
 node meet-translator/eval/check-research.mjs --offline
-node --test meet-translator/eval/*.test.mjs
+node --test meet-translator/eval/*.test.mjs meet-translator/eval/device/*.test.mjs
 ```
 
 `check-contracts` reports fixture-level schema and hash checks only; product acceptance is recorded separately in `docs/implementation-status.md`. A green fixture check does not imply that the caption UI, local API, publication gate, or model has passed its contract.
+
+## Physical-device browser integration
+
+On the specified M1 Max, the Edge browser fixture can be run separately:
+
+```sh
+node meet-translator/eval/device/run-browser-e2e.mjs
+```
+
+It uses an isolated Edge profile, a synthetic Meet-hosted page and tone, and a deterministic local API test double. See [`device/README.md`](device/README.md) for scope and exact limitations. A passing browser fixture verifies the extension integration path only; it is not a model-quality or profile-qualification result.

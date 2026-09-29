@@ -24,6 +24,7 @@ const MESSAGES = {
     errorServerDisconnected: 'Connection to server lost. Auto-translate stopped.',
     errorStartFailed:      'Failed to start. Please make sure the server is running.',
     errorStopFailed:       'Failed to stop.',
+    errorOpenCorrectionPanel: 'Could not open the private correction panel.',
     // options
     optionsTitle:          '⚙ Meet Translator – Settings',
     sectionServer:         'Local Server',
@@ -97,6 +98,7 @@ const MESSAGES = {
     errorServerDisconnected: 'サーバーへの接続が切断されました。自動翻訳を停止しました。',
     errorStartFailed:      '開始に失敗しました。サーバーが起動しているか確認してください。',
     errorStopFailed:       '停止に失敗しました。',
+    errorOpenCorrectionPanel: '非公開の訂正パネルを開けませんでした。',
     // options
     optionsTitle:          '⚙ Meet Translator – 設定',
     sectionServer:         'ローカルサーバー',

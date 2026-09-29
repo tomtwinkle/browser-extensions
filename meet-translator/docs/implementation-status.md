@@ -14,10 +14,10 @@
 
 | 段階 | 状態 | 根拠・残件 |
 | --- | --- | --- |
-| S0 調査・基準確認 | DONE | 指示書、開始時HEAD・既存dirty差分、既存テスト、実推論経路を確認。仕様全文を `docs/implementation-spec.md` に保存し、R0/R4/R5/R6/R7/R8/R9/R10および原因別追記を記録。 |
-| S1 API・評価基盤・基準凍結 | IN_PROGRESS | 3評価track、音声hash/split検査、API認証/Origin/Host/body上限、FIR resampler、モデル別翻訳prompt fixture、圧縮モデルの公開benchmark screen、T15基本queue上限を追加。CI smoke testは認証/Origin付きでserver既定port 17070を確認する。再現可能な品質scorer、資源計測器、残りのT15制御は未完。 |
+| S0 調査・基準確認 | DONE | 指示書、開始時HEAD・既存dirty差分、既存テスト、実推論経路を確認。仕様全文を `docs/implementation-spec.md` に保存し、R0〜R13と原因別追記を記録。 |
+| S1 API・評価基盤・基準凍結 | IN_PROGRESS | 3評価track、音声hash/split検査、API認証/Origin/Host/body上限、FIR resampler、モデル別翻訳prompt fixture、圧縮モデルの公開benchmark screen、T15基本queue上限、M1 Max上の隔離EdgeブラウザーE2Eを追加。Edge 154の修正版launcherはM1 Maxで13/13 PASS。品質scorer、モデル性能計測器、残りのT15制御は未完。 |
 | S2 ASR・VAD・公開判定 | PARTIAL | native WhisperとWhisperXの詳細結果を保持し、Whisper scoreは診断表示だけに使用。mic/tabを別energy-VADで処理。待機/実行/話者batchを4件・10秒以内に数え、5秒超のqueue項目とbatchは推論前に破棄する。話者batch flush待機後にsession/generationを再確認し、停止後のincoming音声再保持を防ぐ。短いidle flushはone-shot timerを使用する。非音声・短発話の実音声評価、校正済みgate、全backendの同等segment metadataは未完。 |
-| S3 字幕共有・訂正UI | PARTIAL | 公開字幕ページと非公開訂正ページ、明示承認、訂正/undo/sourceRevisionを実装。Chrome/Meetでの実会議、実画面共有、配布拡張IDでのOrigin検査は未試験。 |
+| S3 字幕共有・訂正UI | PARTIAL | 公開字幕ページと非公開訂正ページ、明示承認、訂正/undo/sourceRevisionを実装。M1 Max上の最新Edge fixtureはnative side panel、合成tab音声、private review、訂正/undo、明示承認とstop/restartを13/13 PASS。実Google Meet会議、実画面共有、配布拡張IDでのOrigin検査は未試験。 |
 | S4 候補比較・M1統合資格 | BLOCKED | M1 Maxの実機はあるが、許可済みの重みと人手確認済み日英dev/holdoutがない。ASR-only/MT-only/E2Eのモデル出力、品質、メモリ、確定遅延、60分結合試験は未実施。 |
 | S5 QR PoC | NOT_STARTED | 通常の字幕・訂正機能の完了後に行う独立実験。 |
 | S6 最終研究・選定lock | BLOCKED | 10候補はすべてDEFERRED。公開数値screen通過は3構成だが、選定モデル、実行hash、holdout結果、M1計測、復帰試験がないため `PROFILE_NOT_QUALIFIED` を維持。 |
@@ -27,7 +27,7 @@
 | ID | 状態 | 証拠・残件 |
 | --- | --- | --- |
 | T01 | PARTIAL | Google Chatの権限・投稿経路を削除し、旧設定移行を追加。実ブラウザーで開始/訂正/停止中のchat副作用ゼロは未確認。 |
-| T02 | PARTIAL | 100件の新着でも訂正中の値、選択範囲、対象IDを保つsynthetic UI test。実DOM・Chrome操作は未確認。 |
+| T02 | PARTIAL | 100件の新着でも訂正中の値、選択範囲、対象IDを保つsynthetic UI test。Edge実ブラウザーfixtureでも合成音声の新着中にdraft値・選択範囲・対象segmentが維持されることを確認。実Meet DOMは未確認。 |
 | T03 | PARTIAL | IME変換中Enterが保存を呼ばないsynthetic UI test。実IME/browser試験は未確認。 |
 | T04 | PARTIAL | 公開storeは原文とpending/failed訳を別状態で保持し、訳失敗で原文を消さない。実Meet/画面共有の結合は未確認。 |
 | T05 | PARTIAL | session/generation/revisionの旧イベント拒否をstore/UI testで確認。Chromeの非同期競合は未確認。 |
@@ -39,11 +39,11 @@
 | T11 | PARTIAL | Whisper閾値境界/スコア未取得/他backendへ閾値を流用しない診断testあり。数値は校正前で、自動公開gateではない。 |
 | T12 | PARTIAL | synthetic 341 ms voiced fixtureがdurationだけで捨てられないことを確認。自然な短い否定・数字、無音/雑音誤検出は未評価。 |
 | T13 | PARTIAL | native WhisperとWhisperXは構造化segmentを返し、得られないscoreはnull。SenseVoiceなど他adapterのsegment/timing契約が揃っていない。 |
-| T14 | PARTIAL | stop/restart、stream generation、mic非公開、終了sessionをsynthetic store testで確認。実ブラウザーでの復旧と再許可は未試験。 |
+| T14 | PARTIAL | stop/restart、stream generation、mic非公開、終了sessionをsynthetic store testで確認。Edge実機fixtureでtabCaptureの開始、停止後のoverlay/session終了、再開、無音時送信なしを確認。mic権限の再許可と実Meetは未試験。 |
 | T15 | PARTIAL | 待機・実行中・話者batch保持中の音声を最大4件/10秒に制限し、queue先頭とbatch flushで5秒超をSTALEとして破棄。停止中に話者変更flushが完了してもincoming音声を再保持しない。短いidle flushにchrome.alarmsを使わない。OVERLOAD/STALE件数と累積音声時間を非公開訂正UIに表示。翻訳dedupe/期限、評価telemetry、共通推論排他、適応負荷制御は未実装。 |
-| T16 | PARTIAL | bearer token、loopback、Origin/Host、preflight、8 MiB拒否をGo testで確認。実extension Originと配布IDで未確認。 |
+| T16 | PARTIAL | bearer token、loopback、Origin/Host、preflight、8 MiB拒否をGo testで確認。Edge 154から隔離loopback APIへ認証付きhealth/transcribe/translateが届くことをfixtureで確認。Originなしの拡張要求を実サーバーと同じBearer認証契約で処理。配布IDとGoサーバーbinaryの結合は未確認。 |
 | T17 | PARTIAL | storageをtrusted contextに制限し、旧chat設定と通知の移行を追加。全設定/辞書/明示モデルの保存互換性は未監査。 |
-| T18 | PARTIAL | 字幕/訂正画面はtextContentで描画し、Chat権限なし。QR表示・復号は未実装。 |
+| T18 | PARTIAL | 字幕/訂正画面はtextContentで描画し、Chat権限なし。Edge実機fixtureで悪意あるHTML風字幕が`#caption-list`内に要素を生成せず文字列表示されることを確認。QR表示・復号は未実装。 |
 | T19 | PARTIAL | Offscreen Port再接続、session復元、重複開始拒否のsynthetic test。Chrome強制SW終了試験は未実施。 |
 | T20 | PARTIAL | 一般ログと辞書feedbackから字幕本文/話者/会議URLを外した。全ログ経路のsecret checkerは未実装。 |
 | T21 | NOT_STARTED | 全件保留や字幕消失を精度改善として扱わない評価器・negative fixtureは未完。 |
@@ -71,14 +71,14 @@
 | R09 | DONE | 重み・データ・実機推論がない候補はDEFERRED/BLOCKEDのまま。 |
 | R10 | PARTIAL | research/fixture integrity checkerのpositive/negative testsあり。budget/secret漏洩・製品公開gateなど未対応contractが残る。 |
 | R11 | BLOCKED | 採用モデルの切替/停止/復帰runなし。 |
-| R12 | PARTIAL | M1性能記録と手動試験計画を追加。実測値はまだない。 |
+| R12 | PARTIAL | M1性能記録と手動試験計画を追加。M1 Max上のEdge実ブラウザーfixtureとEdge process-tree RSSは記録したがモデル推論を含まず、モデル品質・遅延・resident memoryの計測値はない。 |
 
 ## 変更した領域
 
 - `extension/`: mic/tab別energy-VAD、session/generation検査、host-only訂正UI、字幕用public/private channel、承認・訂正・undo・translation revision管理、字幕ページを追加。
 - `server/`: loopback API認証と上限、FIRリサンプル、構造化ASR結果、Whisper固有診断、Whisper候補文を保持する固定source patch、Python音声入力のin-memory処理を追加。
 - `eval/` と `server/cmd/eval/`: ASR-only、正しい原文MT-only、E2Eを分離し、synthetic fixture・local WAV hash・track/split検査を追加。モデル推論は実行しない。
-- `docs/research/`: 一次情報・候補・調査log・圧縮benchmark screen・PROFILE_NOT_QUALIFIED lockを保存。現在66 source / 10 candidate、全候補DEFERRED。公開screen PASSは3件だが、実機適格モデルは0件。
+- `docs/research/`: 一次情報・候補・調査log・圧縮benchmark screen・PROFILE_NOT_QUALIFIED lockを保存。現在77 source / 10 candidate、全候補DEFERRED。公開screen PASSは3件だが、実機適格モデルは0件。
 - `docs/decisions/`: hardware-only昇格禁止、モデル別prompt、ASR候補保持/host review、開始排他、audio queue、holdout適格性判断を記録。
 
 ## 検証記録
@@ -86,21 +86,32 @@
 | 検証 | 結果 |
 | --- | --- |
 | `go test ./... -count=1` (`server/`, sandbox用Go cache) | PASS。全3 Go package。Apple `xcrun_db` cache warningは出たが終了コード0。 |
-| `node --test exif-viewer/tests/*.test.js meet-translator/extension/tests/*.test.js` | PASS 76/76。Extension単体は66/66。 |
-| `node --test eval/*.test.mjs` | PASS 14/14。 |
-| `node eval/check-research.mjs --offline` | PASS。66 sources、10 candidates、10 DEFERRED、3 published benchmark screens、0 SELECTED、PROFILE_NOT_QUALIFIED。 |
+| `node --test meet-translator/extension/tests/*.test.js` | PASS 73/73。今回追加したsettings helper、side panel、Meet host validation testsを含む。 |
+| `node meet-translator/eval/device/run-browser-e2e.mjs` | 先行runのSIGABRTは拡張読込前で、起動原因は特定できていない。修正版launcherはM1 Max / Edge 154で13/13 PASS、`cleanupError:null`。サンドボックス内実行は`/bin/ps EPERM`でchecks前に停止したため、隔離プロファイルの終了確認を許可した実行で再検証した。 |
+| `node --test meet-translator/eval/*.test.mjs meet-translator/eval/device/*.test.mjs` | PASS 21/21。評価trackの既存14件とEdge launcher test 7件を含む。 |
+| `node --test meet-translator/eval/device/*.test.mjs` | PASS 7/7。PID再利用時にシグナルを送らないこと、終了未確認時のprofile保持を含む。 |
+| `node eval/check-research.mjs --offline` | PASS。77 sources、10 candidates、10 DEFERRED、3 published benchmark screens、0 SELECTED、PROFILE_NOT_QUALIFIED。 |
 | `node eval/check-contracts.mjs` | PASS。ASR 1 / MT 3 / E2E 1、audio asset 2件。全てsynthetic、推論なし、品質証拠なし。 |
 | `go run ./cmd/eval --track ...` の3 manifest検査 (`server/`) | PASS。ASR 1 / MT 3 / E2E 1件。各manifestのaudio hash整合、`inferenceExecuted:false`、昇格可能件数0。 |
 
-話者変更flush中の停止競合を再現する回帰testは、修正前にpending batchが残ることを確認し、修正後はbatchとqueue予約がすべて解放されることを確認した。モデル品質や実機動作の合格を示すものではない。
+話者変更flush中の停止競合を再現する回帰testは、修正前にpending batchが残ることを確認し、修正後はbatchとqueue予約がすべて解放されることを確認した。Edge実機fixtureは実ブラウザーの拡張・side panel・tabCapture・ローカルHTTP APIを通過したが、モデル品質や実Google Meet動作の合格を示すものではない。
 
 ## 実測していない項目
 
-重みはダウンロードしていない。人手確認済みの日英データがなく、ASR/MT品質、公開品質、確定遅延を測っていない。M1の機材情報は確認したが、モデルをロードしたM1性能やMetal実使用は測っていない。Chrome/Meet会議と画面共有の実機試験も行っていない。したがって現在のコード・候補はM1 Maxでの合格構成を意味しない。
+重みはダウンロードしていない。人手確認済みの日英データがなく、ASR/MT品質、公開品質、確定遅延を測っていない。M1の機材情報とEdgeの合成音声経路は確認したが、モデルをロードしたM1性能やMetal推論は測っていない。実Google Meetの参加者音声、実画面共有、カメラ/マイク、配布拡張IDでの実会議は未試験。したがって現在のコード・候補はM1 Maxでのモデル合格構成を意味しない。
 
 ## 次に進める作業
 
 1. T15の翻訳期限/dedupe、評価telemetry、共通推論排他、適応負荷制御をmodel-free test付きで実装する。
 2. evaluation scorer、重要意味assertionと負例、資源・latency計測を追加する。
 3. 許可済みモデルとreviewed日英データが揃った後に候補を一軸ずつ比較し、ASR-only、MT-only、E2EとM1統合を記録する。
-4. browser/Meetの手動統合試験を完了してから、候補lockとロールバックを確定する。
+4. 実Google Meetの参加者・画面共有・訂正UIをEdgeで確認してから、候補lockとロールバックを確定する。現在の合成DOM fixtureはこの確認を代替しない。
+
+## M1 Max Edge 実機fixture記録 (2026-09-29)
+
+- 実行対象: Apple M1 Max (`MacBookPro18,4`)、32 GB、24-core GPU、arm64、macOS 26.6.2、Microsoft Edge 154.0.4258.37。
+- 条件: 新規一時Edge profile、loopback HTTPS Meet-host fixture、440 Hz synthetic tab tone、deterministic local API double。`eval/device/README.md`に分離条件を記録。
+- 結果: 先行runは13/13 browser checks PASS。その後の起動試行はEdge起動中にSIGABRTし、browser checksは未実行。修正版launcherでの最新runは13/13 PASS、`cleanupError:null`。settings UI保存、Bearer認証API、native side panel、実`tabCapture`経路、4件のWAV transcription request、private draftとselection保持、訂正・再翻訳・undo、明示承認、hostile HTMLの安全描画、無音抑止、stop/restartを確認。
+- リソース記録: 最新runのEdge process-tree RSSはテスト前1776 MiB、終了直前1214 MiB。これはEdgeとテストページの合計概算であり、ASR/翻訳モデルをロードしていないため、製品の推論memory/performance値ではない。Metal情報はこのrunのレポートではnull。
+- 再現レポート: ignored file `eval/private-data/device-browser-e2e.json`。音声/字幕/生成結果はGitに追加しない。
+- 判定: launcher修正の静的再レビューは完了。隔離Edge fixtureは安全なcleanup経路で再実行し、13/13 PASS、`cleanupError:null`。S4/S6はBLOCKEDのまま。モデル品質、model/runtime/template/gate、実Meet、共有、60分負荷の合格証拠はないため、`PROFILE_NOT_QUALIFIED`を維持。
