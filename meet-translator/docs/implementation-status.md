@@ -14,7 +14,7 @@
 
 | 段階 | 状態 | 根拠・残件 |
 | --- | --- | --- |
-| S0 調査・基準確認 | DONE | 指示書、開始時HEAD・既存dirty差分、既存テスト、実推論経路を確認。仕様全文を `docs/implementation-spec.md` に保存し、R0〜R17と原因別追記を記録。 |
+| S0 調査・基準確認 | DONE | 指示書、開始時HEAD・既存dirty差分、既存テスト、実推論経路を確認。仕様全文を `docs/implementation-spec.md` に保存し、R0〜R18と原因別追記を記録。 |
 | S1 API・評価基盤・基準凍結 | IN_PROGRESS | 3評価track、音声hash/split検査、API認証/Origin/Host/body上限、FIR resampler、モデル別翻訳prompt fixture、圧縮モデルの公開benchmark screen、T15基本queue上限、M1 Max上の隔離EdgeブラウザーE2E、fail-closed M1 qualification report assessorを追加。Edge 154の修正版launcherとnative side panel判定はM1 Maxで13/13 PASS。違反を申告するreportは`REJECTED`、それ以外でもtrusted provenanceのないreportは`BLOCKED`で、report-only経路から`QUALIFIED`にはならない。評価scorer、信頼できる実行証跡collector/verifier、実測レポート作成器、モデル性能計測器、残りのT15制御は未完。 |
 | S2 ASR・VAD・公開判定 | PARTIAL | native WhisperとWhisperXの詳細結果を保持し、Whisper scoreは診断表示だけに使用。mic/tabを別energy-VADで処理。待機/実行/話者batchを4件・10秒以内に数え、5秒超のqueue項目とbatchは推論前に破棄する。話者batch flush待機後にsession/generationを再確認し、停止後のincoming音声再保持を防ぐ。短いidle flushはone-shot timerを使用する。非音声・短発話の実音声評価、校正済みgate、全backendの同等segment metadataは未完。 |
 | S3 字幕共有・訂正UI | PARTIAL | 公開字幕ページと非公開訂正ページ、明示承認、訂正/undo/sourceRevisionを実装。M1 Max上のEdge fixtureは`chrome.sidePanel.open` APIとmanifest permissionを確認し、訂正UIが通常タブとして作られていないことを検査して13/13 PASS。合成tab音声、private review、訂正/undo、明示承認とstop/restartも通過。現在の通常Edge profileで読み込まれている拡張は訂正UIを通常タブとして開いたため、そのprofileの拡張artifact/API状態は未照合。実Google Meet会議、実画面共有、配布拡張IDでのOrigin検査も未試験。 |
@@ -96,12 +96,13 @@
 | `node eval/check-research.mjs --offline` | PASS。79 sources、10 candidates、10 DEFERRED、3 published benchmark screens、0 SELECTED、PROFILE_NOT_QUALIFIED。 |
 | `node eval/check-contracts.mjs` | PASS。ASR 1 / MT 3 / E2E 1、audio asset 2件。全てsynthetic、推論なし、品質証拠なし。 |
 | `go run ./cmd/eval --track ...` の3 manifest検査 (`server/`) | PASS。ASR 1 / MT 3 / E2E 1件。各manifestのaudio hash整合、`inferenceExecuted:false`、昇格可能件数0。 |
+| GitHub Actions `Execute Test` model matrix (PR #74, run `36590879953`, 2026-09-29) | 既存PR triggerがremote runnersでASR/LLM weightをdownload/cacheしていたため実行をcancel。完了済みmodel smoke jobsと23個のActions cache (合計17,275,817,804 bytes) は残存。これは別機種上のsilent-audio/startup smokeで、M1品質・性能証拠ではない。以後PRでは自動実行せず、明示的なmanual dispatch opt-inに変更。詳細なcache IDと状態は[`handoff-2026-09-30.md`](handoff-2026-09-30.md)。 |
 
 話者変更flush中の停止競合を再現する回帰testは、修正前にpending batchが残ることを確認し、修正後はbatchとqueue予約がすべて解放されることを確認した。Edge実機fixtureは実ブラウザーの拡張・side panel・tabCapture・ローカルHTTP APIを通過したが、モデル品質や実Google Meet動作の合格を示すものではない。
 
 ## 実測していない項目
 
-重みはダウンロードしていない。人手確認済みの日英データがなく、ASR/MT品質、公開品質、確定遅延を測っていない。M1の機材情報とEdgeの合成音声経路は確認したが、モデルをロードしたM1性能やMetal推論は測っていない。実Google Meetの参加者音声、実画面共有、カメラ/マイク、配布拡張IDでの実会議は未試験。したがって現在のコード・候補はM1 Maxでのモデル合格構成を意味しない。
+重みはM1 Mac/workspaceにはダウンロード・commitしていない。ただし既存GitHub Actions `Execute Test` がPR #74上でremote runnerへ実モデル重みを取得・cacheし、一部をロードした。run `36590879953` の23個のActions cacheは現在も残っており、削除していない。今回のremote smokeはsilence input/startup確認で、候補比較ではなくM1/品質/性能証拠にもならない。以後のPRではmodel matrixを自動実行せず、workflow_dispatchで明示opt-inした場合に限る。人手確認済みの日英データがなく、ASR/MT品質、公開品質、確定遅延を測っていない。M1の機材情報とEdgeの合成音声経路は確認したが、モデルをロードしたM1性能やMetal推論は測っていない。実Google Meetの参加者音声、実画面共有、カメラ/マイク、配布拡張IDでの実会議は未試験。したがって現在のコード・候補はM1 Maxでのモデル合格構成を意味しない。
 
 ## 次に進める作業
 

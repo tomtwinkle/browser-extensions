@@ -3,6 +3,13 @@ name: Execute Test
 on:
   pull_request:
     branches: ["**"]
+  workflow_dispatch:
+    inputs:
+      allow_model_weight_downloads:
+        description: "Allow remote model weights to be downloaded and loaded by the integration matrix"
+        required: true
+        type: boolean
+        default: false
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ビルド環境と実行環境を完全に分離した統合テスト。
@@ -112,6 +119,9 @@ jobs:
   # build ジョブのアーティファクト (バイナリのみ) をダウンロードして実行する。
   execute:
     name: Execute Test (${{ matrix.name }} / ${{ matrix.whisper_model }} / ${{ matrix.llama_model }}${{ matrix.scenario && format(' / {0}', matrix.scenario) || '' }})
+    # The matrix downloads and loads real model weights. Keep pull-request CI
+    # model-free; run it only through an explicitly opted-in manual dispatch.
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.allow_model_weight_downloads == 'true'
     needs: build
     runs-on: ${{ matrix.os }}
     strategy:

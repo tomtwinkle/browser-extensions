@@ -80,11 +80,14 @@ cannot qualify this Japanese-English product.
 ## M1 and product qualification remain separate
 
 Every `PASS` above means only that a public score justifies spending one slot in
-the research comparison budget. No weights were downloaded. No Gemma terms were
-accepted. No local ASR-only, correct-source MT-only, or audio-to-published
-caption run was performed for these models. No model was loaded on M1 Max, and
-no local memory, Metal execution, caption latency, or Meet integration result
-was measured. The selection lock stays `PROFILE_NOT_QUALIFIED`.
+the research comparison budget. No weights were downloaded to the M1 Mac or
+committed, and no Gemma terms were accepted. An existing GitHub Actions PR
+workflow separately downloaded and cached model weights on remote runners
+before it was stopped; those smoke jobs did not evaluate reviewed bilingual
+data or qualify any candidate. No local ASR-only, correct-source MT-only, or
+audio-to-published caption run was performed for these models. No model was
+loaded on M1 Max, and no local memory, Metal execution, caption latency, or Meet
+integration result was measured. The selection lock stays `PROFILE_NOT_QUALIFIED`.
 
 Source IDs and limitations are recorded in `research/sources.jsonl`; candidate
 details and numeric evidence are in `research/candidates.json`.
