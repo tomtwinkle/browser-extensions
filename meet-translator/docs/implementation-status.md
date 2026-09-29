@@ -1,6 +1,6 @@
 # 実装状況
 
-更新日: 2026-09-29
+更新日: 2026-09-30
 
 対象: `meet-translator/`
 
@@ -14,10 +14,10 @@
 
 | 段階 | 状態 | 根拠・残件 |
 | --- | --- | --- |
-| S0 調査・基準確認 | DONE | 指示書、開始時HEAD・既存dirty差分、既存テスト、実推論経路を確認。仕様全文を `docs/implementation-spec.md` に保存し、R0〜R13と原因別追記を記録。 |
-| S1 API・評価基盤・基準凍結 | IN_PROGRESS | 3評価track、音声hash/split検査、API認証/Origin/Host/body上限、FIR resampler、モデル別翻訳prompt fixture、圧縮モデルの公開benchmark screen、T15基本queue上限、M1 Max上の隔離EdgeブラウザーE2Eを追加。Edge 154の修正版launcherはM1 Maxで13/13 PASS。品質scorer、モデル性能計測器、残りのT15制御は未完。 |
+| S0 調査・基準確認 | DONE | 指示書、開始時HEAD・既存dirty差分、既存テスト、実推論経路を確認。仕様全文を `docs/implementation-spec.md` に保存し、R0〜R17と原因別追記を記録。 |
+| S1 API・評価基盤・基準凍結 | IN_PROGRESS | 3評価track、音声hash/split検査、API認証/Origin/Host/body上限、FIR resampler、モデル別翻訳prompt fixture、圧縮モデルの公開benchmark screen、T15基本queue上限、M1 Max上の隔離EdgeブラウザーE2E、fail-closed M1 qualification report assessorを追加。Edge 154の修正版launcherとnative side panel判定はM1 Maxで13/13 PASS。違反を申告するreportは`REJECTED`、それ以外でもtrusted provenanceのないreportは`BLOCKED`で、report-only経路から`QUALIFIED`にはならない。評価scorer、信頼できる実行証跡collector/verifier、実測レポート作成器、モデル性能計測器、残りのT15制御は未完。 |
 | S2 ASR・VAD・公開判定 | PARTIAL | native WhisperとWhisperXの詳細結果を保持し、Whisper scoreは診断表示だけに使用。mic/tabを別energy-VADで処理。待機/実行/話者batchを4件・10秒以内に数え、5秒超のqueue項目とbatchは推論前に破棄する。話者batch flush待機後にsession/generationを再確認し、停止後のincoming音声再保持を防ぐ。短いidle flushはone-shot timerを使用する。非音声・短発話の実音声評価、校正済みgate、全backendの同等segment metadataは未完。 |
-| S3 字幕共有・訂正UI | PARTIAL | 公開字幕ページと非公開訂正ページ、明示承認、訂正/undo/sourceRevisionを実装。M1 Max上の最新Edge fixtureはnative side panel、合成tab音声、private review、訂正/undo、明示承認とstop/restartを13/13 PASS。実Google Meet会議、実画面共有、配布拡張IDでのOrigin検査は未試験。 |
+| S3 字幕共有・訂正UI | PARTIAL | 公開字幕ページと非公開訂正ページ、明示承認、訂正/undo/sourceRevisionを実装。M1 Max上のEdge fixtureは`chrome.sidePanel.open` APIとmanifest permissionを確認し、訂正UIが通常タブとして作られていないことを検査して13/13 PASS。合成tab音声、private review、訂正/undo、明示承認とstop/restartも通過。現在の通常Edge profileで読み込まれている拡張は訂正UIを通常タブとして開いたため、そのprofileの拡張artifact/API状態は未照合。実Google Meet会議、実画面共有、配布拡張IDでのOrigin検査も未試験。 |
 | S4 候補比較・M1統合資格 | BLOCKED | M1 Maxの実機はあるが、許可済みの重みと人手確認済み日英dev/holdoutがない。ASR-only/MT-only/E2Eのモデル出力、品質、メモリ、確定遅延、60分結合試験は未実施。 |
 | S5 QR PoC | NOT_STARTED | 通常の字幕・訂正機能の完了後に行う独立実験。 |
 | S6 最終研究・選定lock | BLOCKED | 10候補はすべてDEFERRED。公開数値screen通過は3構成だが、選定モデル、実行hash、holdout結果、M1計測、復帰試験がないため `PROFILE_NOT_QUALIFIED` を維持。 |
@@ -78,19 +78,22 @@
 - `extension/`: mic/tab別energy-VAD、session/generation検査、host-only訂正UI、字幕用public/private channel、承認・訂正・undo・translation revision管理、字幕ページを追加。
 - `server/`: loopback API認証と上限、FIRリサンプル、構造化ASR結果、Whisper固有診断、Whisper候補文を保持する固定source patch、Python音声入力のin-memory処理を追加。
 - `eval/` と `server/cmd/eval/`: ASR-only、正しい原文MT-only、E2Eを分離し、synthetic fixture・local WAV hash・track/split検査を追加。モデル推論は実行しない。
-- `docs/research/`: 一次情報・候補・調査log・圧縮benchmark screen・PROFILE_NOT_QUALIFIED lockを保存。現在77 source / 10 candidate、全候補DEFERRED。公開screen PASSは3件だが、実機適格モデルは0件。
+- `docs/research/`: 一次情報・候補・調査log・圧縮benchmark screen・PROFILE_NOT_QUALIFIED lockを保存。現在79 sources / 10 candidates、全候補DEFERRED。公開screen PASSは3件だが、実機適格モデルは0件。
+- Qualification assessor: trusted provenanceなしでJSON自己申告だけでは昇格できない。`testDouble`/`synthetic`の欠落をBLOCKEDにし、ASR-onlyは日本語/英語別、MT-onlyは翻訳方向別、公開字幕はE2E方向別に全caseの採点数を照合する。保留字幕を削除として計上し、全件/大量保留、baselineより少ない公開件数・方向別公開率・浮動runtime aliasを拒否する。違反を含むreportは`REJECTED`、他の要件を満たしてもprovenance verifierがないreportは`BLOCKED`で、現在のreport-only経路から`QUALIFIED`にはならない。
 - `docs/decisions/`: hardware-only昇格禁止、モデル別prompt、ASR候補保持/host review、開始排他、audio queue、holdout適格性判断を記録。
 
 ## 検証記録
 
 | 検証 | 結果 |
 | --- | --- |
-| `go test ./... -count=1` (`server/`, sandbox用Go cache) | PASS。全3 Go package。Apple `xcrun_db` cache warningは出たが終了コード0。 |
+| `GOCACHE=/private/tmp/meet-translator-go-cache go test ./... -count=1` (`server/`, 2026-09-30再実行) | PASS。全3 Go package。Apple `xcrun_db` cache warningは出たが終了コード0。ASR/MT split coverage回帰testを含む。 |
 | `node --test meet-translator/extension/tests/*.test.js` | PASS 73/73。今回追加したsettings helper、side panel、Meet host validation testsを含む。 |
-| `node meet-translator/eval/device/run-browser-e2e.mjs` | 先行runのSIGABRTは拡張読込前で、起動原因は特定できていない。修正版launcherはM1 Max / Edge 154で13/13 PASS、`cleanupError:null`。サンドボックス内実行は`/bin/ps EPERM`でchecks前に停止したため、隔離プロファイルの終了確認を許可した実行で再検証した。 |
+| `node meet-translator/eval/device/run-browser-e2e.mjs` | 添付のEdge起動レポートは起動約0.19秒後のSIGABRT。親はNode、stackは`HIServices`のアプリ登録から`NSApplication`初期化中で、拡張・Meet・モデル処理前。Launch Services launcherの後続runは通過。今回、side panelの実API/permissionと「通常タブを生成しない」条件を追加し、M1 Max / Edge 154で13/13 PASS、`cleanupError:null`。通常sandboxでは`/bin/ps EPERM`により別の再試行がcheck前に停止し、一時profileを保持した。許可されたprocess listで当該isolated profileを使うEdgeが残っていないことを確認し、当該テストdirだけ削除後に再実行した。 |
+| `GOCACHE=/private/tmp/meet-translator-go-cache go test -count=1 ./cmd/eval` (`server/`) | PASS。Qualification assessorのunit testsを含む。架空fixtureは評価ロジック専用で、実機結果ではない。 |
+| `GOCACHE=/private/tmp/meet-translator-go-cache go test ./cmd/eval -count=1` (`server/`) | PASS。自己申告reportの昇格拒否、attestation欠落、ASR日英別/MT方向別の採点数、E2E方向別公開数、全件/大量/片方向保留、浮動runtime aliasを含む。 |
 | `node --test meet-translator/eval/*.test.mjs meet-translator/eval/device/*.test.mjs` | PASS 21/21。評価trackの既存14件とEdge launcher test 7件を含む。 |
 | `node --test meet-translator/eval/device/*.test.mjs` | PASS 7/7。PID再利用時にシグナルを送らないこと、終了未確認時のprofile保持を含む。 |
-| `node eval/check-research.mjs --offline` | PASS。77 sources、10 candidates、10 DEFERRED、3 published benchmark screens、0 SELECTED、PROFILE_NOT_QUALIFIED。 |
+| `node eval/check-research.mjs --offline` | PASS。79 sources、10 candidates、10 DEFERRED、3 published benchmark screens、0 SELECTED、PROFILE_NOT_QUALIFIED。 |
 | `node eval/check-contracts.mjs` | PASS。ASR 1 / MT 3 / E2E 1、audio asset 2件。全てsynthetic、推論なし、品質証拠なし。 |
 | `go run ./cmd/eval --track ...` の3 manifest検査 (`server/`) | PASS。ASR 1 / MT 3 / E2E 1件。各manifestのaudio hash整合、`inferenceExecuted:false`、昇格可能件数0。 |
 
@@ -111,7 +114,20 @@
 
 - 実行対象: Apple M1 Max (`MacBookPro18,4`)、32 GB、24-core GPU、arm64、macOS 26.6.2、Microsoft Edge 154.0.4258.37。
 - 条件: 新規一時Edge profile、loopback HTTPS Meet-host fixture、440 Hz synthetic tab tone、deterministic local API double。`eval/device/README.md`に分離条件を記録。
-- 結果: 先行runは13/13 browser checks PASS。その後の起動試行はEdge起動中にSIGABRTし、browser checksは未実行。修正版launcherでの最新runは13/13 PASS、`cleanupError:null`。settings UI保存、Bearer認証API、native side panel、実`tabCapture`経路、4件のWAV transcription request、private draftとselection保持、訂正・再翻訳・undo、明示承認、hostile HTMLの安全描画、無音抑止、stop/restartを確認。
-- リソース記録: 最新runのEdge process-tree RSSはテスト前1776 MiB、終了直前1214 MiB。これはEdgeとテストページの合計概算であり、ASR/翻訳モデルをロードしていないため、製品の推論memory/performance値ではない。Metal情報はこのrunのレポートではnull。
+- 結果: 起動クラッシュ後の初回修正版runは13/13 PASSだったが、native side panel判定は単にCDP page targetの存在を見ており、tab fallbackも合格にできる欠陥があった。R15で判定を修正した最新run (2026-09-29 11:31 UTC) は13/13 PASS、`cleanupError:null`。実`chrome.sidePanel.open` APIとmanifest permissionを確認し、`chrome.tabs.query`にsidepanel URLが現れないことも検査。settings UI保存、Bearer認証API、実`tabCapture`経路、4件のWAV transcription request、private draftとselection保持、訂正・再翻訳・undo、明示承認、hostile HTMLの安全描画、無音抑止、stop/restartも確認。
+- リソース記録: 最新runのEdge process-tree RSSはテスト前1641 MiB、終了直前1150 MiB。これはEdgeとテストページの合計概算であり、ASR/翻訳モデルをロードしていないため、製品の推論memory/performance値ではない。Metal情報はこのrunのレポートではnull。
 - 再現レポート: ignored file `eval/private-data/device-browser-e2e.json`。音声/字幕/生成結果はGitに追加しない。
 - 判定: launcher修正の静的再レビューは完了。隔離Edge fixtureは安全なcleanup経路で再実行し、13/13 PASS、`cleanupError:null`。S4/S6はBLOCKEDのまま。モデル品質、model/runtime/template/gate、実Meet、共有、60分負荷の合格証拠はないため、`PROFILE_NOT_QUALIFIED`を維持。
+
+### Edge native side panel 判定の補正 (2026-09-29)
+
+- 再確認で、旧browser fixtureは`chrome-extension://.../sidepanel.html`のCDP targetだけを見ており、通常タブfallbackもnative side panelとして誤ってPASSにできることが分かった。通常のEdge profileでは実際に訂正UIが通常タブとして表示されていた。
+- fixtureにEdge側の`chrome.sidePanel.open`実在、manifest permission、sidepanel URLの通常tab不在を要求する条件を追加。M1 Max / Edge 154の新しい隔離profileで13/13 PASSし、当該判定を通過。ユーザーの通常profileで読み込み済みの拡張artifact/API状態は再読み込み・変更しておらず、別途未確認。
+- これもモデル品質や実会議の合格証拠ではない。S4/S6と`PROFILE_NOT_QUALIFIED`は維持。
+
+### Edge起動クラッシュの追跡
+
+- 添付レポートはEdge 154.0.4258.37 / macOS 26.6.2で、起動から約0.19秒後に`SIGABRT`。親プロセスは`node`で、メインスレッドは`HIServices ___RegisterApplication` → `GetCurrentProcess` → AppKitの`NSApplication`初期化中に終了している。メモリ不足、Meet、拡張コード、字幕処理へ到達した証拠はない。
+- これはブラウザー起動段階の失敗と分類する。親がNodeであることは子プロセスとして直接起動した経路と整合するが、レポートだけではEdgeまたはmacOS側の根本不具合を断定できない。
+- 隔離ブラウザーハーネスは現在、`/usr/bin/open -n -g -a`のLaunch Services経由で起動する。修正後のM1 Max実行は13/13通過し、後続成功runのignored reportは`cleanupError:null`。失敗runは成功数へ算入していない。
+- これは実Google Meet・マイク/カメラ・画面共有・モデル推論を含まない。S4/S6と`PROFILE_NOT_QUALIFIED`の判定は変わらない。

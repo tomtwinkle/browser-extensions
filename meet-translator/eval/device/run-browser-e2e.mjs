@@ -719,14 +719,28 @@ async function main() {
 
     const popup = await openTarget(cdp, `${extensionBase}/popup.html`);
     await activate(cdp, meet);
-    await click(cdp, popup, '#open-correction-panel');
-    await check('Edge opens the correction UI in its native extension side panel', async () => {
+    const sidepanelUrl = `${extensionBase}/sidepanel.html`;
+    const nativeSidePanelReady = await check('Edge opens the correction UI in its native extension side panel', async () => {
+      const beforeOpen = await evaluate(cdp, popup, `new Promise(resolve => chrome.tabs.query({url:${JSON.stringify(sidepanelUrl)}}, tabs => resolve({
+        openApi: typeof chrome.sidePanel?.open,
+        permission: chrome.runtime.getManifest().permissions.includes('sidePanel'),
+        matchingTabs: tabs.length,
+      })))`);
+      assert.equal(beforeOpen.openApi, 'function', 'Edge did not expose chrome.sidePanel.open to this extension');
+      assert.equal(beforeOpen.permission, true, 'test extension manifest did not grant the sidePanel permission');
+      assert.equal(beforeOpen.matchingTabs, 0, 'correction UI was already open as a normal tab before the test');
+
+      await click(cdp, popup, '#open-correction-panel');
       await waitFor(async () => {
         const targets = (await cdp.send('Target.getTargets')).targetInfos;
-        return targets.some((item) => item.url === `${extensionBase}/sidepanel.html`);
+        return targets.some((item) => item.url === sidepanelUrl);
       }, 'Edge extension side panel to open');
+      const matchingTabs = await evaluate(cdp, popup, `new Promise(resolve => chrome.tabs.query({url:${JSON.stringify(sidepanelUrl)}}, tabs => resolve(tabs.length)))`);
+      assert.equal(matchingTabs, 0, 'correction UI opened as a regular tab fallback instead of Edge native sidebar');
     });
-    const sidepanelInfo = (await cdp.send('Target.getTargets')).targetInfos.find((item) => item.url === `${extensionBase}/sidepanel.html`);
+    if (!nativeSidePanelReady) throw new Error(failures.at(-1)?.message || 'Edge native side panel did not open');
+    const sidepanelInfo = (await cdp.send('Target.getTargets')).targetInfos.find((item) => item.url === sidepanelUrl);
+    assert.ok(sidepanelInfo, 'Edge opened no correction side panel page target');
     const sidepanel = await page(cdp, sidepanelInfo.targetId);
     const presenter = await openTarget(cdp, `${extensionBase}/caption-presenter.html`);
     chromeRssBefore = processGroupRssMb(chromeProcess.pid);

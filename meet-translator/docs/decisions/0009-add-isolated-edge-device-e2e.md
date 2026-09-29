@@ -18,4 +18,4 @@ The suite exercises real Edge APIs and real tab audio capture without joining a 
 
 ## Evidence
 
-The 2026-09-29 M1 Max / Edge 154 run passed 13 checks, including four synthetic WAV submissions, correction and undo, approval-only public output, hostile-text safety, silence suppression, and stop/restart. The report is ignored under `eval/private-data/`.
+The corrected 2026-09-29 M1 Max / Edge 154 run passed 13 checks, including `chrome.sidePanel.open` availability, the manifest permission, and a zero normal-tab count for the side-panel URL, plus four synthetic WAV submissions, correction and undo, approval-only public output, hostile-text safety, silence suppression, and stop/restart. The earlier fixture only checked for a DevTools page target and could not distinguish the normal-tab fallback; R15 records that correction. The report is ignored under `eval/private-data/`.

@@ -29,9 +29,32 @@ func main() {
 	trackFlag := flag.String("track", "", "evaluation track: asr-only, mt-only, or end-to-end")
 	manifestPath := flag.String("manifest", "", "JSONL evaluation manifest")
 	projectRoot := flag.String("project-root", "..", "meet-translator project root for local audio references")
+	qualificationReportPath := flag.String("qualification-report", "", "recorded M1 Max real-integration qualification report JSON")
 	flag.Parse()
+	if *qualificationReportPath != "" {
+		if *manifestPath != "" || *trackFlag != "" {
+			fmt.Fprintln(os.Stderr, "qualification report mode cannot be combined with manifest track flags")
+			os.Exit(2)
+		}
+		file, err := os.Open(*qualificationReportPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		assessment, runErr := runQualificationCheck(file, os.Stdout)
+		closeErr := file.Close()
+		if runErr != nil {
+			fmt.Fprintln(os.Stderr, runErr)
+			os.Exit(2)
+		}
+		if closeErr != nil {
+			fmt.Fprintln(os.Stderr, closeErr)
+			os.Exit(2)
+		}
+		os.Exit(qualificationExitCode(assessment.Status))
+	}
 	if *manifestPath == "" || !validTrack(Track(*trackFlag)) {
-		fmt.Fprintln(os.Stderr, "usage: go run ./cmd/eval --track <asr-only|mt-only|end-to-end> --manifest <file.jsonl> [--project-root ..]")
+		fmt.Fprintln(os.Stderr, "usage: go run ./cmd/eval --track <asr-only|mt-only|end-to-end> --manifest <file.jsonl> [--project-root ..] | --qualification-report <recorded-report.json>")
 		os.Exit(2)
 	}
 
