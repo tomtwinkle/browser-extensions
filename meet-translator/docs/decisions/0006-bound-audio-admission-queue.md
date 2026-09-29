@@ -22,6 +22,9 @@ A delayed batch alarm could then process stale audio outside the bound.
 - Drop an item as `OVERLOAD` when adding it exceeds either queue limit.
 - Report the cumulative drop reason, count, and audio duration only to the
   private correction UI. Do not send transcript or audio data in this status.
+- After awaiting a speaker-change or maximum-duration flush, recheck the
+  incoming item's session and stream generation before retaining it in a new
+  batch. A stopped or superseded stream must not recreate retained audio.
 
 ## Consequences
 
@@ -43,6 +46,9 @@ M1 Max; the profile remains `PROFILE_NOT_QUALIFIED`.
 
 Model-free tests verify item/duration rejection for queued and speaker-batched
 audio, stale rejection after a delayed flush timer, private-only status
-delivery, and the UI's count/duration message. Chrome documents the service
-worker idle and timer lifecycle in `SRC-CHROME-SW-LIFECYCLE` and
-`SRC-CHROME-SW-MIGRATE`; actual Chrome timing remains unmeasured.
+delivery, the UI's count/duration message, and stop during an in-flight
+speaker-change flush. The stop-race test reproduced a retained batch before
+the fix and verifies that batch and queue reservations are released after the
+fix. Chrome documents the service worker idle and timer lifecycle in
+`SRC-CHROME-SW-LIFECYCLE` and `SRC-CHROME-SW-MIGRATE`; actual Chrome timing
+remains unmeasured.

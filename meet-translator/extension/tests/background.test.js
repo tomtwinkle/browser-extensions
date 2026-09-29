@@ -212,6 +212,55 @@ test('speaker-batched audio stays within aggregate item and duration limits', as
   assert.equal(state.audioQueuePendingMs, 0);
 });
 
+test('stopping during a speaker-change flush does not rebuffer the incoming chunk', async () => {
+  let releaseInference;
+  let markInferenceStarted;
+  const inferenceStarted = new Promise((resolve) => { markInferenceStarted = resolve; });
+  const blockedInference = new Promise((resolve) => { releaseInference = resolve; });
+  const speakerNames = ['Speaker A', 'Speaker B'];
+  const { context } = loadBackgroundScript({
+    sendMessageImpl() { return { speakerName: speakerNames.shift() }; },
+    setTimeoutImpl() { return 1; },
+    clearTimeoutImpl() {},
+  });
+  const state = context.__testState;
+  state.isActive = true;
+  state.tabId = 7;
+  state.sessionId = 'session-a';
+  state.activeStreamIds = ['tab'];
+  state.streamGenerations = { mic: 0, tab: 1 };
+  context.processAudioChunk = () => {
+    markInferenceStarted();
+    return blockedInference;
+  };
+  state.offscreenPort = {
+    postMessage(message) {
+      if (message.type === 'CAPTION_RPC') {
+        context.handleOffscreenPortMessage(this, {
+          type: 'CAPTION_RPC_RESULT',
+          requestId: message.requestId,
+          result: { ok: true },
+        });
+      }
+    },
+  };
+
+  sendAudioData(context, 1_000);
+  await state.audioQueue;
+  sendAudioData(context, 1_000);
+  await inferenceStarted;
+
+  const stopping = context.stopCapture();
+  assert.equal(state.isActive, false);
+  assert.equal(state.sessionId, null);
+  releaseInference();
+  await stopping;
+
+  assert.equal(state.pendingSpeakerBatches.size, 0);
+  assert.equal(state.audioQueuePendingItems, 0);
+  assert.equal(state.audioQueuePendingMs, 0);
+});
+
 test('concurrent capture start is rejected before health check resolves', async () => {
   let resolveHealth;
   const { context } = loadBackgroundScript({
@@ -230,7 +279,7 @@ test('concurrent capture start is rejected before health check resolves', async 
   assert.equal(context.__testState.sessionId, null);
 });
 
-function loadBackgroundScript({ fetchImpl, storageSettings = {}, setTimeoutImpl, clearTimeoutImpl } = {}) {
+function loadBackgroundScript({ fetchImpl, storageSettings = {}, setTimeoutImpl, clearTimeoutImpl, sendMessageImpl } = {}) {
   const listeners = {
     onMessage: null,
   };
@@ -283,7 +332,7 @@ function loadBackgroundScript({ fetchImpl, storageSettings = {}, setTimeoutImpl,
     tabs: {
       sendMessage(_tabId, message) {
         tabMessages.push(message);
-        return Promise.resolve({ success: true });
+        return Promise.resolve(sendMessageImpl ? sendMessageImpl(message) : { success: true });
       },
     },
   };

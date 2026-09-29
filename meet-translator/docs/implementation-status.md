@@ -14,9 +14,9 @@
 
 | 段階 | 状態 | 根拠・残件 |
 | --- | --- | --- |
-| S0 調査・基準確認 | DONE | 指示書、開始時HEAD・既存dirty差分、既存テスト、実推論経路を確認。仕様全文を `docs/implementation-spec.md` に保存し、R0/R4/R5/R6/R7/R8/R9/R10を記録。 |
+| S0 調査・基準確認 | DONE | 指示書、開始時HEAD・既存dirty差分、既存テスト、実推論経路を確認。仕様全文を `docs/implementation-spec.md` に保存し、R0/R4/R5/R6/R7/R8/R9/R10および原因別追記を記録。 |
 | S1 API・評価基盤・基準凍結 | IN_PROGRESS | 3評価track、音声hash/split検査、API認証/Origin/Host/body上限、FIR resampler、モデル別翻訳prompt fixture、圧縮モデルの公開benchmark screen、T15基本queue上限を追加。再現可能な品質scorer、資源計測器、残りのT15制御は未完。 |
-| S2 ASR・VAD・公開判定 | PARTIAL | native WhisperとWhisperXの詳細結果を保持し、Whisper scoreは診断表示だけに使用。mic/tabを別energy-VADで処理。待機/実行/話者batchを4件・10秒以内に数え、5秒超のqueue項目とbatchは推論前に破棄する。短いidle flushはone-shot timerを使用する。非音声・短発話の実音声評価、校正済みgate、全backendの同等segment metadataは未完。 |
+| S2 ASR・VAD・公開判定 | PARTIAL | native WhisperとWhisperXの詳細結果を保持し、Whisper scoreは診断表示だけに使用。mic/tabを別energy-VADで処理。待機/実行/話者batchを4件・10秒以内に数え、5秒超のqueue項目とbatchは推論前に破棄する。話者batch flush待機後にsession/generationを再確認し、停止後のincoming音声再保持を防ぐ。短いidle flushはone-shot timerを使用する。非音声・短発話の実音声評価、校正済みgate、全backendの同等segment metadataは未完。 |
 | S3 字幕共有・訂正UI | PARTIAL | 公開字幕ページと非公開訂正ページ、明示承認、訂正/undo/sourceRevisionを実装。Chrome/Meetでの実会議、実画面共有、配布拡張IDでのOrigin検査は未試験。 |
 | S4 候補比較・M1統合資格 | BLOCKED | M1 Maxの実機はあるが、許可済みの重みと人手確認済み日英dev/holdoutがない。ASR-only/MT-only/E2Eのモデル出力、品質、メモリ、確定遅延、60分結合試験は未実施。 |
 | S5 QR PoC | NOT_STARTED | 通常の字幕・訂正機能の完了後に行う独立実験。 |
@@ -40,7 +40,7 @@
 | T12 | PARTIAL | synthetic 341 ms voiced fixtureがdurationだけで捨てられないことを確認。自然な短い否定・数字、無音/雑音誤検出は未評価。 |
 | T13 | PARTIAL | native WhisperとWhisperXは構造化segmentを返し、得られないscoreはnull。SenseVoiceなど他adapterのsegment/timing契約が揃っていない。 |
 | T14 | PARTIAL | stop/restart、stream generation、mic非公開、終了sessionをsynthetic store testで確認。実ブラウザーでの復旧と再許可は未試験。 |
-| T15 | PARTIAL | 待機・実行中・話者batch保持中の音声を最大4件/10秒に制限し、queue先頭とbatch flushで5秒超をSTALEとして破棄。短いidle flushにchrome.alarmsを使わない。OVERLOAD/STALE件数と累積音声時間を非公開訂正UIに表示。翻訳dedupe/期限、評価telemetry、共通推論排他、適応負荷制御は未実装。 |
+| T15 | PARTIAL | 待機・実行中・話者batch保持中の音声を最大4件/10秒に制限し、queue先頭とbatch flushで5秒超をSTALEとして破棄。停止中に話者変更flushが完了してもincoming音声を再保持しない。短いidle flushにchrome.alarmsを使わない。OVERLOAD/STALE件数と累積音声時間を非公開訂正UIに表示。翻訳dedupe/期限、評価telemetry、共通推論排他、適応負荷制御は未実装。 |
 | T16 | PARTIAL | bearer token、loopback、Origin/Host、preflight、8 MiB拒否をGo testで確認。実extension Originと配布IDで未確認。 |
 | T17 | PARTIAL | storageをtrusted contextに制限し、旧chat設定と通知の移行を追加。全設定/辞書/明示モデルの保存互換性は未監査。 |
 | T18 | PARTIAL | 字幕/訂正画面はtextContentで描画し、Chat権限なし。QR表示・復号は未実装。 |
@@ -60,7 +60,7 @@
 | MT02 | BLOCKED | 翻訳prompt fixtureはあるが、選定済みartifactのtemplate/tokenizer/EOS/thinking/text-only出力がない。 |
 | MT03 | BLOCKED | 日英の人手確認済みquality cases、重要意味assertions、SacreBLEU固定版の評価なし。 |
 | MT04 | NOT_STARTED | scorerがgoldを通し、捏造・反転・全件保留などを落とすnegative fixtureは未実装。 |
-| R01 | DONE | R0/R4/R5/R6/R7/R8/R9/R10およびR10の話者batch原因別追記について確認日、一次情報、候補screen、差分、制約をresearch logに記録。 |
+| R01 | DONE | R0/R4/R5/R6/R7/R8/R9/R10および原因別追記について確認日、一次情報、候補screen、差分、制約をresearch logに記録。 |
 | R02 | PARTIAL | 候補の言語/利用条件/runtime/テンプレート/quantizationと6圧縮方式を整理。公開数値は候補枠のscreenにだけ使い、未確認の重みhashとM1互換性はDEFERREDに保持。 |
 | R03 | DONE | offline checkerは出典付き数値、圧縮スコア維持率の再計算、compact翻訳の同一benchmark/metric/referenceによる両方向比較、hash・runtime・template・M1証拠を検査。 |
 | R04 | BLOCKED | 一軸変更比較と実機結合runがない。 |
@@ -78,7 +78,7 @@
 - `extension/`: mic/tab別energy-VAD、session/generation検査、host-only訂正UI、字幕用public/private channel、承認・訂正・undo・translation revision管理、字幕ページを追加。
 - `server/`: loopback API認証と上限、FIRリサンプル、構造化ASR結果、Whisper固有診断、Whisper候補文を保持する固定source patch、Python音声入力のin-memory処理を追加。
 - `eval/` と `server/cmd/eval/`: ASR-only、正しい原文MT-only、E2Eを分離し、synthetic fixture・local WAV hash・track/split検査を追加。モデル推論は実行しない。
-- `docs/research/`: 一次情報・候補・調査log・圧縮benchmark screen・PROFILE_NOT_QUALIFIED lockを保存。現在61 source / 10 candidate、全候補DEFERRED。公開screen PASSは3件だが、実機適格モデルは0件。
+- `docs/research/`: 一次情報・候補・調査log・圧縮benchmark screen・PROFILE_NOT_QUALIFIED lockを保存。現在66 source / 10 candidate、全候補DEFERRED。公開screen PASSは3件だが、実機適格モデルは0件。
 - `docs/decisions/`: hardware-only昇格禁止、モデル別prompt、ASR候補保持/host review、開始排他、audio queue、holdout適格性判断を記録。
 
 ## 検証記録
@@ -86,13 +86,13 @@
 | 検証 | 結果 |
 | --- | --- |
 | `go test ./... -count=1` (`server/`, sandbox用Go cache) | PASS。全3 Go package。Apple `xcrun_db` cache warningは出たが終了コード0。 |
-| `node --test exif-viewer/tests/*.test.js meet-translator/extension/tests/*.test.js` | PASS 75/75。Extension単体は65/65。 |
+| `node --test exif-viewer/tests/*.test.js meet-translator/extension/tests/*.test.js` | PASS 76/76。Extension単体は66/66。 |
 | `node --test eval/*.test.mjs` | PASS 14/14。 |
-| `node eval/check-research.mjs --offline` | PASS。64 sources、10 candidates、10 DEFERRED、3 published benchmark screens、0 SELECTED、PROFILE_NOT_QUALIFIED。 |
+| `node eval/check-research.mjs --offline` | PASS。66 sources、10 candidates、10 DEFERRED、3 published benchmark screens、0 SELECTED、PROFILE_NOT_QUALIFIED。 |
 | `node eval/check-contracts.mjs` | PASS。ASR 1 / MT 3 / E2E 1、audio asset 2件。全てsynthetic、推論なし、品質証拠なし。 |
 | `go run ./cmd/eval --track ...` の3 manifest検査 (`server/`) | PASS。ASR 1 / MT 3 / E2E 1件。各manifestのaudio hash整合、`inferenceExecuted:false`、昇格可能件数0。 |
 
-作業中に追加したUI回帰testは最初の実行でfake browser環境に`crypto.randomUUID`がなく失敗したため、fakeにAPIを追加して再実行した。今回のreview回帰testを含む全62件が成功。
+話者変更flush中の停止競合を再現する回帰testは、修正前にpending batchが残ることを確認し、修正後はbatchとqueue予約がすべて解放されることを確認した。モデル品質や実機動作の合格を示すものではない。
 
 ## 実測していない項目
 

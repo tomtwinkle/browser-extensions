@@ -1053,12 +1053,14 @@ async function handleAudioData(audioChunk, audioReservation = null) {
 
   if (pending.speakerName !== normalizedSpeaker) {
     await flushPendingSpeakerBatch('speaker-changed', tabId, audioMetadata.streamId);
+    if (!isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations)) return;
     startSpeakerBatch(wavB64, normalizedSpeaker, durationMs, speechMs, audioMetadata, audioReservation);
     return;
   }
 
   if (pending.totalDurationMs + durationMs > MAX_SPEAKER_BATCH_DURATION_MS) {
     await flushPendingSpeakerBatch('max-batch-duration', tabId, audioMetadata.streamId);
+    if (!isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations)) return;
     startSpeakerBatch(wavB64, normalizedSpeaker, durationMs, speechMs, audioMetadata, audioReservation);
     return;
   }
