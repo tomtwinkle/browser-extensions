@@ -13,6 +13,45 @@ const backgroundScriptSource = fs.readFileSync(
   'utf8'
 );
 
+function makeWavBase64(durationMs) {
+  const sampleRate = 16_000;
+  const byteRate = sampleRate * 2;
+  const dataBytes = Math.floor(durationMs * byteRate / 1_000);
+  const wav = Buffer.alloc(44 + dataBytes);
+  wav.write('RIFF', 0);
+  wav.writeUInt32LE(36 + dataBytes, 4);
+  wav.write('WAVE', 8);
+  wav.write('fmt ', 12);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(sampleRate, 24);
+  wav.writeUInt32LE(byteRate, 28);
+  wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write('data', 36);
+  wav.writeUInt32LE(dataBytes, 40);
+  return wav.toString('base64');
+}
+
+function sendAudioData(context, durationMs) {
+  context.handleOffscreenPortMessage({}, {
+    type: 'AUDIO_DATA',
+    sessionId: 'session-a',
+    streamId: 'tab',
+    streamGeneration: 1,
+    wavB64: makeWavBase64(durationMs),
+    speechMs: durationMs,
+    evidence: {
+      vadKind: 'energy',
+      speechDetected: true,
+      voicedDurationMs: durationMs,
+      utteranceDurationMs: durationMs,
+      clippingRatio: 0,
+    },
+  });
+}
+
 test('audio metadata requires a current session and stream generation', () => {
   const { context } = loadBackgroundScript();
   const generations = { mic: 3, tab: 7 };
@@ -109,6 +148,70 @@ test('audio queue rechecks staleness before running queued work', async () => {
   assert.equal(staleTaskRan, false);
 });
 
+test('speaker batches retain their audio reservation and delayed flushes drop stale audio', async () => {
+  let flushBatch;
+  const { context } = loadBackgroundScript({
+    setTimeoutImpl(callback) {
+      flushBatch = callback;
+      return 1;
+    },
+    clearTimeoutImpl() {},
+  });
+  let now = 1_000;
+  context.Date = class TestDate extends Date {
+    static now() { return now; }
+  };
+  const state = context.__testState;
+  state.isActive = true;
+  state.tabId = 7;
+  state.sessionId = 'session-a';
+  state.streamGenerations = { mic: 0, tab: 1 };
+  context.getActiveSpeaker = async () => 'Test Speaker';
+  let processed = 0;
+  context.processAudioChunk = async () => { processed += 1; };
+
+  sendAudioData(context, 1_500);
+  await state.audioQueue;
+
+  assert.equal(state.audioQueuePendingItems, 1);
+  assert.equal(state.audioQueuePendingMs, 1_500);
+  assert.equal(state.pendingSpeakerBatches.size, 1);
+
+  now += 5_001;
+  assert.equal(typeof flushBatch, 'function');
+  flushBatch();
+  await state.audioQueue;
+
+  assert.equal(processed, 0);
+  assert.equal(state.pendingSpeakerBatches.size, 0);
+  assert.equal(state.audioQueuePendingItems, 0);
+  assert.equal(state.audioQueuePendingMs, 0);
+  assert.equal(state.audioQueueStatus.code, 'STALE');
+});
+
+test('speaker-batched audio stays within aggregate item and duration limits', async () => {
+  const { context } = loadBackgroundScript();
+  const state = context.__testState;
+  state.isActive = true;
+  state.tabId = 7;
+  state.sessionId = 'session-a';
+  state.streamGenerations = { mic: 0, tab: 1 };
+  context.getActiveSpeaker = async () => 'Test Speaker';
+
+  for (let index = 0; index < 4; index += 1) sendAudioData(context, 2_500);
+  await state.audioQueue;
+  sendAudioData(context, 100);
+
+  assert.equal(state.audioQueueStatus.code, 'OVERLOAD');
+  assert.equal(state.audioQueuePendingItems, 4);
+  assert.equal(state.audioQueuePendingMs, 10_000);
+  assert.equal([...state.pendingSpeakerBatches.values()][0].chunks.length, 4);
+
+  context.clearPendingSpeakerBatches();
+  assert.equal(state.audioQueuePendingItems, 0);
+  assert.equal(state.audioQueuePendingMs, 0);
+});
+
 test('concurrent capture start is rejected before health check resolves', async () => {
   let resolveHealth;
   const { context } = loadBackgroundScript({
@@ -129,22 +232,12 @@ test('concurrent capture start is rejected before health check resolves', async 
 
 function loadBackgroundScript({ fetchImpl, storageSettings = {}, setTimeoutImpl, clearTimeoutImpl } = {}) {
   const listeners = {
-    onAlarm: null,
     onMessage: null,
   };
   let storageAccessLevel = null;
   const tabMessages = [];
 
   const chrome = {
-    alarms: {
-      create() {},
-      clear() {},
-      onAlarm: {
-        addListener(listener) {
-          listeners.onAlarm = listener;
-        },
-      },
-    },
     offscreen: {
       async createDocument() {},
       async closeDocument() {},

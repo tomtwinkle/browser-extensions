@@ -15,7 +15,6 @@ function loadBackground({ persisted = null, publishMicrophoneCaptions = false } 
   const stored = { captionStoreState: persisted };
   const storageWrites = [];
   const chrome = {
-    alarms: { onAlarm: { addListener() {} }, create() {}, clear() {} },
     offscreen: { async createDocument() {}, async closeDocument() {} },
     runtime: {
       getURL(file = '') { return `chrome-extension://test/${file}`; },

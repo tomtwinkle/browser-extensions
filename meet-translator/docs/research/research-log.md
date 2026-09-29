@@ -174,3 +174,15 @@
 **Evidence and limits.** The registry now has 61 primary-source records and 10 candidate records; three published score screens pass. Extension queue/start/UI regressions and Go manifest tests pass. No model weights were downloaded, and no human-reviewed meeting holdout, ASR-only, correct-source MT-only, end-to-end model result, M1 runtime/quality measurement, or Meet sharing test was produced.
 
 **Next conditions.** Complete the remaining T15 controls and evaluation telemetry; obtain authorized exact artifacts and reviewed bilingual development/holdout data; verify model-specific templates and output behavior; then run one-axis ASR-only, correct-source MT-only, end-to-end, and M1 Max integration trials before any promotion.
+
+### R10 cause-specific addendum — speaker-batch queue expiry, 2026-09-29
+
+**Question.** Can the existing five-second audio age limit rely on `chrome.alarms` to flush buffered speaker audio on time, and what short flush mechanism respects the extension specification?
+
+**Primary sources.** Checked Chrome's official [`chrome.alarms` API documentation](https://developer.chrome.com/docs/extensions/reference/api/alarms), [`extension service worker lifecycle`](https://developer.chrome.com/docs/extensions/develop/concepts/service-workers/lifecycle?hl=en), and [`service worker migration guidance`](https://developer.chrome.com/docs/extensions/develop/migrate/to-service-workers). They are recorded as `SRC-CHROME-ALARMS-API`, `SRC-CHROME-SW-LIFECYCLE`, and `SRC-CHROME-SW-MIGRATE`. Alarms can be delayed arbitrarily and cannot fire more often than every 30 seconds in production. Service workers normally end after 30 seconds of inactivity; in-memory state is lost, and one-shot timers can be canceled if the worker terminates.
+
+**Implementation delta.** A persistent alarm is too coarse for the 1.2-second in-memory idle flush and can deliver audio after its five-second freshness limit. The flush now uses a one-shot timer, while admission reservations remain counted through speaker-batch retention and inference; the batch rechecks the oldest original admission time immediately before inference and drops stale audio. Stopping a session releases retained reservations. If the service worker terminates, its timer and volatile batch can be lost; stale audio is never replayed from persistent storage. The workflow's loopback smoke checks now configure the required CI-only extension Origin and send the required bearer token.
+
+**Decision.** `NO_MODEL_CHANGE`. Preserve the four-item / 10-second / five-second limits, and keep all candidates deferred. No runtime, model, quantization, template, numeric candidate screen, or publication gate changed.
+
+**Evidence and limits.** Model-free extension regressions cover real `AUDIO_DATA` admission into a speaker batch, retained aggregate accounting, and stale discard when the one-shot timer fires late. The registry now contains 64 sources and 10 candidates, all deferred. This does not measure actual Chrome worker termination or timer jitter, M1 performance, model quality, or Google Meet integration.

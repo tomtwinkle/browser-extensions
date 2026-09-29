@@ -33,7 +33,6 @@ const {
   stripFillers,
 } = globalThis.MeetTranslatorShared;
 
-const SPEAKER_BATCH_ALARM = 'speaker-audio-batch-flush';
 const SPEAKER_BATCH_IDLE_MS = 1200;
 const MAX_SPEAKER_BATCH_DURATION_MS = 20000;
 const MAX_AUDIO_QUEUE_PENDING_ITEMS = 4;
@@ -60,6 +59,7 @@ const state = {
   activeStreamIds: [],
   streamGenerations: { mic: 0, tab: 0 },
   pendingSpeakerBatches: new Map(),
+  speakerBatchFlushTimer: null,
   audioQueue: Promise.resolve(),
   audioQueuePendingItems: 0,
   audioQueuePendingMs: 0,
@@ -282,6 +282,7 @@ function handleOffscreenPortMessage(port, message) {
       state.isActive = false;
       state.sessionId = null;
       state.activeStreamIds = [];
+      clearPendingSpeakerBatches();
       if (state.healthCheckTimer) clearInterval(state.healthCheckTimer);
       state.healthCheckTimer = null;
       if (oldTabId) dispatchToContentScript(oldTabId, { type: 'TRANSLATION_STOPPED', sessionId: oldSessionId }).catch(() => {});
@@ -329,7 +330,7 @@ function handleOffscreenPortMessage(port, message) {
     const audioMs = Number.isFinite(message.evidence?.utteranceDurationMs)
       ? message.evidence.utteranceDurationMs
       : message.speechMs;
-    enqueueAudioTask(() => handleAudioData(message), {
+    enqueueAudioTask((reservation) => handleAudioData(message, reservation), {
       audioMs,
       queuedAtMs: Date.now(),
     });
@@ -749,26 +750,63 @@ function resolveTranscriptLanguage(cfg, transcription, detectedLang) {
 
 
 function scheduleSpeakerBatchFlush(delayMs = SPEAKER_BATCH_IDLE_MS) {
-  chrome.alarms.create(SPEAKER_BATCH_ALARM, { when: Date.now() + delayMs });
+  cancelSpeakerBatchFlush();
+  state.speakerBatchFlushTimer = setTimeout(() => {
+    state.speakerBatchFlushTimer = null;
+    if (state.pendingSpeakerBatches.size === 0 || !state.isActive) return;
+    enqueueAudioTask(() => flushPendingSpeakerBatch('idle-timeout', state.tabId));
+  }, delayMs);
 }
 
 function cancelSpeakerBatchFlush() {
-  chrome.alarms.clear(SPEAKER_BATCH_ALARM);
+  if (state.speakerBatchFlushTimer !== null) clearTimeout(state.speakerBatchFlushTimer);
+  state.speakerBatchFlushTimer = null;
 }
 
-function startSpeakerBatch(wavB64, speakerName, durationMs, speechMs, audioMetadata) {
+function retainAudioQueueReservation(reservation) {
+  if (reservation && !reservation.released) reservation.retained = true;
+}
+
+function releaseAudioQueueReservation(reservation) {
+  if (!reservation || reservation.released) return;
+  reservation.released = true;
+  state.audioQueuePendingItems = Math.max(0, state.audioQueuePendingItems - 1);
+  state.audioQueuePendingMs = Math.max(0, state.audioQueuePendingMs - reservation.audioMs);
+}
+
+function clearPendingSpeakerBatches() {
+  for (const batch of state.pendingSpeakerBatches.values()) {
+    for (const chunk of batch.chunks) releaseAudioQueueReservation(chunk.audioReservation);
+  }
+  state.pendingSpeakerBatches.clear();
+  cancelSpeakerBatchFlush();
+}
+
+function appendSpeakerBatchChunk(batch, wavB64, speechMs, audioReservation) {
+  retainAudioQueueReservation(audioReservation);
+  batch.chunks.push({ wavB64, speechMs, audioReservation });
+  batch.totalSpeechMs += speechMs;
+  batch.totalReservedAudioMs += audioReservation?.audioMs || 0;
+  batch.oldestQueuedAtMs = Math.min(batch.oldestQueuedAtMs, audioReservation?.queuedAtMs ?? Date.now());
+}
+
+function startSpeakerBatch(wavB64, speakerName, durationMs, speechMs, audioMetadata, audioReservation = null) {
   const key = JSON.stringify([
     audioMetadata.streamId,
     audioMetadata.streamGeneration,
     speakerName,
   ]);
-  state.pendingSpeakerBatches.set(key, {
+  const batch = {
     speakerName,
     audioMetadata,
-    chunks: [{ wavB64, speechMs }],
+    chunks: [],
     totalDurationMs: durationMs,
-    totalSpeechMs: speechMs,
-  });
+    totalSpeechMs: 0,
+    totalReservedAudioMs: 0,
+    oldestQueuedAtMs: audioReservation?.queuedAtMs ?? Date.now(),
+  };
+  appendSpeakerBatchChunk(batch, wavB64, speechMs, audioReservation);
+  state.pendingSpeakerBatches.set(key, batch);
   scheduleSpeakerBatchFlush();
 }
 
@@ -788,23 +826,17 @@ function enqueueAudioTask(task, options = {}) {
     state.audioQueuePendingMs += audioMs;
   }
 
-  let reservationActive = reservesAudio;
-  const releaseReservation = () => {
-    if (!reservationActive) return;
-    reservationActive = false;
-    state.audioQueuePendingItems = Math.max(0, state.audioQueuePendingItems - 1);
-    state.audioQueuePendingMs = Math.max(0, state.audioQueuePendingMs - audioMs);
-  };
+  const reservation = reservesAudio
+    ? { audioMs, queuedAtMs, retained: false, released: false }
+    : null;
 
   const next = state.audioQueue.then(async () => {
-    try {
-      if (reservesAudio && Date.now() - queuedAtMs > MAX_AUDIO_QUEUE_STALE_MS) {
-        return reportAudioQueueDrop('STALE', audioMs);
-      }
-      return await task();
-    } finally {
-      releaseReservation();
+    if (reservesAudio && Date.now() - queuedAtMs > MAX_AUDIO_QUEUE_STALE_MS) {
+      return reportAudioQueueDrop('STALE', audioMs);
     }
+    return await task(reservation);
+  }).finally(() => {
+    if (!reservation?.retained) releaseAudioQueueReservation(reservation);
   });
   state.audioQueue = next.catch((err) => {
     console.error('[background] audio processing error:', err);
@@ -949,25 +981,36 @@ async function flushPendingSpeakerBatch(reason, tabId = state.tabId, streamId = 
 
   for (const [, batch] of batches) {
     const { audioMetadata } = batch;
-    if (batch.chunks.length === 1) {
-      await processAudioChunk(batch.chunks[0].wavB64, batch.speakerName, tabId, batch.totalSpeechMs, audioMetadata);
-      continue;
-    }
-
     try {
-      const mergedWavB64 = mergeWavBase64Chunks(batch.chunks.map((chunk) => chunk.wavB64));
-      await processAudioChunk(mergedWavB64, batch.speakerName, tabId, batch.totalSpeechMs, audioMetadata);
-    } catch (err) {
-      console.warn('[background] speaker batch merge failed, replaying individual chunks:', err.message);
-      for (const chunk of batch.chunks) {
-        await processAudioChunk(chunk.wavB64, batch.speakerName, tabId, chunk.speechMs, audioMetadata);
+      if (Date.now() - batch.oldestQueuedAtMs > MAX_AUDIO_QUEUE_STALE_MS) {
+        reportAudioQueueDrop('STALE', batch.totalReservedAudioMs || batch.totalDurationMs);
+        continue;
       }
+
+      if (batch.chunks.length === 1) {
+        await processAudioChunk(batch.chunks[0].wavB64, batch.speakerName, tabId, batch.totalSpeechMs, audioMetadata);
+        continue;
+      }
+
+      try {
+        const mergedWavB64 = mergeWavBase64Chunks(batch.chunks.map((chunk) => chunk.wavB64));
+        await processAudioChunk(mergedWavB64, batch.speakerName, tabId, batch.totalSpeechMs, audioMetadata);
+      } catch (err) {
+        console.warn('[background] speaker batch merge failed, replaying individual chunks:', err.message);
+        for (const chunk of batch.chunks) {
+          await processAudioChunk(chunk.wavB64, batch.speakerName, tabId, chunk.speechMs, audioMetadata);
+        }
+      }
+    } catch (err) {
+      console.error('[background] speaker batch processing failed:', err);
+    } finally {
+      for (const chunk of batch.chunks) releaseAudioQueueReservation(chunk.audioReservation);
     }
   }
   return true;
 }
 
-async function handleAudioData(audioChunk) {
+async function handleAudioData(audioChunk, audioReservation = null) {
   const wavB64 = typeof audioChunk === 'string' ? audioChunk : audioChunk?.wavB64;
   if (!wavB64) return;
 
@@ -981,6 +1024,7 @@ async function handleAudioData(audioChunk) {
 
   const tabId = state.tabId;
   const speakerName = audioMetadata.streamId === 'tab' ? await getActiveSpeaker(tabId) : null;
+  if (!isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations)) return;
   const normalizedSpeaker = normalizeSpeakerName(speakerName);
   const durationMs = getWavDurationMs(wavB64);
   const speechMs = Number.isFinite(audioChunk?.speechMs) ? audioChunk.speechMs : durationMs;
@@ -1003,25 +1047,24 @@ async function handleAudioData(audioChunk) {
   );
   const pending = pendingEntry?.[1];
   if (!pending) {
-    startSpeakerBatch(wavB64, normalizedSpeaker, durationMs, speechMs, audioMetadata);
+    startSpeakerBatch(wavB64, normalizedSpeaker, durationMs, speechMs, audioMetadata, audioReservation);
     return;
   }
 
   if (pending.speakerName !== normalizedSpeaker) {
     await flushPendingSpeakerBatch('speaker-changed', tabId, audioMetadata.streamId);
-    startSpeakerBatch(wavB64, normalizedSpeaker, durationMs, speechMs, audioMetadata);
+    startSpeakerBatch(wavB64, normalizedSpeaker, durationMs, speechMs, audioMetadata, audioReservation);
     return;
   }
 
   if (pending.totalDurationMs + durationMs > MAX_SPEAKER_BATCH_DURATION_MS) {
     await flushPendingSpeakerBatch('max-batch-duration', tabId, audioMetadata.streamId);
-    startSpeakerBatch(wavB64, normalizedSpeaker, durationMs, speechMs, audioMetadata);
+    startSpeakerBatch(wavB64, normalizedSpeaker, durationMs, speechMs, audioMetadata, audioReservation);
     return;
   }
 
-  pending.chunks.push({ wavB64, speechMs });
+  appendSpeakerBatchChunk(pending, wavB64, speechMs, audioReservation);
   pending.totalDurationMs += durationMs;
-  pending.totalSpeechMs += speechMs;
   scheduleSpeakerBatchFlush();
 }
 
@@ -1181,9 +1224,8 @@ async function startCapture(tabId) {
     state.healthCheckFailures = 0;
     state.healthCheckInFlight = false;
     state.serverInfo = { whisperModel: health.whisperModel, llamaModel: health.llamaModel };
-    state.pendingSpeakerBatches.clear();
+    clearPendingSpeakerBatches();
     state.audioQueueStatus = { code: null, droppedCount: 0, droppedAudioMs: 0, updatedAtMs: null };
-    cancelSpeakerBatchFlush();
 
     // Make sure the offscreen document is ready for audio processing
     await ensureOffscreenDocument();
@@ -1229,8 +1271,7 @@ async function startCapture(tabId) {
       state.isActive = false;
       for (const streamId of activeStreamIds) state.streamGenerations[streamId] += 1;
       state.activeStreamIds = [];
-      state.pendingSpeakerBatches.clear();
-      cancelSpeakerBatchFlush();
+      clearPendingSpeakerBatches();
       if (state.healthCheckTimer) clearInterval(state.healthCheckTimer);
       state.healthCheckTimer = null;
       if (startAudioRequested) await captionStoreRequest('stop-audio').catch(() => {});
@@ -1252,8 +1293,7 @@ async function stopCapture() {
   for (const streamId of state.activeStreamIds) state.streamGenerations[streamId] += 1;
   state.activeStreamIds = [];
   state.sessionId = null;
-  state.pendingSpeakerBatches.clear();
-  cancelSpeakerBatchFlush();
+  clearPendingSpeakerBatches();
 
   // 定期ヘルスチェックを停止
   if (state.healthCheckTimer) {
@@ -1277,12 +1317,6 @@ async function stopCapture() {
     } catch (_) {}
   }
 }
-
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name !== SPEAKER_BATCH_ALARM) return;
-  if (state.pendingSpeakerBatches.size === 0 || !state.isActive) return;
-  enqueueAudioTask(() => flushPendingSpeakerBatch('idle-timeout', state.tabId));
-});
 
 // ---------------------------------------------------------------------------
 // Message router

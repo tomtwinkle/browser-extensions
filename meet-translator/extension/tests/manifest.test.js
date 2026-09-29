@@ -16,6 +16,10 @@ test('extension no longer requests Google Chat host access or content injection'
   assert.equal(manifestText.includes('chat.google.com'), false);
 });
 
+test('short speaker-batch flushing does not request the alarms permission', () => {
+  assert.equal(manifest.permissions.includes('alarms'), false);
+});
+
 test('caption pages are bundled and use separate public and private Ports', () => {
   const presenterHtml = fs.readFileSync(path.join(manifestDir, 'caption-presenter.html'), 'utf8');
   const presenterJs = fs.readFileSync(path.join(manifestDir, 'caption-presenter.js'), 'utf8');

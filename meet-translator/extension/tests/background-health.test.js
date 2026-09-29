@@ -16,13 +16,6 @@ const backgroundScriptSource = fs.readFileSync(
 function loadBackgroundScript() {
   const intervalCallbacks = [];
   const chrome = {
-    alarms: {
-      create() {},
-      clear() {},
-      onAlarm: {
-        addListener() {},
-      },
-    },
     offscreen: {
       async createDocument() {},
       async closeDocument() {},

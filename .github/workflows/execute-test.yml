@@ -261,6 +261,7 @@ jobs:
       ASR_PYTHON_DEVICE: cpu
       # Test-only credential required by the loopback API; never use outside CI.
       MEET_TRANSLATOR_API_TOKEN: ci-only-token-never-use-outside-github-actions-0001
+      MEET_TRANSLATOR_EXTENSION_ORIGIN: chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
     steps:
       # ── ビルド成果物 (バイナリのみ) をダウンロード ──────────────────────────
@@ -565,7 +566,7 @@ jobs:
           esac
           echo "Waiting for server to become ready (up to $((attempts * 5 / 60)) minutes)..."
           for i in $(seq 1 "$attempts"); do
-            if curl -sf http://localhost:7070/health > /dev/null 2>&1; then
+            if curl -sf -H "Authorization: Bearer ${MEET_TRANSLATOR_API_TOKEN}" http://localhost:7070/health > /dev/null 2>&1; then
               echo "Server ready (attempt ${i}/${attempts})"
               exit 0
             fi
@@ -601,7 +602,7 @@ jobs:
             if [ -f server.exit ]; then
               break
             fi
-            if curl -sf http://localhost:7070/health > /dev/null 2>&1; then
+            if curl -sf -H "Authorization: Bearer ${MEET_TRANSLATOR_API_TOKEN}" http://localhost:7070/health > /dev/null 2>&1; then
               echo "ERROR: server became healthy but startup failure was expected"
               exit 1
             fi
@@ -637,7 +638,7 @@ jobs:
       - name: Test GET /health
         if: matrix.expect_startup_failure != true
         run: |
-          curl -sf http://localhost:7070/health -o health.json
+          curl -sf -H "Authorization: Bearer ${MEET_TRANSLATOR_API_TOKEN}" http://localhost:7070/health -o health.json
           cat health.json
           node - <<'JSEOF'
           const fs = require('node:fs');
@@ -654,6 +655,7 @@ jobs:
         if: matrix.expect_startup_failure != true
         run: |
           curl -sf -X POST http://localhost:7070/transcribe \
+            -H "Authorization: Bearer ${MEET_TRANSLATOR_API_TOKEN}" \
             -F "audio=@test_silence.wav" \
             -o transcribe.json
           cat transcribe.json
@@ -675,6 +677,7 @@ jobs:
         if: matrix.expect_startup_failure != true
         run: |
           curl -sf -X POST http://localhost:7070/transcribe-and-translate \
+            -H "Authorization: Bearer ${MEET_TRANSLATOR_API_TOKEN}" \
             -F "audio=@test_silence.wav" \
             -F "target_lang=ja" \
             -o translate.json
