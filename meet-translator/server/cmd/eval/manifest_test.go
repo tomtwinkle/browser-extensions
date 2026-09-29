@@ -35,6 +35,14 @@ func TestLoadCasesAcceptsValidMTOnlyCase(t *testing.T) {
 	}
 }
 
+func TestLoadCasesRejectsSyntheticQualityHoldout(t *testing.T) {
+	input := `{"schemaVersion":1,"caseId":"synthetic-holdout","track":"mt-only","split":"holdout","sourceLanguage":"en","targetLanguage":"ja","sourceText":"The meeting starts at 10.","referenceTranslations":["会議は10時に始まります。"],"meetingId":"meeting-holdout-1","speakerGroup":"speaker-holdout-1","annotationVersion":"contract-1","annotationStatus":"verified","fixtureKind":"synthetic"}`
+
+	if _, err := LoadCases(strings.NewReader(input), TrackMTOnly); err == nil {
+		t.Fatal("synthetic quality holdout must be rejected")
+	}
+}
+
 func TestLoadCasesRejectsUnsafeAudioPath(t *testing.T) {
 	input := `{"schemaVersion":1,"caseId":"asr-1","track":"asr-only","split":"contract","sourceLanguage":"ja","audioRef":"../private/meeting.wav","audioSHA256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","referenceText":"","annotationVersion":"contract-1","annotationStatus":"contract-test","fixtureKind":"synthetic"}`
 
@@ -57,6 +65,10 @@ func TestPromotionEligibleRequiresVerifiedHoldout(t *testing.T) {
 	caseData.AnnotationStatus = "verified"
 	if PromotionEligible(caseData) {
 		t.Fatal("contract fixture must not be eligible")
+	}
+	caseData = EvalCase{Split: "holdout", AnnotationStatus: "verified", FixtureKind: "synthetic"}
+	if PromotionEligible(caseData) {
+		t.Fatal("synthetic holdout must not be eligible")
 	}
 }
 

@@ -61,6 +61,7 @@ function loadBackground({ persisted = null, publishMicrophoneCaptions = false } 
   context.globalThis = context;
   context.MeetTranslatorShared = shared;
   vm.runInNewContext(backgroundSource, context, { filename: 'background.js' });
+  const state = vm.runInNewContext('state', context);
 
   function connect(name, url) {
     const incoming = [];
@@ -84,7 +85,7 @@ function loadBackground({ persisted = null, publishMicrophoneCaptions = false } 
     return port;
   }
 
-  return { chrome, connect, context, portMessages, storageWrites, stored };
+  return { chrome, connect, context, portMessages, state, storageWrites, stored };
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -160,4 +161,18 @@ test('private caption records reach only the private correction page', async () 
   });
   await flush();
   assert.ok(portMessages.some((item) => item.port === publicPage && item.message.type === 'CAPTION_PUBLIC_EVENT'));
+});
+
+test('audio queue drop counts are reported only to the private correction page', async () => {
+  const { context, state } = loadBackground();
+  const privateMessages = [];
+  const publicMessages = [];
+  state.captionPrivateClients.add({ postMessage(message) { privateMessages.push(plain(message)); } });
+  state.captionPublicClients.add({ postMessage(message) { publicMessages.push(plain(message)); } });
+
+  context.reportAudioQueueDrop('OVERLOAD', 1250);
+
+  assert.ok(privateMessages.some((message) => message.type === 'CAPTION_QUEUE_STATUS' &&
+    message.status.code === 'OVERLOAD' && message.status.droppedCount === 1 && message.status.droppedAudioMs === 1250));
+  assert.equal(publicMessages.some((message) => message.type === 'CAPTION_QUEUE_STATUS'), false);
 });

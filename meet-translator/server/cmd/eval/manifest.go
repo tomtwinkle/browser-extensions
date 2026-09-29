@@ -130,6 +130,9 @@ func validateCase(item EvalCase, expectedTrack Track) error {
 		if item.MeetingID == "" || item.SpeakerGroup == "" {
 			return fmt.Errorf("development and holdout cases require meetingId and speakerGroup")
 		}
+		if item.FixtureKind == "synthetic" {
+			return fmt.Errorf("synthetic fixtures must use split=contract")
+		}
 		if item.AnnotationStatus == "contract-test" {
 			return fmt.Errorf("contract-test annotationStatus requires split=contract")
 		}
@@ -214,7 +217,7 @@ func validateSplitIsolation(cases []EvalCase) error {
 }
 
 func PromotionEligible(item EvalCase) bool {
-	return item.Split == "holdout" && item.AnnotationStatus == "verified"
+	return item.Split == "holdout" && item.AnnotationStatus == "verified" && item.FixtureKind != "synthetic"
 }
 
 func VerifyAudioAssets(projectRoot string, cases []EvalCase) error {

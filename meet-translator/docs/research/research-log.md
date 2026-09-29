@@ -155,3 +155,22 @@
 **Decision.** `NO_MODEL_PROMOTION`. The research shortlist now has three published-score passes: Hy-MT2 1.8B Q4_K_M as the single compression artifact, plus CAT-Translate 0.8B and 1.4B as compact bilingual comparators. Qwen3.8-27B-FP8 remains `DEFERRED` due to size and missing task-specific numeric results. Only Hy-MT2 remains registered as an experimental runtime choice; the CAT artifacts are research-only pending runtime, artifact, and M1 verification.
 
 **Evidence and limits.** The registry has 58 primary-source records and 10 candidate records. All 10 remain `DEFERRED`, three published score screens pass, and zero candidates are `SELECTED`. No weights were downloaded; no ASR-only, correct-source MT-only, E2E, M1, Metal, memory, caption-latency, or Meet-integration model run was performed. The public scores justify comparison only.
+
+## R10 — review fixes and final primary-source check, 2026-09-29
+
+**Question.** Did the latest primary-source check change the candidate screen, M1 acceptance profile, model/runtime/template choice, or publication gate? Do the evaluation manifests safely prevent synthetic cases from counting as product holdout evidence?
+
+**Search scope.** Reopened OpenAI's evaluation reporting guidance, the official WMT24 General MT task and Google WMT24++ dataset card, Qwen3-ASR and CAT-Translate author cards, and Apple's MLX session. The source IDs, owners, retrieval date, supported claims, and limitations are in `sources.jsonl`.
+
+**Findings and implementation deltas.**
+
+- WMT24 describes blind unseen test paragraphs and document-context human evaluation; WMT24++ retains document/segment IDs, post-edits, and a low-quality-source flag. These sources support keeping synthetic contracts separate from reviewed product holdouts. No public WMT data was imported into this project's evaluation set.
+- Qwen3-ASR lists Japanese and English and documents its own transcription request format; the card does not establish M1 execution, Meet-domain quality, or a calibrated publication score. CAT-Translate reports bilingual author benchmarks, which remain screening evidence only. Apple's MLX material describes Apple-silicon/unified-memory support but its large-memory M3 Ultra demo does not establish M1 Max performance.
+- The source check found no basis to change the selected experimental shortlist, runtime, model-specific templates, numeric candidate screen, fixed M1 limits, or public-caption gate. Existing public benchmark scores remain research admission evidence only.
+- Closed three independent code-review findings: serialize capture-start ownership before the first await; cap queued/running audio requests at four items and 10 seconds, expire work older than five seconds, and report cumulative drop count/audio duration only in the private correction UI; reject synthetic fixtures from development/holdout and from promotion eligibility. The first GitHub model-smoke run exposed its missing API credential; the execute-test job now supplies a fixed test-only token so the workflow can reach its intended startup checks. T15 is now partial; translation dedupe/deadlines, adaptive load control, a shared inference lock, and evaluation telemetry remain open.
+
+**Decision.** `NO_MATERIAL_CHANGE` to model selection, runtime, quantization, template, published benchmark thresholds, M1 quality/resource criteria, or caption publication gate. Keep all ten candidates `DEFERRED`, none `SELECTED`, and `PROFILE_NOT_QUALIFIED`. Accept the audio admission bound, startup reservation, and fail-closed evaluation eligibility as model-free reliability changes.
+
+**Evidence and limits.** The registry now has 61 primary-source records and 10 candidate records; three published score screens pass. Extension queue/start/UI regressions and Go manifest tests pass. No model weights were downloaded, and no human-reviewed meeting holdout, ASR-only, correct-source MT-only, end-to-end model result, M1 runtime/quality measurement, or Meet sharing test was produced.
+
+**Next conditions.** Complete the remaining T15 controls and evaluation telemetry; obtain authorized exact artifacts and reviewed bilingual development/holdout data; verify model-specific templates and output behavior; then run one-axis ASR-only, correct-source MT-only, end-to-end, and M1 Max integration trials before any promotion.

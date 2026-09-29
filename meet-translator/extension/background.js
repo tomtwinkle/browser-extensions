@@ -36,6 +36,9 @@ const {
 const SPEAKER_BATCH_ALARM = 'speaker-audio-batch-flush';
 const SPEAKER_BATCH_IDLE_MS = 1200;
 const MAX_SPEAKER_BATCH_DURATION_MS = 20000;
+const MAX_AUDIO_QUEUE_PENDING_ITEMS = 4;
+const MAX_AUDIO_QUEUE_PENDING_MS = 10_000;
+const MAX_AUDIO_QUEUE_STALE_MS = 5_000;
 const HEALTH_CHECK_INTERVAL_MS = 30_000;
 const HEALTH_CHECK_TIMEOUT_MS = 5_000;
 const API_REQUEST_TIMEOUT_MS = 30_000;
@@ -58,6 +61,9 @@ const state = {
   streamGenerations: { mic: 0, tab: 0 },
   pendingSpeakerBatches: new Map(),
   audioQueue: Promise.resolve(),
+  audioQueuePendingItems: 0,
+  audioQueuePendingMs: 0,
+  audioQueueStatus: { code: null, droppedCount: 0, droppedAudioMs: 0, updatedAtMs: null },
   offscreenPort: null,
   offscreenBootId: null,
   captionPersistQueue: Promise.resolve(),
@@ -139,6 +145,24 @@ function sendPrivateCaptionUpdate(record) {
   for (const port of state.captionPrivateClients) {
     if (!postPortMessage(port, { type: 'CAPTION_PRIVATE_RECORD', record })) state.captionPrivateClients.delete(port);
   }
+}
+
+function reportAudioQueueDrop(code, audioMs) {
+  const status = state.audioQueueStatus;
+  status.code = code;
+  status.droppedCount += 1;
+  status.droppedAudioMs += Math.round(audioMs);
+  status.updatedAtMs = Date.now();
+  const message = { type: 'CAPTION_QUEUE_STATUS', status: { ...status } };
+  for (const port of state.captionPrivateClients) {
+    if (!postPortMessage(port, message)) state.captionPrivateClients.delete(port);
+  }
+  return {
+    accepted: false,
+    code,
+    droppedCount: 1,
+    droppedAudioMs: Math.round(audioMs),
+  };
 }
 
 function sendPublicCaptionEvent(event) {
@@ -302,7 +326,13 @@ function handleOffscreenPortMessage(port, message) {
     };
     if (!state.isActive || !isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations) ||
         !shouldRequestTranscription(message.speechMs, message.evidence)) return;
-    enqueueAudioTask(() => handleAudioData(message));
+    const audioMs = Number.isFinite(message.evidence?.utteranceDurationMs)
+      ? message.evidence.utteranceDurationMs
+      : message.speechMs;
+    enqueueAudioTask(() => handleAudioData(message), {
+      audioMs,
+      queuedAtMs: Date.now(),
+    });
   }
 }
 
@@ -402,7 +432,11 @@ chrome.runtime.onConnect?.addListener?.((port) => {
       if (kind === 'public') {
         postPortMessage(port, { type: 'CAPTION_PUBLIC_SNAPSHOT', event: snapshot?.event || null });
       } else {
-        postPortMessage(port, { type: 'CAPTION_PRIVATE_SNAPSHOT', snapshot });
+        postPortMessage(port, {
+          type: 'CAPTION_PRIVATE_SNAPSHOT',
+          snapshot,
+          queueStatus: { ...state.audioQueueStatus },
+        });
       }
     })
     .catch(() => postPortMessage(port, { type: 'CAPTION_CONNECTION_ERROR' }));
@@ -738,8 +772,40 @@ function startSpeakerBatch(wavB64, speakerName, durationMs, speechMs, audioMetad
   scheduleSpeakerBatchFlush();
 }
 
-function enqueueAudioTask(task) {
-  const next = state.audioQueue.then(task);
+function enqueueAudioTask(task, options = {}) {
+  const audioMs = Number.isFinite(options.audioMs) ? Math.max(0, options.audioMs) : 0;
+  const queuedAtMs = Number.isFinite(options.queuedAtMs) ? options.queuedAtMs : Date.now();
+  const reservesAudio = audioMs > 0;
+  if (reservesAudio) {
+    if (Date.now() - queuedAtMs > MAX_AUDIO_QUEUE_STALE_MS) {
+      return Promise.resolve(reportAudioQueueDrop('STALE', audioMs));
+    }
+    if (state.audioQueuePendingItems + 1 > MAX_AUDIO_QUEUE_PENDING_ITEMS ||
+        state.audioQueuePendingMs + audioMs > MAX_AUDIO_QUEUE_PENDING_MS) {
+      return Promise.resolve(reportAudioQueueDrop('OVERLOAD', audioMs));
+    }
+    state.audioQueuePendingItems += 1;
+    state.audioQueuePendingMs += audioMs;
+  }
+
+  let reservationActive = reservesAudio;
+  const releaseReservation = () => {
+    if (!reservationActive) return;
+    reservationActive = false;
+    state.audioQueuePendingItems = Math.max(0, state.audioQueuePendingItems - 1);
+    state.audioQueuePendingMs = Math.max(0, state.audioQueuePendingMs - audioMs);
+  };
+
+  const next = state.audioQueue.then(async () => {
+    try {
+      if (reservesAudio && Date.now() - queuedAtMs > MAX_AUDIO_QUEUE_STALE_MS) {
+        return reportAudioQueueDrop('STALE', audioMs);
+      }
+      return await task();
+    } finally {
+      releaseReservation();
+    }
+  });
   state.audioQueue = next.catch((err) => {
     console.error('[background] audio processing error:', err);
   });
@@ -1083,38 +1149,42 @@ async function closeOffscreenDocument() {
 // Capture lifecycle
 // ---------------------------------------------------------------------------
 async function startCapture(tabId) {
+  if (state.isStarting) throw new Error('字幕の開始処理中です。しばらく待ってから再試行してください。');
   if (state.isActive) return;
-
-  // サーバー疎通確認 – 接続できなければ開始を拒否
-  const health = await checkServerHealth();
-  if (!health.ok) {
-    throw new Error('サーバーに接続できません。サーバーが起動しているか確認してください。');
-  }
-
-  const cfg = await getSettings();
-  const activeStreamIds = cfg.audioSource === 'mic-only'
-    ? ['mic']
-    : cfg.audioSource === 'tab-only'
-      ? ['tab']
-      : ['mic', 'tab'];
-  state.sessionId = createSessionId();
-  state.activeStreamIds = activeStreamIds;
-  for (const streamId of activeStreamIds) state.streamGenerations[streamId] += 1;
-  const sessionId = state.sessionId;
-  const streamGenerations = { ...state.streamGenerations };
-
-  state.isActive = false;
   state.isStarting = true;
-  state.tabId    = tabId;
-  state.lastError = null;
-  state.healthCheckFailures = 0;
-  state.healthCheckInFlight = false;
-  state.serverInfo = { whisperModel: health.whisperModel, llamaModel: health.llamaModel };
-  state.pendingSpeakerBatches.clear();
-  state.audioQueue = Promise.resolve();
-  cancelSpeakerBatchFlush();
 
+  let sessionId = null;
+  let activeStreamIds = [];
+  let startAudioRequested = false;
   try {
+    // サーバー疎通確認 – 接続できなければ開始を拒否
+    const health = await checkServerHealth();
+    if (!health.ok) {
+      throw new Error('サーバーに接続できません。サーバーが起動しているか確認してください。');
+    }
+
+    const cfg = await getSettings();
+    activeStreamIds = cfg.audioSource === 'mic-only'
+      ? ['mic']
+      : cfg.audioSource === 'tab-only'
+        ? ['tab']
+        : ['mic', 'tab'];
+    sessionId = createSessionId();
+    state.sessionId = sessionId;
+    state.activeStreamIds = activeStreamIds;
+    for (const streamId of activeStreamIds) state.streamGenerations[streamId] += 1;
+    const streamGenerations = { ...state.streamGenerations };
+
+    state.isActive = false;
+    state.tabId = tabId;
+    state.lastError = null;
+    state.healthCheckFailures = 0;
+    state.healthCheckInFlight = false;
+    state.serverInfo = { whisperModel: health.whisperModel, llamaModel: health.llamaModel };
+    state.pendingSpeakerBatches.clear();
+    state.audioQueueStatus = { code: null, droppedCount: 0, droppedAudioMs: 0, updatedAtMs: null };
+    cancelSpeakerBatchFlush();
+
     // Make sure the offscreen document is ready for audio processing
     await ensureOffscreenDocument();
 
@@ -1134,6 +1204,7 @@ async function startCapture(tabId) {
       });
     }
 
+    startAudioRequested = true;
     const startResult = await captionStoreRequest('start-audio', {
       streamId,
       audioSource: cfg.audioSource,
@@ -1143,7 +1214,6 @@ async function startCapture(tabId) {
       publishMicrophoneCaptions: cfg.publishMicrophoneCaptions === true,
     });
     if (!startResult?.ok) throw new Error(startResult?.reason || 'offscreen audio start failed');
-    state.isStarting = false;
     state.isActive = true;
     scheduleHealthCheckTimer();
     console.info('[background] offscreen audio started; source=', cfg.audioSource);
@@ -1155,12 +1225,21 @@ async function startCapture(tabId) {
     console.info('[background] startCapture: audio capture started, tabId=', tabId);
   } catch (err) {
     console.error('[background] startCapture failed:', err);
-    state.isStarting = false;
-    await captionStoreRequest('stop-audio').catch(() => {});
-    state.sessionId = null;
-    state.activeStreamIds = [];
-    state.tabId = null;
+    if (sessionId && state.sessionId === sessionId) {
+      state.isActive = false;
+      for (const streamId of activeStreamIds) state.streamGenerations[streamId] += 1;
+      state.activeStreamIds = [];
+      state.pendingSpeakerBatches.clear();
+      cancelSpeakerBatchFlush();
+      if (state.healthCheckTimer) clearInterval(state.healthCheckTimer);
+      state.healthCheckTimer = null;
+      if (startAudioRequested) await captionStoreRequest('stop-audio').catch(() => {});
+      state.sessionId = null;
+      state.tabId = null;
+    }
     throw err; // popup にエラーを伝える
+  } finally {
+    state.isStarting = false;
   }
 }
 

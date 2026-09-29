@@ -24,6 +24,109 @@ test('audio metadata requires a current session and stream generation', () => {
   assert.equal(context.isCurrentAudioMetadata({ ...event, streamId: 'mixed' }, 'session-a', generations), false);
 });
 
+test('audio queue bounds pending audio and reports stale or overloaded drops', async () => {
+  const { context } = loadBackgroundScript();
+  let releaseBlocker;
+  const blocker = context.enqueueAudioTask(() => new Promise((resolve) => {
+    releaseBlocker = resolve;
+  }));
+  await Promise.resolve();
+
+  const queued = Array.from({ length: 4 }, (_, index) => context.enqueueAudioTask(
+    () => index,
+    { audioMs: 2500, queuedAtMs: Date.now() }
+  ));
+  let overloadedTaskRan = false;
+  const overloadedPromise = context.enqueueAudioTask(() => {
+    overloadedTaskRan = true;
+  }, { audioMs: 100, queuedAtMs: Date.now() });
+
+  let staleTaskRan = false;
+  const stalePromise = context.enqueueAudioTask(() => {
+    staleTaskRan = true;
+  }, { audioMs: 250, queuedAtMs: Date.now() - 5001 });
+
+  releaseBlocker();
+  const [overloaded, stale] = await Promise.all([blocker, ...queued, overloadedPromise, stalePromise])
+    .then((results) => results.slice(-2));
+  assert.equal(overloaded?.accepted, false);
+  assert.equal(overloaded?.code, 'OVERLOAD');
+  assert.equal(overloaded?.droppedCount, 1);
+  assert.equal(overloaded?.droppedAudioMs, 100);
+  assert.equal(overloadedTaskRan, false);
+  assert.equal(stale.code, 'STALE');
+  assert.equal(staleTaskRan, false);
+  assert.equal(context.__testState.audioQueueStatus.code, 'STALE');
+});
+
+test('audio queue rejects aggregate duration overflow', async () => {
+  const { context } = loadBackgroundScript();
+  let releaseBlocker;
+  const blocker = context.enqueueAudioTask(() => new Promise((resolve) => {
+    releaseBlocker = resolve;
+  }));
+  await Promise.resolve();
+
+  const accepted = Array.from({ length: 3 }, () => context.enqueueAudioTask(
+    () => true,
+    { audioMs: 3000, queuedAtMs: Date.now() }
+  ));
+  let overflowTaskRan = false;
+  const overflow = context.enqueueAudioTask(() => {
+    overflowTaskRan = true;
+  }, { audioMs: 1500, queuedAtMs: Date.now() });
+
+  releaseBlocker();
+  const results = await Promise.all([blocker, ...accepted, overflow]);
+  const overflowResult = results.at(-1);
+  assert.equal(overflowResult.code, 'OVERLOAD');
+  assert.equal(overflowResult.droppedAudioMs, 1500);
+  assert.equal(overflowTaskRan, false);
+});
+
+test('audio queue rechecks staleness before running queued work', async () => {
+  const { context } = loadBackgroundScript();
+  let now = 1_000;
+  context.Date = class TestDate extends Date {
+    static now() { return now; }
+  };
+  let releaseBlocker;
+  const blocker = context.enqueueAudioTask(() => new Promise((resolve) => {
+    releaseBlocker = resolve;
+  }));
+  await Promise.resolve();
+
+  let staleTaskRan = false;
+  const queued = context.enqueueAudioTask(() => {
+    staleTaskRan = true;
+  }, { audioMs: 1000, queuedAtMs: now });
+  now += 5001;
+  releaseBlocker();
+
+  const [, result] = await Promise.all([blocker, queued]);
+  assert.equal(result.code, 'STALE');
+  assert.equal(result.droppedAudioMs, 1000);
+  assert.equal(staleTaskRan, false);
+});
+
+test('concurrent capture start is rejected before health check resolves', async () => {
+  let resolveHealth;
+  const { context } = loadBackgroundScript({
+    fetchImpl: () => new Promise((resolve) => { resolveHealth = resolve; }),
+  });
+
+  const first = context.startCapture(7);
+  assert.equal(context.__testState.isStarting, true);
+  context.__testState.isActive = true;
+  await assert.rejects(context.startCapture(8), /開始処理中/);
+  context.__testState.isActive = false;
+
+  resolveHealth({ ok: false, status: 503 });
+  await assert.rejects(first, /サーバーに接続/);
+  assert.equal(context.__testState.isStarting, false);
+  assert.equal(context.__testState.sessionId, null);
+});
+
 function loadBackgroundScript({ fetchImpl, storageSettings = {}, setTimeoutImpl, clearTimeoutImpl } = {}) {
   const listeners = {
     onAlarm: null,

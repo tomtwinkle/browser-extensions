@@ -22,6 +22,17 @@
     status.classList.toggle('error', isError);
   }
 
+  function showAudioQueueStatus(queueStatus) {
+    if (!['OVERLOAD', 'STALE'].includes(queueStatus?.code)) return false;
+    const droppedCount = Number.isSafeInteger(queueStatus.droppedCount) ? queueStatus.droppedCount : 0;
+    const droppedSeconds = Number.isFinite(queueStatus.droppedAudioMs)
+      ? (queueStatus.droppedAudioMs / 1000).toFixed(1)
+      : '0.0';
+    const cause = queueStatus.code === 'OVERLOAD' ? '音声処理が混み合ったため' : '古くなった音声のため';
+    setStatus(`${cause}累計${droppedCount}件・${droppedSeconds}秒を破棄しました。字幕履歴を確認してください。`, true);
+    return true;
+  }
+
   function translationSummary(record) {
     const current = record.translations?.find((item) => item.sourceRevision === record.sourceRevision);
     if (!current || current.state === 'pending') return '翻訳中';
@@ -132,11 +143,16 @@
       }
       historyEmpty.hidden = records.size > 0;
       setStatus('接続中');
+      showAudioQueueStatus(message.queueStatus);
       if (selectedSegmentId && records.has(selectedSegmentId)) selectRecord(selectedSegmentId);
       return;
     }
     if (message.type === 'CAPTION_PRIVATE_RECORD') {
       applyRecord(message.record);
+      return;
+    }
+    if (message.type === 'CAPTION_QUEUE_STATUS') {
+      showAudioQueueStatus(message.status);
       return;
     }
     if (message.type === 'CAPTION_ACTION_RESULT') {

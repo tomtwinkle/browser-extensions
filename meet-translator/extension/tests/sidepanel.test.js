@@ -121,6 +121,16 @@ test('private panel shows ASR diagnostics and keeps empty speech candidates unap
   assert.match(elements.get('history').children[1].children[0].textContent, /音声あり・認識文字なし/);
 });
 
+test('private panel reports dropped audio count and duration', () => {
+  const { elements, emit } = loadSidepanel();
+  emit({
+    type: 'CAPTION_QUEUE_STATUS',
+    status: { code: 'OVERLOAD', droppedCount: 2, droppedAudioMs: 2750 },
+  });
+
+  assert.match(elements.get('status').textContent, /累計2件・2\.8秒を破棄しました/);
+});
+
 test('100 incoming candidates keep the focused correction draft, selection, and target segment', () => {
   const { elements, document, sentMessages, emit } = loadSidepanel();
   const selected = {

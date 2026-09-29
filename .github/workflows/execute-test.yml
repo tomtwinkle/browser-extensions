@@ -259,6 +259,8 @@ jobs:
       WHISPER_MODEL: ${{ matrix.whisper_model }}
       LLAMA_MODEL: ${{ matrix.llama_model }}
       ASR_PYTHON_DEVICE: cpu
+      # Test-only credential required by the loopback API; never use outside CI.
+      MEET_TRANSLATOR_API_TOKEN: ci-only-token-never-use-outside-github-actions-0001
 
     steps:
       # ── ビルド成果物 (バイナリのみ) をダウンロード ──────────────────────────
