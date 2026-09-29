@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title data-i18n="optionsTitle">⚙ Meet Auto-Translate Chat – Settings</title>
+  <title data-i18n="optionsTitle">⚙ Meet Translator – Settings</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -45,7 +45,7 @@
       margin-bottom: 4px;
     }
 
-    input[type="text"], select {
+    input[type="text"], input[type="password"], select {
       width: 100%;
       padding: 8px 10px;
       border: 1px solid #dadce0;
@@ -57,7 +57,7 @@
       transition: border-color 0.15s;
     }
 
-    input[type="text"]:focus, select:focus {
+    input[type="text"]:focus, input[type="password"]:focus, select:focus {
       border-color: #1a73e8;
     }
 
@@ -131,13 +131,25 @@
   </style>
 </head>
 <body>
-  <h1 data-i18n="optionsTitle">⚙ Meet Auto-Translate Chat – Settings</h1>
+  <h1 data-i18n="optionsTitle">⚙ Meet Translator – Settings</h1>
 
   <h2 data-i18n="sectionServer">Local Server</h2>
   <div class="field">
     <label for="server-url" data-i18n="labelServerUrl">Server URL</label>
-    <input type="text" id="server-url" placeholder="http://localhost:17070">
-    <p class="hint" data-i18n="hintServer">Start the FastAPI server in the server/ directory.</p>
+    <input type="text" id="server-url" placeholder="http://127.0.0.1:17070">
+    <p class="hint" data-i18n="hintServer">Start the local Go server in the server/ directory.</p>
+  </div>
+
+  <div class="field">
+    <label for="api-token" data-i18n="labelApiToken">Local API token</label>
+    <input type="password" id="api-token" autocomplete="new-password" spellcheck="false">
+    <p class="hint" data-i18n="hintApiToken">Keep the same token in the server's MEET_TRANSLATOR_API_TOKEN environment variable. It is used only by extension pages and the service worker.</p>
+  </div>
+
+  <div class="field">
+    <label data-i18n="labelExtensionOrigin">Allowed extension origin</label>
+    <code id="extension-origin"></code>
+    <p class="hint" data-i18n="hintExtensionOrigin">Set this exact value in the server's MEET_TRANSLATOR_EXTENSION_ORIGIN environment variable.</p>
   </div>
 
   <h2 data-i18n="sectionAudio">Audio Source Settings</h2>
@@ -174,21 +186,12 @@
     </div>
   </div>
 
-  <h2 data-i18n="sectionChat">Chat Post Settings</h2>
   <div class="field">
     <label class="checkbox-label">
-      <input type="checkbox" id="chat-enabled">
-      <span data-i18n="labelChatEnabled">Auto-post translation to chat</span>
+      <input type="checkbox" id="publish-microphone-captions">
+      <span data-i18n="labelPublishMicrophone">Allow microphone captions in the shared tab</span>
     </label>
-  </div>
-  <div class="field" id="chat-format-field">
-    <label for="chat-format" data-i18n="labelChatFormat">Post format</label>
-    <select id="chat-format">
-      <option value="both" data-i18n="optChatBoth">Original + Translation (with labels, 2 posts)</option>
-      <option value="translation" data-i18n="optChatTranslation">Translation only</option>
-      <option value="transcription" data-i18n="optChatTranscription">Original only</option>
-    </select>
-    <p class="hint" data-i18n="hintChatFormat">"Original + Translation" posts the original right after Whisper transcribes, then posts the translation once complete.</p>
+    <p class="hint" data-i18n="hintPublishMicrophone" style="margin-top:4px">Off by default. Capturing microphone audio does not publish it to the shared caption tab.</p>
   </div>
 
   <h2 data-i18n="sectionLang">Language Settings</h2>
@@ -235,6 +238,7 @@
     <span id="status-msg"></span>
   </div>
 
+  <script src="shared.js"></script>
   <script src="i18n.js"></script>
   <script src="options.js"></script>
 </body>

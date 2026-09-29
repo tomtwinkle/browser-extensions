@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "candidateId": "baseline-qwen3.5-0.8b-q4km",
+  "templateId": "qwen35",
+  "input": {
+    "sourceLanguage": "en",
+    "targetLanguage": "ja",
+    "sourceText": "Hello"
+  },
+  "expectedPrompt": "<|im_start|>user\nTranslate the following text from English into Japanese. Return only the translation, without additional explanation.\n\nText:\nHello<|im_end|>\n<|im_start|>assistant\n",
+  "thinkingMode": "documented non-thinking default; the raw llama.cpp bridge does not pass enable_thinking and does not use /no-think",
+  "stopBehavior": "llama.cpp stops on vocabulary EOG; exact GGUF token and generated stop were not run"
+}

@@ -106,7 +106,7 @@ func (s *server) translateInternal(text, sourceLang, targetLang string, opts Mod
 	}
 	s.logVerbose("llama raw output: %q", result)
 	// <think>...</think> ブロックは opts.Thinking に関わらず常に除去する。
-	// /no-think を指定しても一部モデルが thinking を出力する場合があるため。
+	// /no_think を指定しても一部モデルが thinking を出力する場合があるため。
 	result = stripThinkingTokens(result)
 	result = stripLLMArtifacts(result)
 	s.logVerbose("translate output: %q", result)

@@ -6,9 +6,9 @@
 //   CLI フラグ > config ファイル > 環境変数 > デフォルト値
 //
 // CLI フラグ:
-//   --port              リスンポート                    (デフォルト: 7070)
-//   --whisper-model     whisper モデル名またはパス       (既定 floor: large-v3-turbo)
-//   --llama-model       llama モデル名またはパス         (既定 floor: qwen3.5:0.8b-q4_k_m)
+//   --port              リスンポート                    (デフォルト: 17070)
+//   --whisper-model     whisper モデル名またはパス       (既定 reproduction baseline: large-v3-turbo)
+//   --llama-model       llama モデル名またはパス         (既定 reproduction baseline: qwen3.5:0.8b-q4_k_m)
 //   --llama-gpu-layers  GPU にオフロードするレイヤ数     (デフォルト: -1 = 全レイヤ)
 //   --whisper-gpu-layers 同上 whisper 用
 //   --model-cache-dir   model cache directory
@@ -49,7 +49,8 @@ type config struct {
 	llamaGPULayers   int
 	whisperGPULayers int
 	verbose          bool
-	autoSelectModels bool
+	apiToken         string
+	extensionOrigin  string
 }
 
 func loadConfig() config {
@@ -68,26 +69,23 @@ func loadConfig() config {
 		return def
 	}
 
-	// ── Step 1: デフォルト値 (初回 floor) ──────────────────────────────────────
+	// ── Step 1: デフォルト値 (初回の再現baseline) ───────────────────────────────
 	cfg := config{
-		port:             "7070",
+		port:             "17070",
 		whisperModel:     firstRunWhisperModel,
 		llamaModel:       firstRunLlamaModel,
 		llamaGPULayers:   -1,
 		whisperGPULayers: -1,
+		apiToken:         os.Getenv("MEET_TRANSLATOR_API_TOKEN"),
+		extensionOrigin:  os.Getenv("MEET_TRANSLATOR_EXTENSION_ORIGIN"),
 	}
-	hadConfigFile := configFileExists()
-	modelOverrides := false
-
 	// ── Step 2: 環境変数で上書き (後方互換) ────────────────────────────────────
 	cfg.port = env("PORT", cfg.port)
 	if v := os.Getenv("WHISPER_MODEL"); v != "" {
 		cfg.whisperModel = v
-		modelOverrides = true
 	}
 	if v := os.Getenv("LLAMA_MODEL"); v != "" {
 		cfg.llamaModel = v
-		modelOverrides = true
 	}
 	cfg.llamaGPULayers = envInt("LLAMA_GPU_LAYERS", cfg.llamaGPULayers)
 	cfg.whisperGPULayers = envInt("WHISPER_GPU_LAYERS", cfg.whisperGPULayers)
@@ -103,11 +101,9 @@ func loadConfig() config {
 		}
 		if fileCfg.WhisperModel != "" {
 			cfg.whisperModel = fileCfg.WhisperModel
-			modelOverrides = true
 		}
 		if fileCfg.LlamaModel != "" {
 			cfg.llamaModel = fileCfg.LlamaModel
-			modelOverrides = true
 		}
 		if fileCfg.LlamaGPULayers != nil {
 			cfg.llamaGPULayers = *fileCfg.LlamaGPULayers
@@ -121,9 +117,9 @@ func loadConfig() config {
 	}
 
 	// ── Step 4: CLI フラグで上書き (最高優先度) ───────────────────────────────
-	fPort := flag.String("port", "", "listen port (default: 7070)")
-	fWhisperModel := flag.String("whisper-model", firstRunWhisperModel, "whisper model name or path (first-run floor; may auto-upgrade when omitted)")
-	fLlamaModel := flag.String("llama-model", firstRunLlamaModel, "llama model name or path (first-run floor; may auto-upgrade when omitted)")
+	fPort := flag.String("port", "", "listen port (default: 17070)")
+	fWhisperModel := flag.String("whisper-model", firstRunWhisperModel, "whisper model name or path (default: first-run baseline)")
+	fLlamaModel := flag.String("llama-model", firstRunLlamaModel, "llama model name or path (default: first-run baseline)")
 	fLlamaGPU := flag.Int("llama-gpu-layers", -999, "llama GPU layers (-1=all, 0=CPU only)")
 	fWhisperGPU := flag.Int("whisper-gpu-layers", -999, "whisper GPU layers")
 	fModelCacheDir := flag.String("model-cache-dir", "", "model cache directory")
@@ -134,8 +130,8 @@ func loadConfig() config {
 		w := flag.CommandLine.Output()
 		fmt.Fprintf(w, "Usage: meet-translator-server [options]\n\n")
 		fmt.Fprintf(w, "Settings are saved to config file and can be omitted on next run.\n")
-		fmt.Fprintf(w, "First-run floor: whisper=%s  llama=%s\n", firstRunWhisperModel, firstRunLlamaModel)
-		fmt.Fprintf(w, "When RAM/GPU allow, first launch can step up to bonsai-8b and larger models.\n")
+		fmt.Fprintf(w, "First-run reproduction baseline: whisper=%s  llama=%s\n", firstRunWhisperModel, firstRunLlamaModel)
+		fmt.Fprintf(w, "Hardware capacity alone does not promote an unmeasured model.\n")
 		fmt.Fprintf(w, "Config file: %s\n\n", configFilePath())
 		fmt.Fprintf(w, "Options:\n")
 		flag.PrintDefaults()
@@ -160,11 +156,9 @@ func loadConfig() config {
 	}
 	if explicitFlags["whisper-model"] {
 		cfg.whisperModel = *fWhisperModel
-		modelOverrides = true
 	}
 	if explicitFlags["llama-model"] {
 		cfg.llamaModel = *fLlamaModel
-		modelOverrides = true
 	}
 	if explicitFlags["llama-gpu-layers"] {
 		cfg.llamaGPULayers = *fLlamaGPU
@@ -181,8 +175,6 @@ func loadConfig() config {
 	if explicitFlags["config"] {
 		os.Setenv("MEET_TRANSLATOR_CONFIG", flag.Lookup("config").Value.String())
 	}
-	cfg.autoSelectModels = !hadConfigFile && !modelOverrides
-
 	// ── Step 5: フラグが明示指定されていれば config ファイルに保存 ──────────────
 	if len(explicitFlags) > 0 {
 		save := persistedConfig{
@@ -235,14 +227,30 @@ type server struct {
 	// 辞書 (goroutine セーフ)
 	glossary *Glossary
 
-	// バックグラウンド辞書改善ワーカー
-	improver *GlossaryImprover
-
 	// テスト時にモック実装を注入できる関数フィールド
 	transcribeFn  func(audioData []byte, lang string) (string, string, error)
 	translateFn   func(text, srcLang, tgtLang string, opts ModelOptions, history []contextEntry) (string, error)
 	swapModelFn   func(spec string) error
 	rawGenerateFn func(prompt string) (string, error)
+}
+
+type asrResponse struct {
+	Transcription    string       `json:"transcription"`
+	RawText          string       `json:"raw_text"`
+	DetectedLanguage string       `json:"detected_language"`
+	Backend          string       `json:"backend,omitempty"`
+	Segments         []ASRSegment `json:"segments,omitempty"`
+	QualityFlags     []string     `json:"quality_flags,omitempty"`
+}
+
+type transcribeAndTranslateResponse struct {
+	Transcription string       `json:"transcription"`
+	Translation   string       `json:"translation"`
+	RawText       string       `json:"raw_text"`
+	DetectedLang  string       `json:"detected_language"`
+	Backend       string       `json:"backend,omitempty"`
+	Segments      []ASRSegment `json:"segments,omitempty"`
+	QualityFlags  []string     `json:"quality_flags,omitempty"`
 }
 
 func newServer(cfg config, transcriber transcriber, llm llmBackend, whisperSpec, llamaSpec string, glossary *Glossary) *server {
@@ -256,22 +264,10 @@ func newServer(cfg config, transcriber transcriber, llm llmBackend, whisperSpec,
 		contextBuf:       newContextBuffer(3),
 		glossary:         glossary,
 	}
-	// デフォルトは CGo 実装を使用
-	s.transcribeFn = s.transcribeInternal
+	// ASR handlers call the selected backend directly so available segment evidence is preserved.
 	s.translateFn = s.translateInternal
 	s.swapModelFn = s.swapModel
 	s.rawGenerateFn = s.generateRaw
-	// バックグラウンド辞書改善ワーカーを構築
-	s.improver = newGlossaryImprover(
-		glossary,
-		s.rawGenerateFn,
-		func() string {
-			s.modelMu.Lock()
-			spec := s.loadedModelSpec
-			s.modelMu.Unlock()
-			return templateFor(spec)
-		},
-	)
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 	s.mux.HandleFunc("POST /transcribe-and-translate", s.handleTranscribeAndTranslate)
 	s.mux.HandleFunc("POST /transcribe", s.handleTranscribe)
@@ -287,12 +283,42 @@ func newServer(cfg config, transcriber transcriber, llm llmBackend, whisperSpec,
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "*")
+	if !isLoopbackRequestHost(r.Host, s.cfg.port) {
+		http.Error(w, "invalid Host header", http.StatusBadRequest)
+		return
+	}
+
+	origin := r.Header.Get("Origin")
+	if origin != "" && origin != s.cfg.extensionOrigin {
+		http.Error(w, "origin is not allowed", http.StatusForbidden)
+		return
+	}
+	if origin != "" {
+		w.Header().Set("Access-Control-Allow-Origin", s.cfg.extensionOrigin)
+		w.Header().Set("Vary", "Origin")
+	}
 	if r.Method == http.MethodOptions {
+		if origin != s.cfg.extensionOrigin || !validCORSPreflightMethod(r.Header.Get("Access-Control-Request-Method")) || !validCORSPreflightHeaders(r.Header.Get("Access-Control-Request-Headers")) {
+			http.Error(w, "invalid preflight request", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Max-Age", "600")
 		w.WriteHeader(http.StatusNoContent)
 		return
+	}
+	if !hasValidBearerToken(r.Header.Get("Authorization"), s.cfg.apiToken) {
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.URL.Path == "/transcribe" || r.URL.Path == "/transcribe-and-translate" {
+		if r.ContentLength > maxAudioRequestBytes {
+			http.Error(w, "audio request exceeds 8 MiB limit", http.StatusRequestEntityTooLarge)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxAudioRequestBytes)
 	}
 	s.mux.ServeHTTP(w, r)
 }
@@ -387,6 +413,11 @@ func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "audio request exceeds 8 MiB limit", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "failed to parse form: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -414,18 +445,9 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 	requestedModel := strings.TrimSpace(r.FormValue("llama_model"))
 	rawOpts := r.FormValue("llama_options")
 
-	if s.cfg.verbose {
-		hdrLen := 12
-		if len(audioData) < hdrLen {
-			hdrLen = len(audioData)
-		}
-		s.logVerbose("request: audio=%d bytes, header=[% x], target_lang=%q, source_lang=%q, llama_model=%q, llama_options=%q",
-			len(audioData), audioData[:hdrLen], targetLang, sourceLang, requestedModel, rawOpts)
-	}
-
 	// ASR バックエンドは直列化して扱う。
 	s.whisperMu.Lock()
-	transcription, detectedLang, transcribeErr := s.transcribeFn(audioData, sourceLang)
+	asrResult, transcription, transcribeErr := s.transcribeWithDetails(audioData, sourceLang)
 	s.whisperMu.Unlock()
 
 	if transcribeErr != nil {
@@ -433,37 +455,23 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 		http.Error(w, "transcription failed: "+transcribeErr.Error(), http.StatusInternalServerError)
 		return
 	}
-	transcription = strings.TrimSpace(transcription)
-	if transcription == "" {
-		writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
+	history := s.contextBuf.Entries()
+	requestEvidence := parseASRRequestEvidence(r)
+	qualityFlags := asrQualityFlags(asrResult, transcription, speechMs, history, requestEvidence)
+	if transcription == "" || len(qualityFlags) > 0 {
+		writeJSON(w, http.StatusOK, transcribeAndTranslateResponse{
+			Transcription: transcription,
+			Translation:   "",
+			RawText:       asrResult.RawText,
+			DetectedLang:  asrResult.DetectedLanguage,
+			Backend:       asrResult.Backend,
+			Segments:      asrResult.Segments,
+			QualityFlags:  qualityFlags,
+		})
 		return
 	}
-	if !isMeaningfulTranscription(transcription) {
-		s.logVerbose("transcription filtered (noise): %q", transcription)
-		writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
-		return
-	}
-	// 直近発話の再生や文中ループを Whisper hallucination とみなして破棄する
-	if isRepeatTranscription(transcription, s.contextBuf.Entries()) {
-		s.logVerbose("transcription filtered (repeat/hallucination): %q", transcription)
-		writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
-		return
-	}
-	// 既知ハルシネーションフレーズ (YouTube 締め言葉等) を破棄する
-	if isKnownHallucination(transcription) {
-		s.logVerbose("transcription filtered (known hallucination): %q", transcription)
-		writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
-		return
-	}
-	if isLongDurationUnclearTranscription(transcription, speechMs) {
-		s.logVerbose("transcription filtered (long-duration unclear): %q (speech_ms=%d)", transcription, speechMs)
-		writeJSON(w, http.StatusOK, map[string]string{"transcription": "", "translation": ""})
-		return
-	}
-	s.logVerbose("transcription: %q", transcription)
 
 	// LLM の few-shot context を modelMu 取得前に読む (ネストロック回避)
-	history := s.contextBuf.Entries()
 
 	// モデルのホットスワップと翻訳は排他制御 (llama のみ)。
 	// シャットダウン開始後の新規 llama 処理は 503 で明示的に拒否する。
@@ -488,15 +496,17 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 		return
 	}
 	translation = strings.TrimSpace(translation)
-	s.logVerbose("translation: %q", translation)
 
 	// バッファに追加 (全ロック解放後)
 	s.contextBuf.Add(contextEntry{Transcription: transcription, Translation: translation})
 
-	writeJSON(w, http.StatusOK, map[string]string{
-		"transcription":     transcription,
-		"translation":       translation,
-		"detected_language": detectedLang,
+	writeJSON(w, http.StatusOK, transcribeAndTranslateResponse{
+		Transcription: transcription,
+		Translation:   translation,
+		RawText:       asrResult.RawText,
+		DetectedLang:  asrResult.DetectedLanguage,
+		Backend:       asrResult.Backend,
+		Segments:      asrResult.Segments,
 	})
 }
 
@@ -504,6 +514,11 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 // POST /transcribe  multipart/form-data: audio(WAV), source_lang(optional)
 func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "audio request exceeds 8 MiB limit", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "failed to parse form: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -522,53 +537,25 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 
 	sourceLang := r.FormValue("source_lang")
 	speechMs, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("speech_ms")))
-	if s.cfg.verbose {
-		hdrLen := 12
-		if len(audioData) < hdrLen {
-			hdrLen = len(audioData)
-		}
-		s.logVerbose("transcribe: audio=%d bytes, header=[% x], source_lang=%q",
-			len(audioData), audioData[:hdrLen], sourceLang)
-	}
-
 	// contextBuf 読み取りはロック外で行う (contextBuf 自身に内部ロックあり)
 	// Whisper は非スレッドセーフ – whisperMu で直列化
 	s.whisperMu.Lock()
-	transcription, detectedLang, err := s.transcribeFn(audioData, sourceLang)
+	asrResult, transcription, err := s.transcribeWithDetails(audioData, sourceLang)
 	s.whisperMu.Unlock()
 	if err != nil {
 		log.Printf("[transcribe] %v", err)
 		http.Error(w, "transcription failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	transcription = strings.TrimSpace(transcription)
-	if !isMeaningfulTranscription(transcription) {
-		s.logVerbose("transcription filtered (noise): %q", transcription)
-		writeJSON(w, http.StatusOK, map[string]string{"transcription": ""})
-		return
-	}
-	// 直近発話の再生や文中ループを Whisper hallucination とみなして破棄する
-	if isRepeatTranscription(transcription, s.contextBuf.Entries()) {
-		s.logVerbose("transcription filtered (repeat/hallucination): %q", transcription)
-		writeJSON(w, http.StatusOK, map[string]string{"transcription": ""})
-		return
-	}
-	// 既知ハルシネーションフレーズ (YouTube 締め言葉等) を破棄する
-	if isKnownHallucination(transcription) {
-		s.logVerbose("transcription filtered (known hallucination): %q", transcription)
-		writeJSON(w, http.StatusOK, map[string]string{"transcription": ""})
-		return
-	}
-	if isLongDurationUnclearTranscription(transcription, speechMs) {
-		s.logVerbose("transcription filtered (long-duration unclear): %q (speech_ms=%d)", transcription, speechMs)
-		writeJSON(w, http.StatusOK, map[string]string{"transcription": ""})
-		return
-	}
-	s.logVerbose("transcription: %q", transcription)
-
-	writeJSON(w, http.StatusOK, map[string]string{
-		"transcription":     transcription,
-		"detected_language": detectedLang,
+	requestEvidence := parseASRRequestEvidence(r)
+	qualityFlags := asrQualityFlags(asrResult, transcription, speechMs, s.contextBuf.Entries(), requestEvidence)
+	writeJSON(w, http.StatusOK, asrResponse{
+		Transcription:    transcription,
+		RawText:          asrResult.RawText,
+		DetectedLanguage: asrResult.DetectedLanguage,
+		Backend:          asrResult.Backend,
+		Segments:         asrResult.Segments,
+		QualityFlags:     qualityFlags,
 	})
 }
 
@@ -597,8 +584,6 @@ func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 	requestedModel := strings.TrimSpace(r.FormValue("llama_model"))
 	rawOpts := r.FormValue("llama_options")
 
-	s.logVerbose("translate: text=%q, target_lang=%q, llama_model=%q", text, targetLang, requestedModel)
-
 	// LLM の few-shot context を modelMu 取得前に読む (ネストロック回避)
 	history := s.contextBuf.Entries()
 
@@ -625,7 +610,6 @@ func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	translation = strings.TrimSpace(translation)
-	s.logVerbose("translation: %q", translation)
 
 	// バッファに追加 (全ロック解放後, text = 直前の /transcribe の出力)
 	s.contextBuf.Add(contextEntry{Transcription: text, Translation: translation})
@@ -723,9 +707,11 @@ func main() {
 func run() error {
 	cfg := loadConfig()
 
-	// 初回起動時 (config ファイルが存在しない) かつモデル未指定の場合、
-	// マシンスペックからベストなモデルを自動選択して config を保存する。
+	// 初回起動時もハードウェア情報だけではモデルを昇格させない。
 	applyAutoConfig(&cfg)
+	if err := validateAPISecurityConfig(cfg); err != nil {
+		return fmt.Errorf("local API security is not configured: %w", err)
+	}
 
 	// モデルが現在のバイナリで対応可能か確認する。
 	// 別バリアントが必要な場合は同ディレクトリの対応バイナリへ exec する。
@@ -786,23 +772,18 @@ func run() error {
 	// 辞書ファイル変更を監視して自動リロード (30 秒ごと)
 	glossary.StartWatcher(srvCtx, 30*time.Second)
 
-	// バックグラウンド辞書改善ワーカーを起動
-	srv.improver.Start(srvCtx)
-
 	httpSrv := &http.Server{
-		Addr:    ":" + cfg.port,
-		Handler: srv,
+		Addr:              "127.0.0.1:" + cfg.port,
+		Handler:           srv,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(quit)
 
-	// done はシャットダウンシーケンス（HTTP drain → improver 完了）が
-	// 終わったことを main goroutine に伝えるチャネル。
-	// ListenAndServe() が戻った直後に <-done でブロックすることで、
-	// バックグラウンドの CGo 呼び出しが完了する前に defer がモデルを解放する
-	// race condition を防ぐ。
+	// done はHTTP drain後に停止処理が完了したことを main goroutine に伝える。
 	done := make(chan struct{})
 	go func() {
 		<-quit
@@ -813,12 +794,8 @@ func run() error {
 		defer shutCancel()
 		_ = httpSrv.Shutdown(shutCtx)
 
-		// 2. バックグラウンドワーカー（辞書監視・improver）を停止
+		// 2. 辞書ファイル監視を停止
 		srvCancel()
-
-		// 3. バックグラウンド improver の終了を待つ。
-		//    モデル解放前の llama CGo 呼び出し完了待ちは srv.releaseLlamaModel() が担う。
-		srv.improver.Wait()
 
 		close(done)
 	}()
@@ -829,7 +806,6 @@ func run() error {
 	}
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		srvCancel()
-		srv.improver.Wait()
 		return err
 	}
 	// シャットダウンシーケンスが完全に終わるまで待ってから defer を実行する。

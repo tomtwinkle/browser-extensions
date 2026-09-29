@@ -1,0 +1,157 @@
+# Research log
+
+## R0 — start of implementation, 2026-09-28
+
+**Question.** Can the current local path be reproduced as three separate tracks, and did current primary sources reveal a Japanese/English ASR or small translator that should enter a bounded comparison? Does current source support changing a model, runtime, template, or publication gate now?
+
+**Search scope.** Queries covered 2026 Japanese English local streaming ASR, M1/Apple Silicon Metal local inference, official Qwen ASR and Nemotron ASR model cards, small Japanese/English translation models, official translation templates and licenses, SacreBLEU chrF2, ASR hallucination evaluation, streaming evaluation, and repository harness design. Exact URLs, ownership, source type, and claim limits are in `sources.jsonl`.
+
+**Primary-source findings and implementation deltas.**
+
+- OpenAI's harness engineering write-up supports keeping the agent instructions short and putting executable constraints and current evidence in the repository. Adopted as a documentation layout and offline-check direction; no large service, agent platform, or auto-merge workflow was copied.
+- HALAS describes span-level human annotations of ASR hallucinations and notes that ordinary error rates do not capture all unsupported content. Adopted as a requirement for a later human-reviewed natural-speech set; current silent audio is only a contract fixture and is not quality evidence.
+- The SimulStreaming project separates incremental/streaming behavior from ordinary request/response execution. No streaming runtime was added because the current code and machine evidence do not establish a safe replacement.
+- SacreBLEU's official implementation records a chrF signature and settings. The existing internal benchmark score cannot stand in for SacreBLEU chrF2. No metric or threshold was changed; the scoring adapter remains pending an explicitly pinned implementation/version.
+- Qwen3-ASR 0.6B documents English and Japanese among its language coverage and an official Python/Transformers route. Community MLX projects are separate runtime implementations. No official M1 Metal execution, calibrated segment confidence, or local compatible result was established. Candidate added as SOURCE_VERIFIED only; weight acquisition and runtime promotion are deferred.
+- NVIDIA Nemotron 3.5 ASR documents Japanese coverage and a GGUF distribution path. The cited model card/runtime material does not establish that this exact checkpoint runs with the selected local Metal runtime on M1 Max. Candidate added as SOURCE_VERIFIED only; no weights were obtained.
+- Tencent Hy-MT2 1.8B is a new bounded translation candidate relative to the original list. Tencent's project lists Japanese/English and links a GGUF route for llama.cpp. That establishes a comparison lead, not compatibility with this repository's pinned llama.cpp, its exact template/EOS behavior, license suitability of a converted artifact, or M1 performance. Candidate added as SOURCE_VERIFIED only.
+- TranslateGemma requires a distinct structured translation prompt and gated terms. The active generic prompt must not be reused. Candidate deferred pending user-side terms acceptance and exact local artifact/template verification.
+- NVIDIA Riva Translate specifies language-pair instructions and a model-specific template. Documentation examples do not establish M1/Metal execution. Candidate deferred.
+- Official Qwen3.5 documentation exposes model-specific thinking controls; the 0.8B card warns about loops in thinking mode. The repository's actual active GGUF, template, thinking option, EOS, and generated output remain unverified. Keep the current baseline identifier for reproduction, but do not qualify it.
+- Current vendored `whisper.cpp` and `llama.cpp` sources were inspected locally. This is not an assertion that the Makefile label, vendored commit, generated binaries, and model artifact form one verified runtime lock. The recorded llama version label and vendor commit need reconciliation.
+
+**Decision.** `NO_MATERIAL_CHANGE` to the product's hardware and quality acceptance criteria: the M1 Max resource ceilings, single-ASR/single-translator design, track separation, and human review requirements remain unchanged. A material code correction was made outside model selection: removed RAM/GPU-only model escalation and its unsupported benchmark claims, while retaining current first-run identifiers and preserving explicit stored settings. No model, runtime, quantization, template, or publication gate was promoted.
+
+**Evidence available.** Existing extension tests passed 25/25 before changes. The complete Go test suite passed after the changes using a private temporary Go cache; Apple `xcrun` emitted sandbox cache-file warnings but returned exit code 0. The new manifest parser tests passed. A test-only 100 ms silence WAV is hash-pinned. No real speech, bilingual evaluation set, output run, model loading, or M1 performance result exists.
+
+**Blocked / deferred.** Candidate weights were not downloaded because the implementation spec forbids unapproved large downloads. There is no consented, human-annotated bilingual development/holdout set. Therefore model smoke, ASR/MT quality evaluation, publication gate calibration, and final M1 qualification are deferred. The M1 hardware itself is present.
+
+**Next actions.** Continue independent API/session/caption implementation and model-free contract tests. Resume candidate work only after the model artifact and evaluation audio have authorized local sources; freeze model/runtime/template/options before holdout use. Recheck primary sources before any model/runtime/template/gate change and before final lock.
+
+## R4 — final source recheck, 2026-09-28
+
+**Question.** Before reporting, did the current official model cards, harness guidance, and Apple-silicon runtime sources change the fixed M1 acceptance profile or justify selecting/promoting an ASR, translator, runtime, template, or publication gate? Do the current prompt builders match the authors' model-specific instructions?
+
+**Search scope.** Searched and opened primary sources for evaluation harness reporting, Qwen3 and Qwen3.5 model behavior, Qwen3-ASR, NVIDIA Nemotron 3.5 ASR, Tencent Hy-MT2, llama.cpp, MLX, and the NVIDIA local C++ ASR path. Reused same-day R0 entries for SimulStreaming, SacreBLEU, Apple hardware specifications, TranslateGemma, and Riva where no relevant source update was needed. The opened sources are indexed in `sources.jsonl` with owner, retrieved date, supported claims, and limits.
+
+**Findings and implementation deltas.**
+
+- OpenAI's current evaluation guidance calls for stating the tested system, tasks, budgets, harness, elicitation method, and validity checks. This supports the report boundary already encoded in the eval CLI: fixture validation is separate from inference and quality evidence. It does not qualify any model.
+- The official Qwen3-ASR card uses the exact model ID `Qwen/Qwen3-ASR-0.6B-hf`, lists English and Japanese, accepts a forced language as a name or code, and separates forced alignment into another model. Corrected the registry record from an inexact upstream ID. The Transformers route, community MLX conversion, local score semantics, and M1 result remain unverified; candidate stays DEFERRED.
+- NVIDIA's official Nemotron 3.5 card lists Japanese (`ja-JP`), the `Q8_0` GGUF filename, a local NeMo-Speech.cpp command for this checkpoint, and OpenMDW-1.1 terms. This improves written compatibility evidence but does not establish Metal use, M1 latency/memory, this repository's runtime pin, or product quality. The candidate remains DEFERRED pending authorized local artifact preparation and human-reviewed data.
+- Tencent's official Hy-MT2 card provides a target-language-only instruction, a specific terminology example, and says it has no default `system_prompt`. Its recommended decode parameters are not what this repository currently passes. Replaced the Hy-MT2 generic system prompt and `Translate from ... to ...` prompt with the official target-language instruction, preserving the repository's existing role-token serialization and glossary hint as an in-user-message reference. Added a synthetic exact-prompt fixture. No model output or quality claim was generated.
+- The official Qwen3.5-0.8B card says its default is non-thinking, does not officially support Qwen3 soft switches, and exposes thinking control through chat-template/API parameters. The raw llama.cpp bridge cannot pass that parameter. Added a separate Qwen3.5 prompt builder that uses the non-thinking default without `/no-think` and a generic system message; pinned its synthetic prompt fixture. The exact GGUF metadata and end-of-generation behavior remain unverified.
+- Qwen3.5 mode defaults differ by size: the 2B card says non-thinking, while the 4B and 9B cards say thinking by default. Their API-level mode control is not expressible through the current raw C bridge. No prompt mode or sampling change was inferred for those sizes; only the existing 0.8B alias received a fixture-backed prompt correction.
+- Qwen3's official card documents `/no_think` (underscore), not `/no-think`, and advises against greedy decoding in thinking mode. Corrected the false-thinking prompt marker and its model-free test. Did not alter the runtime's greedy sampler: the current active baseline is Qwen3.5, there is no approved quality set, and the Qwen3 settings require a separately frozen comparison. The source registry now records this open decode mismatch.
+- Official MLX documentation describes an Apple-silicon array framework; it does not establish a compatible ASR model or this application's M1 result. llama.cpp remains the vendored comparison route, with its Makefile label/vendor commit mismatch unresolved.
+- Outside model selection, replaced the linear audio downsampler with a windowed-sinc FIR filter and added DC, passband, alias-rejection, output-duration, and unchanged-rate contract tests. Added a bounded 30-second timeout to local transcribe/translate fetches; the existing health request keeps its shorter timeout through response parsing.
+- Corrected startup help that still described automatic Whisper escalation and ranked larger models as higher accuracy/top tier. Help now identifies the configured first-run model as a comparison baseline and states that hardware capacity and registered aliases do not establish quality or M1 qualification.
+
+**Decision.** `NO_MATERIAL_CHANGE` to the fixed M1 resource/quality acceptance criteria or candidate selection. A material prompt-serialization correction was necessary to follow the official Hy-MT2 and Qwen3.5 instructions, and a Qwen3 switch spelling bug was corrected. No model, runtime, quantization, publication gate, or generation-sampling change was promoted. The prompt hash pins below cover only synthetic repository prompt contracts, not tokenizer metadata or observed EOS.
+
+**Evidence and limits.** The official Qwen/Hunyuan/NVIDIA instructions were translated into model-free prompt fixtures and Go contract tests. These establish exactly what the repository sends; they do not prove a converted artifact accepts the same tokenization or produces good translations. Candidate weights remain unprepared, the bilingual reviewed development/holdout set is still absent, and no M1 model run was performed. The Qwen3 official greedy warning is recorded as an unresolved configuration risk, not a result.
+
+**Next conditions.** Before a model comparison, obtain authorized local artifacts, freeze their exact revisions and SHA-256, check the tokenizer/template/EOG against the adapter, and prepare human-reviewed development/holdout cases. Then evaluate ASR-only, correct-source MT-only, and end-to-end separately; measure M1 memory/latency with the same frozen sampling options. Keep `PROFILE_NOT_QUALIFIED` until all gates and the Meet/overlay/correction 60-minute integration trial pass.
+
+## R5 — VAD and short-speech request gate, 2026-09-28
+
+**Question.** Does current primary implementation guidance support an unconditional minimum utterance duration, and does the actual extension keep microphone and Meet-tab evidence separate through VAD and the ASR request?
+
+**Search scope.** Opened the official WebRTC VAD core source and the official `whisper.cpp` VAD speech-segment example. The source IDs, check date, supported claims, and limits are recorded in `sources.jsonl`.
+
+**Findings and implementation deltas.**
+
+- The official WebRTC implementation evaluates framed audio with 10 ms subframes and mode-specific thresholds. The official `whisper.cpp` example exposes a configurable 250 ms default minimum plus padding and silence segmentation. These are implementation choices, not evidence for a universal one-second ASR request floor or for this product's energy thresholds.
+- The actual `audioSource=both` path had connected the microphone and tab stream to one ScriptProcessor, summing them before VAD. Replaced that path with separate processors and separate energy-VAD state. Each emitted WAV now carries a `mic` or `tab` stream ID, the active session ID, its stream generation, and observed energy/clipping evidence. The existing speaker batch is keyed and flushed by stream, and mic audio is not assigned the Meet active speaker.
+- Removed the 500 ms utterance-duration rejection and the 1,000 ms background request floor. A request now requires positive VAD speech evidence, a finite voiced/utterance duration, and a bounded clipping ratio. The existing 200 ms onset confirmation and RMS thresholds remain. A synthetic 341 ms voiced fixture verifies the duration boundary only; it is not speech-quality evidence.
+- Background and Meet overlay handlers now reject events whose session or stream generation is stale. A model-free integration fixture exercises separate tab/mic Web Audio sources, processors, VAD events, and request metadata.
+
+**Decision.** No change to the fixed M1 hardware/quality profile, candidate set, model, runtime, quantization, or prompt template. The pre-ASR duration filters were corrected to honor the stated short-utterance contract. This is not a calibrated ASR acceptance/publication gate and does not qualify speech recognition.
+
+**Evidence and limits.** Extension stream-routing and short-utterance tests pass with synthetic amplitude frames; no natural speech, ASR output, Meet session, memory measurement, or M1 integration trial was run. Energy VAD threshold calibration, structured Whisper scores/timing, and the publication decision remain open.
+
+**Next conditions.** Add natural short negation/number cases only from an authorized human-reviewed development set, keep holdout isolated, and compare false triggers and missed short speech. Do not tune the RMS/confirmation thresholds or mark the candidate qualified from synthetic frames. Continue the independent caption presenter and private correction implementation.
+
+## R6 — ASR candidate preservation and current small-model routes, 2026-09-28
+
+**Question.** Do current primary sources justify changing the active ASR review behavior, adding a smaller English/Japanese candidate, or selecting an Apple-silicon execution path? Can the Python adapters receive audio without writing meeting audio to disk?
+
+**Search scope.** Reviewed OpenAI's evaluation-harness and data-quality guidance; the pinned `whisper.cpp` decoder; the Whisper hallucination-detection study; official cards for IBM Granite 4.0 Speech, MOSS Transcribe-Diarize, Microsoft VibeVoice-ASR, and Tencent Hy-MT2; Tencent's official 1.25-bit and GGUF repositories; and the documented FunASR/WhisperX audio input APIs. Source metadata and caveats are in `sources.jsonl`.
+
+**Findings and implementation deltas.**
+
+- At the pinned `whisper.cpp` commit, the no-speech/average-logprob decoder heuristic can suppress decoded segment text before the application receives it. The inspected API exposes timing/no-speech information; the bridge can read token log probabilities. Added a pinned build patch that retains the decoded candidate text and metadata for private review while leaving decoder fallback intact. The patch is identified by file and SHA-256 in the Whisper candidate record.
+- Whisper hallucination papers show that text-only signals and internal decoder signals have different limits. These findings do not calibrate this Whisper Turbo checkpoint or Japanese Meet audio. Existing Whisper score values now add review reasons only; they do not erase text or authorize publication. No Whisper threshold is reused by another ASR.
+- Granite 4.0 Speech lists Japanese and English and its model card links an 8-bit community MLX-Audio path for Apple M-series. The hosted page's parameter metadata differs from the 1B name, and the converted model/runtime is not pinned. It remains DEFERRED.
+- MOSS Transcribe-Diarize and VibeVoice-ASR were screened as current alternatives. Their extra diarization/custom code, repository size, model-specific language evidence, or lack of a pinned M1 application route does not warrant adding an unmeasured second ASR to the normal path. They are research references, not qualified replacements.
+- Tencent's Hy-MT2 source lists English/Japanese and official translation instructions. Its Q4_K_M GGUF provides a bounded comparison candidate. The official 1.25-bit route depends on a specific STQ kernel and has no verified compatibility with the repository's inspected llama.cpp commit. Both candidates remain DEFERRED.
+- FunASR and WhisperX expose in-memory waveform inputs. The optional Python path now decodes the request into in-memory bytes/arrays rather than a meeting-audio file.
+- Added OpenAI evaluation guidance only to support explicit tested-system, split, budget, and validity reporting. The eval checker reports its scope as harness-only and product acceptance as `not-evaluated`.
+
+**Decision.** `NO_MATERIAL_CHANGE` to the M1 resource/quality thresholds, one-ASR/one-translator design, candidate promotion policy, or publication policy. The model-free code change preserves more untrusted candidate evidence for host review; it does not assert that text is correct or change M1 qualification.
+
+**Evidence and limits.** Go and extension regression tests cover returned fields and review reasons. The patch is source-pinned, but no Whisper model was loaded. No evaluated speech, M1 memory/latency, app Metal execution, or Meet share run exists. Granite/Hy-MT2 remain proposals only; no weights were downloaded.
+
+**Next conditions.** Keep uncertain transcripts private. Before any candidate change, pin its artifact and runtime, confirm its own template/language/score/EOS contract, and evaluate identical ASR-only and E2E cases on the M1 Max profile.
+
+## R7 — final primary-source recheck before status report, 2026-09-28
+
+**Question.** Did current author/official documentation or papers change the frozen M1 criteria or justify promoting a small Japanese/English ASR, translation model, runtime, quantization, prompt, or publication gate?
+
+**Search scope.** Re-opened the OpenAI evaluation playbook; the Qwen3-ASR official model card, repository and technical report; Tencent Hy-MT2 card, GGUF repository and technical report; Apple MLX documentation; the current MLX-Audio catalog; IBM Granite's model card; and the new Whisper Hallucination Space Projection paper. Exact sources are recorded in `sources.jsonl` with retrieval date, author, supported claims, and limitations.
+
+**Findings and implementation deltas.**
+
+- Qwen's current model card makes the official processor contract clearer: `apply_transcription_request` accepts a language name/code and optional vocabulary prompt; forced-language chat-template text uses `language <NAME><asr_text>`; decoded output can be parsed as language/transcription or transcription-only. The hosted card reports BF16 and 0.8B parameters for the checkpoint named 0.6B. Japanese and English are listed. The exact EOS and calibrated confidence/publication score are not specified there. The separate forced aligner adds a second model if word timestamps are required.
+- The official Qwen Transformers path is now v5.13 or later. MLX-Audio separately lists Qwen3-ASR 0.6B 8-bit and a Granite route for Apple Silicon. That is evidence of a community conversion route, not proof of the exact revision, scores, application integration, quality, or M1 Max performance. Updated the Qwen candidate record with the official template details and the distinction between official Transformers and community MLX routes; it remains DEFERRED.
+- Tencent's paper and current author-linked repository list the 1.8B model and Q4_K_M/low-bit GGUF variants. The paper's low-bit size/speed numbers are author-reported, not quality or performance evidence for this M1. The 1.25-bit route requires the STQ kernel; current repo pin compatibility and output quality remain unknown. Updated source records; no runtime or quantization change.
+- The September Whisper activation-projection paper proposes a decoder-internal mitigation and reports a speech false-rejection/WER trade-off on its own datasets. The current bridge does not expose the required decoder activations, and the paper does not calibrate this checkpoint or language/domain. No hidden-state processing or gate change was made.
+- Apple describes MLX as an Apple-silicon framework; MLX-Audio is a community runtime with multiple model-specific adapters. Neither framework documentation nor repository demos demonstrate this application's M1 resource, latency, quality, UI sharing, or stop/reload behavior.
+- Evaluation guidance supports disclosing harness, cases, budgets, validity checks, and the exact claim supported. The three local manifests remain synthetic contract checks, not product acceptance data.
+
+**Decision.** `NO_MATERIAL_CHANGE` to the fixed profile thresholds, model selection, runtime, quantization, template implementation, or publication gate. The Qwen candidate record now carries the confirmed author-specific template, parameter metadata discrepancy, official/community runtime separation, and missing EOS/score contract. All seven candidates remain DEFERRED and the selection lock remains `PROFILE_NOT_QUALIFIED`.
+
+**Evidence and limits.** Primary-source page and paper claims are indexed by source ID; upstream benchmark claims are not treated as local results. No weights or evaluation recordings were downloaded. No candidate was run, no quality or M1 measurement was inferred, and no Meet integration test was performed.
+
+**Next conditions.** Resolve T15 and add the model-free scorer/measurement contracts independently. Candidate promotion still requires authorized artifacts, reviewed bilingual development/holdout cases, exact model-specific serialization/output contracts, one-axis comparisons, and the M1 Max integration trial.
+
+## R8 — compression methods and current compact-model screen, 2026-09-29
+
+**Question.** Which current compact local translation candidates, including quantized, distilled, MoE, pruned, low-rank, and weight-shared models, have sufficiently strong published Japanese-English evidence to spend a comparison slot? Did newer official model families or M1 runtime documentation justify changing the profile or selecting a model?
+
+**Search scope.** Reopened primary author cards/reports for Hy-MT2, TranslateGemma, CAT-Translate, Kotoba-Whisper-Bilingual, Shisa V2.1 and Qwen3.8; read the Shisa Japanese-MT-Bench harness, CULL-MT pruning paper, WMT26 model-compression task, OpenAI harness-engineering article, and official OpenAI Whisper, whisper.cpp, and llama.cpp repositories. Search themes included compact Japanese-English translation, exact quantized artifacts, knowledge distillation, layer pruning, low-rank factorization, weight sharing, Qwen3.8, local Apple-Silicon inference, and reproducible harness design. Retrieval date, supported claims, and limitations are in `sources.jsonl`.
+
+**Findings and implementation deltas.**
+
+- Hy-MT2-1.8B Q4_K_M retains 98.48% of the paper's aggregate FLORES-200 score and 91.51% of IFMTBench total relative to BF16. It is the only reviewed exact compressed translation variant that clears the project's 95% primary / 90% secondary screen. The paper's 2-bit variant retains 85.05% on IFMTBench and is excluded; AngelSlim 1.25-bit has storage/speed claims but no exact-variant translation score. The 30B-A3B model's 3B active label does not remove its 30B total stored-weight requirement.
+- CAT-Translate 1.4B reports author-card average BLEU 33.26 Japanese→English and 34.19 English→Japanese. In that card's same benchmark table, the scores exceed the 4B TranslateGemma values (29.41 / 26.76). It passes the compact bilingual model screen but is not classified as a compressed artifact. Its official prompt, Sarashina 2.2 1B chat template, and the hosted 1B versus named 1.4B size discrepancy are recorded.
+- TranslateGemma 4B reports a strong WMT24++ English→Japanese result, but the reviewed 4B evidence does not provide a Japanese→English result. It stays DEFERRED and outside the shortlist. Its official structured user message, source/target language codes, 2K context, and Gemma terms requirement remain model-specific; no terms were accepted.
+- Shisa V2.1 LFM2 1.2B reports Japanese MT-Bench 6.69 with GPT-4-Turbo, but that aggregate does not give both translation directions separately and is not directly comparable to the BLEU/MetricX results. A community Q4_K_M GGUF is listed for llama.cpp, but exact conversion provenance, model template, pinned-runtime loading, and license compatibility remain unverified. It is not shortlisted.
+- Kotoba-Whisper-Bilingual v1.0 explicitly uses distillation, but Japanese ReazonSpeech held-out CER is 16.8 versus 14.9 for Whisper large-v3 (lower is better). It is screened out as a Japanese ASR replacement. This does not establish results for a distilled translation model.
+- CULL-MT combines layer pruning and distillation but evaluates Persian/French/German→English, not Japanese-English. No reviewed exact model with suitable Japanese-English scores was found for pruning, low-rank factorization, or weight sharing. WMT26 compression directions also omit Japanese-English.
+- The reviewed official Qwen3.8 open card is a 27B dense vision-language model. No <=4B official Qwen3.8 checkpoint was found in the reviewed sources; 27B does not fit this profile. The Qwen3.5 0.8B setting remains solely as a reproducibility baseline and is hidden from the selectable catalog.
+- Added a machine-checked public benchmark screen to candidate records. The checker now requires numeric evidence from listed sources, bilateral directions for compact non-compression translation passes, and the retention thresholds for compressed translation passes. Added negative tests for missing numeric evidence, one-direction candidates, and low retention. Old/superseded/oversized model choices and duplicate aliases were removed from the visible catalog; explicit saved IDs still resolve with a compatibility warning.
+- Updated §17, research sources and candidate records, model lists, the shortlist document, implementation status, and ADR. No runtime, prompt, model weights, or product publication gate was promoted.
+
+**Decision.** `NO_MODEL_PROMOTION`. The candidate shortlist changed at the public-evidence stage: Hy-MT2 Q4_K_M passes as a quantized experiment; CAT-Translate 1.4B passes as a compact bilingual comparator. This is not a M1 or product selection. TranslateGemma, Shisa, and other missing-direction/missing-score families remain DEFERRED; the Kotoba distilled ASR example and Hy 2-bit are screened out. Profile resource ceilings, quality gates, one-ASR/one-translator architecture, and `PROFILE_NOT_QUALIFIED` remain unchanged.
+
+**Evidence and limits.** The registry now has 56 primary-source records and 8 candidate records; 2 published benchmark screens pass, all 8 candidates remain DEFERRED, and none is SELECTED. No weights were downloaded, no terms were accepted, and no ASR-only, correct-source MT-only, E2E, M1, Metal, memory, caption-latency, 60-minute, or Meet integration model run was performed.
+
+**Next conditions.** Only after authorized artifacts and reviewed bilingual development/holdout cases are available, verify exact weight/tokenizer hashes, model-specific template/language/EOS behavior, the pinned native or MLX load path, then compare one axis at a time and run the complete M1 Max profile. Revisit other compression families only with exact-variant Japanese-English results and a comparable parent result.
+
+## R9 — final primary-source recheck and smaller bilingual candidate, 2026-09-29
+
+**Question.** Does a smaller current Japanese-English model qualify for a benchmark-only experiment slot, and does the official Qwen3.8 FP8 variant change the M1 shortlist?
+
+**Sources checked.** Reopened Tencent's Hy-MT2 report and official GGUF card, CyberAgent's CAT-Translate 1.4B card and paper, Shisa V2.1 card, and Qwen3.8 27B card. Then opened the official CAT-Translate 0.8B card and the official Qwen3.8-27B-FP8 card. The sources and their limits are recorded as `SRC-CAT-TRANSLATE-08-CARD` and `SRC-QWEN38-FP8`.
+
+**Findings and implementation deltas.**
+
+- CAT-Translate 0.8B reports author-card average BLEU 29.71 JA→EN / 30.68 EN→JA. On the same card's same evaluation table, TranslateGemma 4B reports 29.41 / 26.76. Both CAT directions exceed that numeric reference; the measured relative scores are 101.02% / 114.65%. Added it as a research-only compact candidate. Its 0.5B Sarashina template differs from the 1.4B model's template and is recorded separately. It is not labeled as a compression method.
+- The official Qwen3.8-27B-FP8 card describes block-128 fine-grained FP8 quantization and says general performance is nearly identical to the parent, but reports no exact JA↔EN translation metric or parent score for this task. The 27B FP8 parameter weights require about 27 GB before scales and runtime memory (calculated from parameter count × one byte), above the fixed 10 GiB process budget. Added a deferred quantized candidate record; it does not enter the shortlist.
+- Tightened the offline checker so the compact bilingual pass must compare both directions against the same benchmark, metric, and reference, and the reported relative-retention numbers must reproduce from the published values within rounding tolerance. Added negative checks for different benchmark directions and fabricated retention.
+- No model, runtime, quantization, template, or publication gate changed. The existing M1 and local-quality blockers remain.
+
+**Decision.** `NO_MODEL_PROMOTION`. The research shortlist now has three published-score passes: Hy-MT2 1.8B Q4_K_M as the single compression artifact, plus CAT-Translate 0.8B and 1.4B as compact bilingual comparators. Qwen3.8-27B-FP8 remains `DEFERRED` due to size and missing task-specific numeric results. Only Hy-MT2 remains registered as an experimental runtime choice; the CAT artifacts are research-only pending runtime, artifact, and M1 verification.
+
+**Evidence and limits.** The registry has 58 primary-source records and 10 candidate records. All 10 remain `DEFERRED`, three published score screens pass, and zero candidates are `SELECTED`. No weights were downloaded; no ASR-only, correct-source MT-only, E2E, M1, Metal, memory, caption-latency, or Meet-integration model run was performed. The public scores justify comparison only.

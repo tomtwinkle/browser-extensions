@@ -1,16 +1,16 @@
 'use strict';
 
 const DEFAULTS = {
-  serverUrl:      'http://localhost:17070',
+  serverUrl:      'http://127.0.0.1:17070',
+  apiToken:       '',
   sourceLang:     '',
   targetLang:     'ja',
   audioSource:    'mic-only',   // 'both' | 'mic-only' | 'tab-only'
-  chatEnabled:    false,        // チャットへの自動投稿（デフォルト無効）
-  chatFormat:     'both',       // 'both' | 'translation' | 'transcription'
   overlayEnabled: true,         // Meet 画面オーバーレイ表示（デフォルト有効）
   overlayFormat:  'both',       // 'both' | 'translation' | 'transcription'
   overlayScroll:  false,        // true=ニコニコ風スクロール / false=固定字幕（デフォルト）
   bidirectional:  false,        // 双方向翻訳（発話言語を検出して翻訳方向を動的に決定）
+  publishMicrophoneCaptions: false,
 };
 
 let msgs = getMessages('');
@@ -23,20 +23,23 @@ const $ = (id) => document.getElementById(id);
 chrome.storage.local.get(Object.keys(DEFAULTS), (stored) => {
   const cfg = { ...DEFAULTS, ...stored };
   $('server-url').value    = cfg.serverUrl;
+  $('api-token').value     = cfg.apiToken;
+  $('extension-origin').textContent = `chrome-extension://${chrome.runtime.id}`;
   $('source-lang').value   = cfg.sourceLang;
   $('target-lang').value   = cfg.targetLang;
   $('audio-source').value   = cfg.audioSource;
-  $('chat-enabled').checked = cfg.chatEnabled;
-  $('chat-format').value    = cfg.chatFormat;
   $('overlay-enabled').checked = cfg.overlayEnabled;
   $('overlay-format').value    = cfg.overlayFormat;
   $('overlay-scroll').checked  = cfg.overlayScroll;
   $('bidirectional').checked   = cfg.bidirectional;
-  updateChatFormatField(cfg.chatEnabled);
+  $('publish-microphone-captions').checked = cfg.publishMicrophoneCaptions;
   updateOverlayOptionsField(cfg.overlayEnabled);
 
   msgs = getMessages(cfg.sourceLang);
   applyI18n(msgs);
+  migrateLegacyChatSetting(chrome.storage.local).then((showNotice) => {
+    if (showNotice) showStatus(msgs.chatMigrationNotice, '');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -47,17 +50,9 @@ $('source-lang').addEventListener('change', () => {
   applyI18n(msgs);
 });
 
-$('chat-enabled').addEventListener('change', () => {
-  updateChatFormatField($('chat-enabled').checked);
-});
-
 $('overlay-enabled').addEventListener('change', () => {
   updateOverlayOptionsField($('overlay-enabled').checked);
 });
-
-function updateChatFormatField(enabled) {
-  $('chat-format-field').style.display = enabled ? '' : 'none';
-}
 
 function updateOverlayOptionsField(enabled) {
   $('overlay-options-field').style.display = enabled ? '' : 'none';
@@ -67,17 +62,21 @@ function updateOverlayOptionsField(enabled) {
 // ---------------------------------------------------------------------------
 $('save-btn').addEventListener('click', () => {
   const cfg = {
-    serverUrl:      $('server-url').value.trim().replace(/\/$/, ''),
+    serverUrl:      normalizeLocalServerURL($('server-url').value.trim()),
+    apiToken:       $('api-token').value.trim(),
     sourceLang:     $('source-lang').value,
     targetLang:     $('target-lang').value,
     audioSource:    $('audio-source').value,
-    chatEnabled:    $('chat-enabled').checked,
-    chatFormat:     $('chat-format').value,
     overlayEnabled: $('overlay-enabled').checked,
     overlayFormat:  $('overlay-format').value,
     overlayScroll:  $('overlay-scroll').checked,
     bidirectional:  $('bidirectional').checked,
+    publishMicrophoneCaptions: $('publish-microphone-captions').checked,
   };
+  if (!cfg.serverUrl) {
+    showStatus(msgs.msgInvalidServerUrl, 'err');
+    return;
+  }
   chrome.storage.local.set(cfg, () => {
     showStatus(msgs.msgSaved, 'ok');
   });
@@ -87,10 +86,18 @@ $('save-btn').addEventListener('click', () => {
 // Health check button
 // ---------------------------------------------------------------------------
 $('health-btn').addEventListener('click', async () => {
-  const url = $('server-url').value.trim().replace(/\/$/, '');
+  const url = normalizeLocalServerURL($('server-url').value.trim());
+  if (!url) {
+    showStatus(msgs.msgInvalidServerUrl, 'err');
+    return;
+  }
+  const apiToken = $('api-token').value.trim();
   showStatus(msgs.msgChecking, '');
   try {
-    const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${url}/health`, {
+      headers: apiToken ? { Authorization: `Bearer ${apiToken}` } : {},
+      signal: AbortSignal.timeout(5000),
+    });
     if (res.ok) {
       showStatus(msgs.msgServerOk, 'ok');
     } else {

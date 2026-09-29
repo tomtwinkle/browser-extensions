@@ -594,3 +594,86 @@ func TestModelCacheDir_Default_ContainsMeetTranslator(t *testing.T) {
 		t.Errorf("expected 'meet-translator' in path, got %q", got)
 	}
 }
+
+func TestVisibleModelCatalogOmitsLegacyAndDuplicateAliases(t *testing.T) {
+	whisper := strings.Split(sortedWhisperKeys(), ", ")
+	for _, hidden := range []string{"tiny", "base", "small", "medium", "large-v1", "large-v2", "kotoba-whisper", "kotoba-whisper-v2.2-faster"} {
+		for _, visible := range whisper {
+			if visible == hidden {
+				t.Errorf("legacy Whisper alias %q is visible", hidden)
+			}
+		}
+	}
+	for _, current := range []string{"large-v3-turbo", "kotoba-whisper-v2.2", "sensevoice", "whisperx:<model-name>"} {
+		found := false
+		for _, visible := range whisper {
+			if visible == current {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("current Whisper comparison option %q is missing", current)
+		}
+	}
+
+	llama := strings.Split(sortedLlamaKeys(), ", ")
+	for _, hidden := range []string{
+		"qwen2.5:7b-instruct-q4_k_m", "qwen2.5:14b-instruct-q4_k_m", "qwen3:0.6b-q4_k_m", "qwen3:1.7b-q4_k_m",
+		"qwen3:4b-q4_k_m", "qwen3:8b-q4_k_m", "qwen3.5:0.8b-q4_k_m", "qwen3.5:2b-q4_k_m",
+		"qwen3.5:4b-q4_k_m", "qwen3.5:9b-q4_k_m", "tencent/Hy-MT2-7B", "Hy-MT2-1.8B",
+		"Hy-MT2-1.8B-GGUF", "tencent/Hy-MT2-1.8B-GGUF", "Hy-MT2-7B-GGUF", "calm3:22b-q4_k_m",
+		"bonsai-8b", "bonsai-4b", "bonsai-1.7b", "gemma4:e2b-q4_k_m", "gemma4:e4b-q4_k_m", "gemma4:26b-q4_k_m",
+	} {
+		for _, visible := range llama {
+			if visible == hidden {
+				t.Errorf("legacy, oversized, or duplicate translation alias %q is visible", hidden)
+			}
+		}
+	}
+	for _, current := range []string{"tencent/Hy-MT2-1.8B"} {
+		found := false
+		for _, visible := range llama {
+			if visible == current {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("current translation comparison option %q is missing", current)
+		}
+	}
+}
+
+func TestLegacyModelSettingsStillResolveFromCache(t *testing.T) {
+	patchPlatform(t, "linux", "amd64")
+	cacheDir := setTestModelCacheDir(t)
+	t.Setenv("OLLAMA_MODELS", t.TempDir())
+
+	whisperPath := setupWhisperCache(t, cacheDir, "small")
+	gotWhisper, err := resolveWhisperModel("small")
+	if err != nil {
+		t.Fatalf("saved Whisper setting should remain resolvable: %v", err)
+	}
+	if gotWhisper.ResolvedSpec != whisperPath {
+		t.Errorf("Whisper resolved spec = %q, want %q", gotWhisper.ResolvedSpec, whisperPath)
+	}
+
+	llamaPath := setupLlamaCache(t, cacheDir, "Qwen3-8B-Q4_K_M.gguf")
+	gotLlama, err := resolveLlamaModel("qwen3:8b-q4_k_m")
+	if err != nil {
+		t.Fatalf("saved translation setting should remain resolvable: %v", err)
+	}
+	if gotLlama.ResolvedSpec != llamaPath {
+		t.Errorf("translation resolved spec = %q, want %q", gotLlama.ResolvedSpec, llamaPath)
+	}
+
+	baselinePath := setupLlamaCache(t, cacheDir, "Qwen3.5-0.8B-Q4_K_M.gguf")
+	gotBaseline, err := resolveLlamaModel("qwen3.5:0.8b-q4_k_m")
+	if err != nil {
+		t.Fatalf("configured reproduction baseline should remain resolvable: %v", err)
+	}
+	if gotBaseline.ResolvedSpec != baselinePath {
+		t.Errorf("baseline translation resolved spec = %q, want %q", gotBaseline.ResolvedSpec, baselinePath)
+	}
+}

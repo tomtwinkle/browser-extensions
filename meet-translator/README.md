@@ -1,10 +1,11 @@
-# meet-translator – Google Meet Auto-Translate Chat
+# meet-translator – Local Google Meet Speech Translation
 
-A Chrome / Edge extension (Manifest V3) that captures Google Meet audio in real time,
-transcribes and translates it, and automatically posts the text to the Meet chat.
+A Chrome / Edge extension (Manifest V3) and local Go server for transcribing and translating Google Meet audio. It includes a host-only correction page and a caption page the host can choose in Meet's screen-sharing UI.
 
-**Zero dependency on external services.** whisper.cpp and llama.cpp are embedded in the
-local server so all inference runs entirely on your machine.
+**Inference runs on the local server.** whisper.cpp and llama.cpp are embedded in the
+server; no cloud inference path is used.
+
+The popup opens the caption page and the private correction page. Opening the caption page does not start sharing; the host must select that tab in Meet's normal screen-sharing UI. Keep the correction page private. Actual Meet integration and M1 Max model performance remain unverified. See [`docs/implementation-status.md`](docs/implementation-status.md) for verified and blocked work.
 
 [日本語版 README](README.ja.md)
 
@@ -19,7 +20,7 @@ local server so all inference runs entirely on your machine.
 [ offscreen.js ]  ── collects audio via Web Audio API → encodes to WAV (PCM 16-bit)
        │               silent chunks are skipped by VAD
        ▼
-[ background.js ]  ── fetch POST /transcribe-and-translate
+[ background.js ]  ── authenticated loopback HTTP requests
        │
        ▼
 [ meet-translator-server ]  ← single binary (Go + CGo)
@@ -27,7 +28,7 @@ local server so all inference runs entirely on your machine.
   └─ llama.cpp   (embedded) ── LLM translation
        │
        ▼
-[ content.js ]  ── posts translated text to the Meet chat DOM
+[ current Meet content script ]  ── legacy in-Meet overlay and feedback UI
 ```
 
 ---
@@ -41,7 +42,11 @@ meet-translator/
 │   ├── shared.js             Shared pure helpers for runtime + tests
 │   ├── background.js         Service Worker: audio capture & translation control
 │   ├── offscreen.html/js     Offscreen Document: Web Audio API + WAV encoder
-│   ├── content.js            Content Script: Meet chat DOM operations
+│   ├── content.js            Content Script: in-Meet overlay and glossary UI
+│   ├── caption-presenter.html/js  Public caption page to select for sharing
+│   ├── sidepanel.html/js          Host-only history and correction page
+│   ├── caption-store.js           Session/revision caption state
+│   ├── caption-protocol.js        Public projection without private fields
 │   ├── popup.html/js         Popup UI (start/stop + settings link)
 │   ├── options.html/js       Settings page (server URL, languages)
 │   ├── tests/                Node-based extension unit tests
@@ -99,7 +104,7 @@ make all GPU=metal    # force Apple Metal and build both variants
 make all GPU=cuda     # force NVIDIA CUDA and build both variants
 make all GPU=cpu      # CPU-only build for both variants
 make build GPU=cpu    # standard binary only
-make prism GPU=cpu    # PrismML binary only (needed for bonsai-8b / server-prism)
+make prism GPU=cpu    # PrismML compatibility binary
 ```
 
 `make` automatically clones and cmake-builds whisper.cpp and llama.cpp on first run,
@@ -113,8 +118,8 @@ After making changes, choose the appropriate command:
 | Command | When to use |
 |---|---|
 | `make build` | Rebuild only the standard binary (`server`) |
-| `make prism` | Rebuild only the PrismML binary (`server-prism`) for `bonsai-8b` |
-| `make` / `make all` | Rebuild both binaries so autoconfig and release-like setups can step into `bonsai-8b` automatically |
+| `make prism` | Rebuild only the PrismML compatibility binary (`server-prism`) |
+| `make` / `make all` | Rebuild both binaries for standard and PrismML targets |
 | `make rebuild` | Bridge C++ files changed (`whisper_bridge.cpp`, etc.) – re-runs cmake then `go build`; pinned vendor versions still auto-refresh if needed |
 | `make distclean && make` | Full reset when you want to re-clone vendor and rebuild everything from scratch |
 
@@ -144,33 +149,15 @@ cd meet-translator/server && make test
 
 ## Starting the Server
 
-### First run (automatic model selection)
+### First run
 
-Running without model overrides starts from the conservative floor
-`large-v3-turbo` + `qwen3.5:0.8b-q4_k_m`, then **steps up to `bonsai-8b` and larger models when RAM/GPU allow**, and saves the chosen pair to a config file.
+The default model identifiers `large-v3-turbo` + `qwen3.5:0.8b-q4_k_m` are retained as the current reproducibility baseline. Hardware capacity alone does not promote another model. This baseline has not passed the quality, memory, latency, or integration qualification gates.
 
 ```bash
 ./meet-translator-server
 ```
 
-Release archives and `make` bundle the standard binary plus the PrismML companion binary side by side, so `bonsai-8b` can switch automatically when selected.
-
-Auto-selected models (with GPU):
-
-| RAM | whisper | llama |
-|---|---|---|
-| ≥ 64 GB | `large-v3` | `calm3:22b-q4_k_m` |
-| ≥ 32 GB | `large-v3-turbo` | `calm3:22b-q4_k_m` |
-| ≥ 16 GB | `large-v3-turbo` | `qwen3:8b-q4_k_m` |
-| ≥  8 GB | `large-v3-turbo` | `bonsai-8b` |
-| < 8 GB  | `large-v3-turbo` | `qwen3.5:0.8b-q4_k_m` |
-
-CPU-only:
-
-| RAM | whisper | llama |
-|---|---|---|
-| ≥ 8 GB | `large-v3-turbo` | `bonsai-8b` |
-| < 8 GB | `large-v3-turbo` | `qwen3.5:0.8b-q4_k_m` |
+Startup requires an API token and the exact extension origin as described in [the server security setup](server/README.md#ローカルapiの設定). Existing saved model and port settings are preserved.
 
 ### Specifying models manually
 
@@ -180,8 +167,7 @@ CPU-only:
   --llama-model qwen3.5:0.8b-q4_k_m
 ```
 
-If the model is not present locally it is **downloaded automatically from HuggingFace**.
-The specified models are saved to the config file so **subsequent runs need no arguments**.
+The specified model names are saved to the config file. A registry entry does not mean a model is qualified. Prepare only authorized model files and review the candidate status in `docs/research/candidates.json` before loading an experimental candidate.
 
 ```bash
 ./meet-translator-server   # subsequent runs work without flags
@@ -195,9 +181,9 @@ If you already have GGUF models fetched via Ollama, the server detects and uses 
 
 | Flag | Env var | Default | Description |
 |---|---|---|---|
-| `--port` | `PORT` | `7070` | Listen port |
-| `--whisper-model` | `WHISPER_MODEL` | `auto` (`large-v3-turbo` floor) | Whisper model name or file path |
-| `--llama-model` | `LLAMA_MODEL` | `auto` (`qwen3.5:0.8b-q4_k_m` floor) | LLM model name or file path |
+| `--port` | `PORT` | `17070` | Loopback listen port |
+| `--whisper-model` | `WHISPER_MODEL` | `auto` (reproduction baseline: `large-v3-turbo`) | Whisper model name or file path |
+| `--llama-model` | `LLAMA_MODEL` | `auto` (reproduction baseline: `qwen3.5:0.8b-q4_k_m`) | LLM model name or file path |
 | `--llama-gpu-layers` | `LLAMA_GPU_LAYERS` | `-1` | GPU offload layers (`0`=CPU, `-1`=all) |
 | `--whisper-gpu-layers` | `WHISPER_GPU_LAYERS` | `-1` | Same for Whisper |
 | `--model-cache-dir` | `MODEL_CACHE_DIR` | OS default | Model cache directory |
@@ -216,105 +202,66 @@ Config file locations:
 ### Health check
 
 ```bash
-curl http://localhost:7070/health
+curl http://127.0.0.1:17070/health \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN"
 ```
+
+The server binds to `127.0.0.1`, rejects unconfigured Host/Origin values, requires a bearer token on every API (including `/health`), and caps audio requests at 8 MiB. The extension stores the token in trusted extension storage and sends it from the service worker; it is not passed to Meet content scripts.
 
 ---
 
 ## Supported Models
 
-### Whisper models (speech recognition)
+A model appearing in the runtime registry or passing the public benchmark screen does not mean it has passed M1 quality, memory, latency, or Meet integration qualification. The product target includes Meet caption sharing and the private correction UI running alongside local ASR and translation.
 
-Specify a model name with `--whisper-model` and it will be downloaded automatically.
+### Whisper and ASR
 
-| Model | Size | Accuracy |
-|---|---|---|
-| `tiny` | 75 MB | △ |
-| `base` | 142 MB | ○ |
-| `small` | 466 MB | ○ |
-| `medium` | 1.5 GB | ◎ |
-| `large-v3` | 3.1 GB | ◎◎ |
-| `large-v3-turbo` | 809 MB | ◎ **default floor** (fast) |
-| `kotoba-whisper` | 3.1 GB | ◎◎ Japanese-focused Kotoba-Whisper v2.0 |
-| `kotoba-whisper-q5_0` | ≈ 1.0 GB | ◎ Quantized Kotoba-Whisper v2.0 |
-| `kotoba-whisper-v2.2` / `kotoba-tech/kotoba-whisper-v2.2` | model-managed | ◎◎ Kotoba-Whisper v2.2 via local Python Transformers worker |
-| `kotoba-whisper-v2.2-faster` / `RoachLin/kotoba-whisper-v2.2-faster` | model-managed | ◎◎ Kotoba-Whisper v2.2 via WhisperX / faster-whisper |
-| `sensevoice` | model-managed | ◎ Fast multilingual ASR via local Python worker |
-| `whisperx` / `whisperX` / `whisperx-turbo` | model-managed | ◎ WhisperX `turbo` via local Python worker (latest official Whisper model) |
-| `whisperx-large-v3` | model-managed | ◎◎ WhisperX `large-v3` via local Python worker |
+| Current comparison identifier | Purpose and status |
+|---|---|
+| `large-v3-turbo` | Reproduction ASR baseline; not selected or qualified |
+| `large-v3` | Whisper comparison alias; not selected or qualified |
+| `kotoba-whisper-v2.2` / `kotoba-tech/kotoba-whisper-v2.2` | Author checkpoint for Japanese ASR comparison; not qualified |
+| `sensevoice`, `whisperx`, `whisperx-large-v3` | Optional local Python ASR routes; each model requires its own evaluation |
 
-Advanced forms are also supported: `sensevoice:<model-ref>` and `whisperx:<model-name>` (also `whisperX:<model-name>`). For example: `whisperx:turbo`, `whisperx:distil-large-v3`. The server also accepts `whisperx:large-v3-turbo` and normalizes it to WhisperX's `turbo` model name.
+Whisper `tiny`, `base`, `small`, `medium`, `large-v1`, and `large-v2`, Kotoba-Whisper v2.0, and third-party Kotoba conversions are hidden from the current list. Explicit saved identifiers still resolve with a compatibility warning. Advanced `sensevoice:<model-ref>` and `whisperx:<model-name>` forms remain explicit experiment routes.
 
-SenseVoice / WhisperX use the local Python worker. If `uv` is installed, the worker provisions only the dependencies needed for the selected backend automatically. Otherwise, install the matching local Python dependencies first:
+SenseVoice, WhisperX, and Kotoba Transformers use the local Python worker. If `uv` is unavailable, install only the backend's dependencies:
 
 ```bash
 cd server
 python3.11 -m pip install -r ./python/requirements-asr-whisperx.txt
 ```
 
-Use `./python/requirements-asr-sensevoice.txt` for SenseVoice, `./python/requirements-asr-transformers.txt` for `kotoba-whisper-v2.2`, or `./python/requirements-asr.txt` to install every ASR Python backend at once. When installing manually, use Python 3.11 for the WhisperX-backed models. Make sure `ffmpeg` is available on your `PATH` for SenseVoice / WhisperX backends.
+Use `requirements-asr-sensevoice.txt` for SenseVoice and `requirements-asr-transformers.txt` for Kotoba v2.2. Backends that need `ffmpeg` require it on `PATH`.
 
-### LLM models (translation)
+### Translation models
 
-Specify a model name with `--llama-model` and it will be downloaded automatically.
+| Current comparison identifier | Purpose and status |
+|---|---|
+| `tencent/Hy-MT2-1.8B` | Q4_K_M quantization candidate; passes the published benchmark pre-screen; not M1-qualified |
+| `CyberAgent/CAT-Translate-0.8b` | 0.8B compact bilingual research candidate; author BLEU exceeds the same-card TranslateGemma 4B values in both directions; not a runtime choice |
+| `qwen3.5:0.8b-q4_k_m` | Retained only for saved-setting compatibility and baseline reproduction; hidden from the current selectable list; not selected or quality-qualified |
 
-| Model | Size | License | Notes |
-|---|---|---|---|
-| `qwen3.5:0.8b-q4_k_m` | ≈ 0.6 GB | Apache 2.0 | **Default floor**, Thinking-capable |
-| `tencent/Hy-MT2-1.8B` / `Hy-MT2-1.8B-GGUF` | ≈ 1.1 GB | Tencent HY Community License Agreement | Official Tencent Hy 1.8B alias, downloads the Q4_K_M GGUF build |
-| `bonsai-8b` | ≈ 1.15 GB / MLX repo | Apache 2.0 | **First step-up**, Thinking-capable, MLX on Apple Silicon, PrismML elsewhere |
-| `bonsai-4b` | MLX repo | Apache 2.0 | Apple Silicon-only MLX Bonsai, Thinking-capable |
-| `bonsai-1.7b` | MLX repo | Apache 2.0 | Apple Silicon-only MLX Bonsai, Thinking-capable |
-| `tencent/Hy-MT2-7B` / `Hy-MT2-7B` / `Hy-MT2-7B-GGUF` | ≈ 4.6 GB | Tencent HY Community License Agreement | Official Tencent Hy 7B aliases, download the Q4_K_M GGUF build (`Hy-MT2-7BGGUF` is also accepted) |
-| `qwen3:8b-q4_k_m` | ≈ 5.2 GB | Apache 2.0 | Higher tier, Thinking-capable |
-| `calm3:22b-q4_k_m` | ≈ 13 GB | Apache 2.0 | Top tier, Japanese/English specialist, requires 16 GB VRAM |
-| `gemma4:e4b-q4_k_m` | ≈ 2.6 GB | Apache 2.0 | Fast & lightweight (Google Gemma 4) |
-| `gemma4:e2b-q4_k_m` | ≈ 1.3 GB | Apache 2.0 | Lightest (Google Gemma 4) |
-| `gemma4:26b-q4_k_m` | ≈ 16 GB | Apache 2.0 | High accuracy (Google Gemma 4) |
-| `qwen3.5:2b-q4_k_m` | ≈ 1.4 GB | Apache 2.0 | Thinking-capable |
-| `qwen3.5:4b-q4_k_m` | ≈ 3.2 GB | Apache 2.0 | Thinking-capable |
-| `qwen3.5:9b-q4_k_m` | ≈ 5.3 GB | Apache 2.0 | High accuracy, Thinking-capable |
-| `qwen3:0.6b-q4_k_m` | ≈ 0.4 GB | Apache 2.0 | Thinking-capable |
-| `qwen3:1.7b-q4_k_m` | ≈ 1.1 GB | Apache 2.0 | Thinking-capable |
-| `qwen3:4b-q4_k_m` | ≈ 2.6 GB | Apache 2.0 | Thinking-capable |
-| `qwen2.5:7b-instruct-q4_k_m` | ≈ 4.7 GB | Apache 2.0 | Stable |
-| `qwen2.5:14b-instruct-q4_k_m` | ≈ 8.7 GB | Apache 2.0 | High accuracy |
+Three candidates pass the published-results screen: Hy-MT2 Q4_K_M and CAT-Translate 0.8B and 1.4B. CAT-Translate is a compact bilingual comparator, not a compressed-model claim. Hy-MT2 is registered as an experimental runtime candidate; both CAT sizes remain research-only. None has been run through this application or qualified. See [`docs/research/compression-screen.md`](docs/research/compression-screen.md).
 
-> **Note**: On Apple Silicon (`darwin/arm64`), models with a known MLX counterpart
-> (`bonsai-*`, `qwen2.5:*`, `qwen3:*`, `qwen3.5:*`, `calm3:*`, `gemma4:*`)
-> automatically switch to the local MLX backend. If `uv` is installed, the worker can
-> provision MLX dependencies automatically. Otherwise install them first with
-> `python3 -m pip install -r ./python/requirements-llm.txt`.
-> On other platforms, `bonsai-8b` still uses the
-> [PrismML fork of llama.cpp](https://github.com/PrismML-Eng/llama.cpp),
-> while `bonsai-4b` and `bonsai-1.7b` are unavailable.
-> Release archives and `make` bundle the required companion binary automatically.
-> If you build only the standard binary, run `make prism` before using `bonsai-8b`.
-> Known MLX repo IDs are also accepted directly, for example
-> `prism-ml/Ternary-Bonsai-8B-mlx-2bit` or `mlx-community/Qwen3-0.6B-4bit`.
-> `tencent/Hy-MT2-1.8B`, `Hy-MT2-1.8B-GGUF`, `Hy-MT2-7B`, and `Hy-MT2-7BGGUF`
-> resolve to Tencent's official `Q4_K_M` GGUF builds so they can run on the
-> bundled `llama.cpp` backend.
+| Compression family or candidate | Published-score decision |
+|---|---|
+| Hy-MT2 1.8B Q4_K_M | Retains 98.48% on FLORES-200 and 91.51% on IFMTBench versus BF16; passes the screen |
+| CAT-Translate 0.8B | BLEU 29.71 JA→EN / 30.68 EN→JA versus TranslateGemma 4B 29.41 / 26.76 on the same card; passes the bilingual screen |
+| Hy-MT2 1.8B 2-bit | Excluded: 85.05% IFMTBench retention |
+| Hy-MT2 AngelSlim 1.25-bit | Deferred: no exact-variant translation quality score |
+| Hy-MT2-30B-A3B MoE | Outside the 10 GiB inference budget based on 30B total weights, despite 3B active parameters |
+| MoE | Hy-MT2-30B-A3B is outside the 10 GiB budget based on 30B total weights |
+| Knowledge distillation | Distilled Kotoba ASR CER is worse on the reviewed Japanese set; no distilled JA↔EN translation artifact passes |
+| Pruning | Reviewed CULL-MT results do not cover Japanese-English |
+| Low-rank factorization | CAT-Translate used LoRA for training, but the published inference artifact is not factorized |
+| Weight sharing | No reviewed exact Japanese-English artifact has qualifying comparative results |
 
-You can also specify a file path directly:
+TranslateGemma 4B has a published English-to-Japanese result, but the reviewed 4B sources do not give the reverse direction, so it is outside the experiment shortlist. Shisa V2.1 1.2B lacks clear published values in both directions and remains deferred. The distilled Kotoba ASR card reports Japanese ReazonSpeech CER 16.8 versus 14.9 for Whisper large-v3, so it is not shortlisted as a Japanese ASR replacement.
 
-```bash
-./meet-translator-server --llama-model /path/to/model.gguf
-```
+The reviewed official Qwen3.8 FP8 checkpoint is still 27B; the card gives no Japanese-English translation scores, and raw FP8 weights alone exceed the 10 GiB process budget. Older Qwen generations, Hy-MT2 7B, CALM3 22B, Bonsai, and Gemma 4 are hidden from the current choices. Explicit saved identifiers remain compatible with a warning and are not silently replaced.
 
-### Thinking mode (Qwen3 / Qwen3.5)
-
-Qwen3 and Qwen3.5 models support **Thinking mode**.
-The model reasons inside `<think>...</think>` before producing the translation, which improves quality at the cost of higher latency.
-
-Control it with the `llama_options` field in the request:
-
-```json
-{"thinking": true}   // Thinking enabled (default for Qwen3/Qwen3.5)
-{"thinking": false}  // Thinking disabled (faster)
-```
-
----
+A public benchmark screen is not a local quality result. Candidates remain `DEFERRED` until their exact weights, terms, tokenizer/template/EOS, native or MLX route, process memory, Metal execution, final-caption latency, and Meet integration are verified. The app does not search for or update models during a meeting.
 
 ## Glossary for Improved Accuracy
 
@@ -338,23 +285,28 @@ On first run a **default glossary for SWE/AI engineers** (17 ASR corrections, ~7
 
 ```bash
 # List all entries
-curl http://localhost:7070/glossary
+curl http://127.0.0.1:17070/glossary \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN"
 
 # Add an ASR correction
-curl -X POST http://localhost:7070/glossary/corrections \
+curl -X POST http://127.0.0.1:17070/glossary/corrections \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"source":"a pie","target":"API","description":"Common Whisper misrecognition"}'
 
 # Add a term mapping
-curl -X POST http://localhost:7070/glossary/terms \
+curl -X POST http://127.0.0.1:17070/glossary/terms \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"source":"pull request","target":"プルリクエスト"}'
 
 # Delete an entry
-curl -X DELETE http://localhost:7070/glossary/corrections/a%20pie
+curl -X DELETE http://127.0.0.1:17070/glossary/corrections/a%20pie \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN"
 
 # Submit a learning signal (kind = "correction" | "term")
-curl -X POST http://localhost:7070/glossary/learn \
+curl -X POST http://127.0.0.1:17070/glossary/learn \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"kind":"correction","source":"get hub","target":"GitHub"}'
 ```
@@ -382,7 +334,7 @@ For the full API reference see [server/README.md](server/README.md).
 
 ## LLM Translation Benchmark
 
-`cmd/benchmark` measures translation quality and speed and provides reference data for the autoconfig ladder.
+`cmd/benchmark` is a legacy MT-only comparison utility; it does not choose a model.
 
 ### Test cases
 
@@ -427,36 +379,16 @@ go run ./cmd/benchmark/ --compare results/
 Additional flags:
 
 ```
---server  URL   Server address (default: http://localhost:7070)
+--server  URL   Server address (default: http://127.0.0.1:17070)
 --runs    N     Runs per test case (default: 3)
 --warmup  N     Warm-up runs (default: 2)
 --dir     STR   Direction filter: "en-ja" | "ja-en" | "both" (default: both)
 --verbose       Show input/output for each test case
 ```
 
-### Sample comparison output (macOS Apple M1 Max, GPU Metal, 2026-04)
+### Benchmark status
 
-```
-=== Benchmark Comparison (5 models) ===
-
-Rank Model                          Quality   Latency     Score
-────────────────────────────────────────────────────────────────────
-   1 qwen3.5:0.8b-q4_k_m              0.636     230ms     0.608
-   2 qwen3:4b-q4_k_m                  0.814     730ms     0.605
-   3 qwen3:8b-q4_k_m                  0.833    1360ms     0.572
-   4 bonsai-8b                        0.454    7168ms     0.288
-   5 gemma4:e4b-q4_k_m                0.256   11707ms     0.163
-
-Score = quality×0.6 + speed×0.4  (speed = 1/(1 + latency/300ms))
-```
-
-> **Notes:**
-> - `qwen3.5:0.8b-q4_k_m` tops this speed-weighted benchmark, but autoconfig uses a staged ladder rather than raw rank:
->   floor → `bonsai-8b` → larger models.
-> - `bonsai-8b` scored low in the GPU benchmark due to frequent thinking-mode timeouts.
->   It is still kept as the first step-up because it preserves a small download/footprint before jumping to much larger models.
-> - `gemma4:e4b` performs poorly on EN↔JA translation tasks (quality 0.256) and is excluded from autoconfig.
-> - Actual numbers vary depending on the execution environment and GPU availability.
+The repository's older benchmark is MT-only and uses an internal ChrF-like score. It is not SacreBLEU chrF2, ASR-only, or audio-to-caption evidence. Historical sample scores were removed because their model artifacts and run conditions are not pinned well enough to qualify a candidate. The benchmark CLI now requires `MEET_TRANSLATOR_API_TOKEN` and sends it as a bearer header. Use the separate three-track manifests in `eval/` for reproducible evaluation contracts; they currently contain synthetic fixtures only and do not measure model quality.
 
 ---
 
@@ -481,7 +413,9 @@ Click the extension icon → **⚙ Settings** and configure:
 
 | Setting | Description |
 |---|---|
-| Server URL | `http://localhost:7070` (default) |
+| Server URL | `http://127.0.0.1:17070` (default) |
+| Local API token | Same value as `MEET_TRANSLATOR_API_TOKEN` in the server environment |
+| Allowed extension origin | Copy the displayed value to `MEET_TRANSLATOR_EXTENSION_ORIGIN` |
 | Source language | Auto-detect or specify a language |
 | Target language | Language to translate into (default: Japanese) |
 | **"Check server connection"** button | Verify the server is reachable |
@@ -490,15 +424,7 @@ Click the extension icon → **⚙ Settings** and configure:
 
 ## Usage
 
-1. Join a meeting at `https://meet.google.com/`
-2. Click the extension icon and press **"Start Auto-Translate Chat"**
-3. Audio capture begins and translated text is posted to chat approximately every 5 seconds
-   - Silent intervals are skipped by VAD, which also adapts to the session noise floor to suppress low-SNR / non-speech chunks
-   - When Meet highlights the current speaker, their display name is prefixed in chat and overlay output
-   - Use the in-call **dictionary feedback** button on the Meet screen to register misheard words or incorrect translated terms into the glossary immediately
-   - Consecutive short utterances from the same highlighted speaker are batched briefly and sent together after a short pause
-   - The chat panel is opened automatically if it is closed
-4. Press **"Stop Auto-Translate Chat"** to stop
+The popup opens the public caption page and separate private correction page. To share captions, the host selects the caption tab through Meet's normal screen-sharing UI; opening the page does not share it automatically. Do not share the correction page. Actual Meet integration and M1 model evaluation remain unfinished. See `docs/implementation-status.md` for the verified scope and remaining work.
 
 ---
 
@@ -541,7 +467,7 @@ Two workflow types run across 4 platforms on every pull request:
 | `storage` | Persist settings |
 | `offscreen` | Run AudioContext (unavailable in MV3 service workers) in an Offscreen Document |
 | `tabs` | Open the settings page |
-| `http://localhost:7070/*` | Allow requests to the local server |
+| `http://localhost/*`, `http://127.0.0.1/*` | Allow requests to the loopback local server |
 
 ---
 
@@ -550,8 +476,11 @@ Two workflow types run across 4 platforms on every pull request:
 This software embeds [whisper.cpp](https://github.com/ggerganov/whisper.cpp) **v1.8.4** and
 [llama.cpp](https://github.com/ggerganov/llama.cpp) **b8699**, both released under the MIT License.
 
-Models downloaded at runtime (Whisper, Qwen3.5, Qwen3, Qwen2.5-7B/14B, Gemma4, Hy-MT2)
-are released under MIT, Apache 2.0, or the Tencent HY Community License Agreement.
-Qwen2.5-3B is excluded from the registry as it carries a non-commercial-only license.
+The model engine licenses do not determine the license for downloaded weights.
+Review terms for the exact model and any converted artifact before use or
+redistribution. The current Qwen reproduction baseline references Qwen's
+Apache 2.0 card; Tencent's GGUF page displays Apache 2.0, while the exact
+converted-artifact terms remain under review. Research-only models are not
+included in the runtime registry.
 
 See [THIRDPARTY.md](../THIRDPARTY.md) for full copyright notices and model license details.

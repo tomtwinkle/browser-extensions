@@ -13,12 +13,29 @@ const statusText   = document.getElementById('status-text');
 const errorMsg     = document.getElementById('error-msg');
 const serverInfo   = document.getElementById('server-info');
 const serverUnavailable = document.getElementById('server-unavailable');
-const chatEnabledToggle   = document.getElementById('chat-enabled-toggle');
 const overlayEnabledToggle = document.getElementById('overlay-enabled-toggle');
+const migrationNotice = document.getElementById('migration-notice');
+const openCaptionShareButton = document.getElementById('open-caption-share');
+const openCorrectionPanelButton = document.getElementById('open-correction-panel');
 
 let isActive = false;
 // Initialised to English; overwritten after settings load.
 let msgs = getMessages('');
+
+function openExtensionPage(fileName) {
+  const url = chrome.runtime.getURL(fileName);
+  chrome.tabs.query({ url }, (tabs) => {
+    const existing = tabs?.[0];
+    if (existing?.id != null) {
+      chrome.tabs.update(existing.id, { active: true });
+      return;
+    }
+    chrome.tabs.create({ url });
+  });
+}
+
+openCaptionShareButton.addEventListener('click', () => openExtensionPage('caption-presenter.html'));
+openCorrectionPanelButton.addEventListener('click', () => openExtensionPage('sidepanel.html'));
 
 // ---------------------------------------------------------------------------
 // UI helpers
@@ -62,15 +79,10 @@ function updateServerInfo(info) {
 }
 
 // ---------------------------------------------------------------------------
-// Quick toggles: chat posting / overlay
+// Quick toggle: current in-Meet overlay
 // ---------------------------------------------------------------------------
-chrome.storage.local.get({ chatEnabled: false, overlayEnabled: true }, (cfg) => {
-  chatEnabledToggle.checked   = cfg.chatEnabled;
+chrome.storage.local.get({ overlayEnabled: true }, (cfg) => {
   overlayEnabledToggle.checked = cfg.overlayEnabled;
-});
-
-chatEnabledToggle.addEventListener('change', () => {
-  chrome.storage.local.set({ chatEnabled: chatEnabledToggle.checked });
 });
 
 overlayEnabledToggle.addEventListener('change', () => {
@@ -83,6 +95,11 @@ overlayEnabledToggle.addEventListener('change', () => {
 chrome.storage.local.get({ sourceLang: '' }, ({ sourceLang }) => {
   msgs = getMessages(sourceLang);
   applyI18n(msgs);
+  migrateLegacyChatSetting(chrome.storage.local).then((showNotice) => {
+    if (!showNotice) return;
+    migrationNotice.textContent = msgs.chatMigrationNotice;
+    migrationNotice.style.display = 'block';
+  });
   // Re-render the button / status with the correct language after i18n is applied.
   setUI(isActive);
 });

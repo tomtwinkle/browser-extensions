@@ -36,6 +36,8 @@ func buildTranslationPrompt(text, sourceLang, targetLang, template string, opts 
 	switch template {
 	case "qwen3":
 		return buildQwen3Prompt(text, src, tgt, opts, history, termsHint)
+	case "qwen35":
+		return buildQwen35Prompt(text, src, tgt, history, termsHint)
 	case "gemma":
 		return buildGemmaPrompt(text, src, tgt, termsHint, history)
 	case "hy":
@@ -71,7 +73,7 @@ func buildQwenPrompt(text, src, tgt, termsHint string, history []contextEntry) s
 }
 
 // buildQwen3Prompt は Qwen3 用プロンプトを生成する。
-// opts.Thinking=false の場合は /no-think タグで思考を抑制する。
+// opts.Thinking=false の場合は公式 soft switch の /no_think で思考を抑制する。
 func buildQwen3Prompt(text, src, tgt string, opts ModelOptions, history []contextEntry, termsHint string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("<|im_start|>system\n%s<|im_end|>\n", systemPrompt(termsHint)))
@@ -81,10 +83,33 @@ func buildQwen3Prompt(text, src, tgt string, opts ModelOptions, history []contex
 	}
 	userContent := fmt.Sprintf("Translate from %s to %s:\n%s", src, tgt, text)
 	if !opts.Thinking {
-		userContent = "/no-think\n" + userContent
+		userContent = "/no_think\n" + userContent
 	}
 	sb.WriteString(fmt.Sprintf("<|im_start|>user\n%s<|im_end|>\n", userContent))
 	sb.WriteString("<|im_start|>assistant\n")
+	return sb.String()
+}
+
+// buildQwen35Prompt uses Qwen3.5's standard message format and its documented
+// non-thinking default. Qwen3.5 does not support Qwen3's soft-switch tokens.
+func buildQwen35Prompt(text, src, tgt string, history []contextEntry, termsHint string) string {
+	var sb strings.Builder
+	for _, h := range history {
+		sb.WriteString(fmt.Sprintf("<|im_start|>user\n%s<|im_end|>\n", qwen35TranslationInstruction(h.Transcription, src, tgt, "")))
+		sb.WriteString(fmt.Sprintf("<|im_start|>assistant\n%s<|im_end|>\n", h.Translation))
+	}
+	sb.WriteString(fmt.Sprintf("<|im_start|>user\n%s<|im_end|>\n", qwen35TranslationInstruction(text, src, tgt, termsHint)))
+	sb.WriteString("<|im_start|>assistant\n")
+	return sb.String()
+}
+
+func qwen35TranslationInstruction(text, src, tgt, termsHint string) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Translate the following text from %s into %s. Return only the translation, without additional explanation.\n\nText:\n%s", src, tgt, text))
+	if termsHint != "" {
+		sb.WriteString("\n\nUse these terminology mappings: ")
+		sb.WriteString(termsHint)
+	}
 	return sb.String()
 }
 
@@ -132,11 +157,34 @@ func translationMessages(text, src, tgt string, history []contextEntry) []chatMe
 }
 
 func buildHyPrompt(text, src, tgt, termsHint string, history []contextEntry) string {
-	return buildHyChatPrompt(systemPrompt(termsHint), translationMessages(text, src, tgt, history))
+	return buildHyChatPrompt("", hyTranslationMessages(text, tgt, termsHint, history))
 }
 
 func buildHy7Prompt(text, src, tgt, termsHint string, history []contextEntry) string {
-	return buildHy7ChatPrompt(systemPrompt(termsHint), translationMessages(text, src, tgt, history))
+	return buildHy7ChatPrompt("", hyTranslationMessages(text, tgt, termsHint, history))
+}
+
+func hyTranslationMessages(text, tgt, termsHint string, history []contextEntry) []chatMessage {
+	messages := make([]chatMessage, 0, len(history)*2+1)
+	for _, h := range history {
+		messages = append(messages,
+			chatMessage{role: "user", content: hyTranslationInstruction(h.Transcription, tgt, "")},
+			chatMessage{role: "assistant", content: h.Translation},
+		)
+	}
+	messages = append(messages, chatMessage{role: "user", content: hyTranslationInstruction(text, tgt, termsHint)})
+	return messages
+}
+
+func hyTranslationInstruction(text, tgt, termsHint string) string {
+	var sb strings.Builder
+	if termsHint != "" {
+		sb.WriteString("Reference the following translations:\n")
+		sb.WriteString(termsHint)
+		sb.WriteString("\n")
+	}
+	sb.WriteString(fmt.Sprintf("Translate the following text into %s. Note that you should only output the translated result without any additional explanation:\n%s", tgt, text))
+	return sb.String()
 }
 
 func buildHyChatPrompt(system string, messages []chatMessage) string {
@@ -269,7 +317,7 @@ func buildAnalysisPrompt(records []TranslationRecord, template string) string {
 	switch template {
 	case "qwen3":
 		return fmt.Sprintf(
-			"<|im_start|>system\n%s<|im_end|>\n<|im_start|>user\n/no-think\n%s<|im_end|>\n<|im_start|>assistant\n",
+			"<|im_start|>system\n%s<|im_end|>\n<|im_start|>user\n/no_think\n%s<|im_end|>\n<|im_start|>assistant\n",
 			sys, userContent,
 		)
 	case "gemma":

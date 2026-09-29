@@ -160,6 +160,26 @@ var whisperRegistry = map[string]WhisperEntry{
 	},
 }
 
+// legacyWhisperSpecs stay resolvable for explicit saved settings, but do not
+// appear in the current model list. Their cache and automatic download behavior
+// is unchanged; the warning makes the compatibility status visible at startup.
+var legacyWhisperSpecs = map[string]string{
+	"tiny":                                "below the current large-v3-turbo comparison floor",
+	"tiny.en":                             "below the current large-v3-turbo comparison floor",
+	"base":                                "below the current large-v3-turbo comparison floor",
+	"base.en":                             "below the current large-v3-turbo comparison floor",
+	"small":                               "below the current large-v3-turbo comparison floor",
+	"small.en":                            "below the current large-v3-turbo comparison floor",
+	"medium":                              "below the current large-v3-turbo comparison floor",
+	"medium.en":                           "below the current large-v3-turbo comparison floor",
+	"large-v1":                            "superseded by Whisper large-v3",
+	"large-v2":                            "superseded by Whisper large-v3",
+	"kotoba-whisper":                      "superseded by the author's Kotoba-Whisper v2.2 checkpoint",
+	"kotoba-whisper-q5_0":                 "superseded by the author's Kotoba-Whisper v2.2 checkpoint",
+	"kotoba-whisper-v2.2-faster":          "third-party conversion; use the author's source checkpoint for comparison",
+	"RoachLin/kotoba-whisper-v2.2-faster": "third-party conversion; use the author's source checkpoint for comparison",
+}
+
 // ─── Llama レジストリ ─────────────────────────────────────────────────────────
 
 // LlamaEntry はレジストリ内の各モデルのメタデータ。
@@ -216,8 +236,7 @@ var llamaRegistry = map[string]LlamaEntry{
 	"qwen3.5:0.8b-q4_k_m": {
 		URL:         "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf",
 		MLXModelRef: "mlx-community/Qwen3.5-0.8B-MLX-4bit",
-		Template:    "qwen3",
-		HasThinking: true,
+		Template:    "qwen35",
 	},
 	"qwen3.5:2b-q4_k_m": {
 		URL:         "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf",
@@ -323,6 +342,38 @@ var llamaRegistry = map[string]LlamaEntry{
 	},
 }
 
+// legacyLlamaSpecs retains explicit configuration and cache compatibility.
+// These aliases are omitted from sortedLlamaKeys, the user-visible list of
+// current comparison choices. Qwen3.5 0.8B remains the existing reproduction
+// baseline until a replacement passes local quality and M1 integration gates.
+var legacyLlamaSpecs = map[string]string{
+	"qwen2.5:7b-instruct-q4_k_m":  "superseded by newer Qwen generations and outside the 0.8B-4B comparison band",
+	"qwen2.5:14b-instruct-q4_k_m": "superseded by newer Qwen generations and outside the 0.8B-4B comparison band",
+	"qwen3:0.6b-q4_k_m":           "superseded by Qwen3.5/Qwen3.8; no model-specific qualification in this project",
+	"qwen3:1.7b-q4_k_m":           "superseded by Qwen3.5/Qwen3.8; no model-specific qualification in this project",
+	"qwen3:4b-q4_k_m":             "superseded by Qwen3.5/Qwen3.8; no model-specific qualification in this project",
+	"qwen3:8b-q4_k_m":             "superseded by Qwen3.5/Qwen3.8 and outside the 0.8B-4B comparison band",
+	"qwen3.5:0.8b-q4_k_m":         "retained only as the reproduction baseline; not a current experimental recommendation",
+	"qwen3.5:2b-q4_k_m":           "thinking mode and the exact GGUF prompt contract are not verified by this project",
+	"qwen3.5:4b-q4_k_m":           "thinking mode and the exact GGUF prompt contract are not verified by this project",
+	"qwen3.5:9b-q4_k_m":           "outside the 0.8B-4B local translation comparison band",
+	"tencent/Hy-MT2-7B":           "outside the 0.8B-4B local translation comparison band",
+	"Hy-MT2-1.8B":                 "duplicate spelling of the canonical tencent/Hy-MT2-1.8B comparison candidate",
+	"Hy-MT2-1.8B-GGUF":            "duplicate spelling of the canonical tencent/Hy-MT2-1.8B comparison candidate",
+	"tencent/Hy-MT2-1.8B-GGUF":    "duplicate spelling of the canonical tencent/Hy-MT2-1.8B comparison candidate",
+	"Hy-MT2-7B":                   "outside the 0.8B-4B local translation comparison band",
+	"Hy-MT2-7B-GGUF":              "outside the 0.8B-4B local translation comparison band",
+	"Hy-MT2-7BGGUF":               "outside the 0.8B-4B local translation comparison band",
+	"tencent/Hy-MT2-7B-GGUF":      "outside the 0.8B-4B local translation comparison band",
+	"calm3:22b-q4_k_m":            "outside the 0.8B-4B local translation comparison band and the 10 GiB inference-process budget",
+	"bonsai-8b":                   "outside the 0.8B-4B band and depends on an unqualified nonstandard quantization/runtime",
+	"bonsai-4b":                   "community MLX conversion is not an evaluated comparison candidate",
+	"bonsai-1.7b":                 "community MLX conversion is not an evaluated comparison candidate",
+	"gemma4:e2b-q4_k_m":           "multimodal model's text-only load path and template are not verified in this application",
+	"gemma4:e4b-q4_k_m":           "multimodal model's text-only load path and template are not verified in this application",
+	"gemma4:26b-q4_k_m":           "outside the 0.8B-4B local translation comparison band and the 10 GiB inference-process budget",
+}
+
 // templateFor はモデル名からチャットテンプレート識別子を返す。
 // レジストリに存在しない場合はデフォルト "qwen" を返す。
 func templateFor(modelName string) string {
@@ -425,6 +476,9 @@ func resolveWhisperModel(spec string) (ResolvedWhisperModel, error) {
 		}
 		return ResolvedWhisperModel{}, fmt.Errorf("unknown whisper model: %q\n  available: %s", spec, sortedWhisperKeys())
 	}
+	if reason := legacyWhisperSpecs[canonicalSpec]; reason != "" {
+		fmt.Fprintf(os.Stderr, "[model] %q is a compatibility-only ASR alias: %s\n", spec, reason)
+	}
 
 	if entry.Backend != asrBackendWhisperCPP {
 		return ResolvedWhisperModel{
@@ -472,6 +526,9 @@ func resolveLlamaModel(spec string) (ResolvedLlamaModel, error) {
 
 	canonicalSpec := canonicalLlamaSpec(spec)
 	entry, ok := llamaRegistry[canonicalSpec]
+	if reason := legacyLlamaSpecs[canonicalSpec]; reason != "" {
+		fmt.Fprintf(os.Stderr, "[model] %q is a legacy translation entry: %s\n", spec, reason)
+	}
 	if ok && prefersMLX(entry) {
 		return ResolvedLlamaModel{
 			Backend:      llmBackendMLX,
@@ -527,7 +584,9 @@ func resolveLlamaModel(spec string) (ResolvedLlamaModel, error) {
 func sortedWhisperKeys() string {
 	keys := make([]string, 0, len(whisperRegistry)+2)
 	for k := range whisperRegistry {
-		keys = append(keys, k)
+		if _, legacy := legacyWhisperSpecs[k]; !legacy {
+			keys = append(keys, k)
+		}
 	}
 	sort.Strings(keys)
 	keys = append(keys, "sensevoice:<model-ref>", "whisperx:<model-name>")
@@ -537,7 +596,9 @@ func sortedWhisperKeys() string {
 func sortedLlamaKeys() string {
 	keys := make([]string, 0, len(llamaRegistry))
 	for k := range llamaRegistry {
-		keys = append(keys, k)
+		if _, legacy := legacyLlamaSpecs[k]; !legacy {
+			keys = append(keys, k)
+		}
 	}
 	sort.Strings(keys)
 	return strings.Join(keys, ", ")

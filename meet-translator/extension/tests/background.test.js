@@ -13,11 +13,24 @@ const backgroundScriptSource = fs.readFileSync(
   'utf8'
 );
 
-function loadBackgroundScript({ fetchImpl } = {}) {
+test('audio metadata requires a current session and stream generation', () => {
+  const { context } = loadBackgroundScript();
+  const generations = { mic: 3, tab: 7 };
+  const event = { sessionId: 'session-a', streamId: 'mic', streamGeneration: 3 };
+
+  assert.equal(context.isCurrentAudioMetadata(event, 'session-a', generations), true);
+  assert.equal(context.isCurrentAudioMetadata({ ...event, sessionId: 'session-old' }, 'session-a', generations), false);
+  assert.equal(context.isCurrentAudioMetadata({ ...event, streamGeneration: 2 }, 'session-a', generations), false);
+  assert.equal(context.isCurrentAudioMetadata({ ...event, streamId: 'mixed' }, 'session-a', generations), false);
+});
+
+function loadBackgroundScript({ fetchImpl, storageSettings = {}, setTimeoutImpl, clearTimeoutImpl } = {}) {
   const listeners = {
     onAlarm: null,
     onMessage: null,
   };
+  let storageAccessLevel = null;
+  const tabMessages = [];
 
   const chrome = {
     alarms: {
@@ -55,8 +68,14 @@ function loadBackgroundScript({ fetchImpl } = {}) {
     },
     storage: {
       local: {
-        async get() {
-          return {};
+        async get(keys) {
+          return Object.fromEntries(keys
+            .filter((key) => Object.prototype.hasOwnProperty.call(storageSettings, key))
+            .map((key) => [key, storageSettings[key]]));
+        },
+        setAccessLevel(options) {
+          storageAccessLevel = options.accessLevel;
+          return Promise.resolve();
         },
       },
     },
@@ -66,7 +85,8 @@ function loadBackgroundScript({ fetchImpl } = {}) {
       },
     },
     tabs: {
-      sendMessage() {
+      sendMessage(_tabId, message) {
+        tabMessages.push(message);
         return Promise.resolve({ success: true });
       },
     },
@@ -88,13 +108,11 @@ function loadBackgroundScript({ fetchImpl } = {}) {
     globalThis: null,
     importScripts() {},
     clearInterval() {},
-    clearTimeout() {},
+    clearTimeout: clearTimeoutImpl || clearTimeout,
     setInterval() {
       return 1;
     },
-    setTimeout() {
-      return 1;
-    },
+    setTimeout: setTimeoutImpl || setTimeout,
   };
 
   context.globalThis = context;
@@ -103,9 +121,123 @@ function loadBackgroundScript({ fetchImpl } = {}) {
   vm.runInNewContext(backgroundScriptSource, context, {
     filename: 'background.js',
   });
+  context.__testState = vm.runInNewContext('state', context);
 
-  return { chrome, context, listeners };
+  return { chrome, context, listeners, tabMessages, get storageAccessLevel() { return storageAccessLevel; } };
 }
+
+test('local API request timeout aborts a stalled fetch', async () => {
+  let observedSignal;
+  const { context } = loadBackgroundScript({
+    fetchImpl: async (_url, options) => {
+      observedSignal = options.signal;
+      return new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => {
+          const error = new Error('aborted');
+          error.name = 'AbortError';
+          reject(error);
+        }, { once: true });
+      });
+    },
+    setTimeoutImpl(callback) {
+      queueMicrotask(callback);
+      return 1;
+    },
+    clearTimeoutImpl() {},
+  });
+
+  await assert.rejects(context.fetchWithTimeout('http://localhost:17070/translate', {}, 1), {
+    name: 'AbortError',
+  });
+  assert.equal(observedSignal.aborted, true);
+});
+
+test('translateOnly sends the local API token only as a bearer header', async () => {
+  const requests = [];
+  const token = 'local-test-token-0123456789012345';
+  const { context } = loadBackgroundScript({
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return { ok: true, async json() { return { translation: 'こんにちは' }; } };
+    },
+  });
+
+  await context.translateOnly('hello', 'en', 'ja', {
+    serverUrl: 'http://localhost:17070',
+    apiToken: token,
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].options.headers.Authorization, `Bearer ${token}`);
+  assert.equal(requests[0].url.includes(token), false);
+  assert.equal(String(requests[0].options.body).includes(token), false);
+});
+
+test('refuses to send the bearer token to a non-loopback server URL', async () => {
+  const requests = [];
+  const { context } = loadBackgroundScript({
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return { ok: true, async json() { return { translation: 'translated' }; } };
+    },
+  });
+
+  await assert.rejects(
+    context.translateOnly('private text', 'en', 'ja', {
+      serverUrl: 'https://attacker.example',
+      apiToken: 'sensitive-test-token',
+    }),
+    /loopback/
+  );
+  assert.equal(requests.length, 0);
+});
+
+test('server health request reads the token from extension storage', async () => {
+  const requests = [];
+  const token = 'stored-token-012345678901234567890123';
+  const { context } = loadBackgroundScript({
+    storageSettings: {
+      serverUrl: 'http://localhost:17070',
+      apiToken: token,
+    },
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return { ok: true, async json() { return { status: 'ok' }; } };
+    },
+  });
+
+  const result = await context.checkServerHealth();
+  assert.equal(result.ok, true);
+  assert.equal(requests[0].options.headers.Authorization, `Bearer ${token}`);
+});
+
+test('restricts extension storage to trusted extension contexts', () => {
+  const { storageAccessLevel } = loadBackgroundScript();
+  assert.equal(storageAccessLevel, 'TRUSTED_CONTEXTS');
+});
+
+test('legacy chatEnabled setting never posts recognized or translated text to chat', async () => {
+  const { context, tabMessages } = loadBackgroundScript({
+    storageSettings: {
+      chatEnabled: true,
+      chatFormat: 'both',
+      overlayEnabled: true,
+    },
+    fetchImpl: async (url) => ({
+      ok: true,
+      async json() {
+        if (String(url).endsWith('/transcribe')) {
+          return { transcription: 'The meeting starts now', detected_language: 'en' };
+        }
+        return { translation: '会議は今始まります' };
+      },
+    }),
+  });
+
+  await context.processAudioChunk('AQID', 'Test Speaker', 7, 2000);
+
+  assert.equal(tabMessages.some((message) => message.type === 'POST_TRANSLATION'), false);
+});
 
 test('submitGlossaryFeedback trims source and target before posting to the server', async () => {
   const requests = [];
@@ -131,12 +263,12 @@ test('submitGlossaryFeedback trims source and target before posting to the serve
   });
 
   assert.equal(requests.length, 1);
-  assert.equal(requests[0].url, 'http://localhost:17070/glossary/corrections');
+  assert.equal(requests[0].url, 'http://127.0.0.1:17070/glossary/corrections');
 
   const payload = JSON.parse(requests[0].options.body);
   assert.equal(payload.source, 'get hub');
   assert.equal(payload.target, 'GitHub');
-  assert.match(payload.description, /^user-feedback \| speaker=Test Speaker \| original=get hub \| translation=translated$/);
+  assert.equal(payload.description, 'user-feedback | kind=correction');
 });
 
 test('resolveTranscriptionSourceLang keeps Whisper on auto-detect for bidirectional meetings', () => {
@@ -168,14 +300,23 @@ test('resolveTranscriptionSourceLang keeps Whisper on auto-detect for bidirectio
   );
 });
 
-test('shouldRequestTranscription drops very short utterances before calling the server', () => {
+test('shouldRequestTranscription requires positive VAD evidence instead of a duration floor', () => {
   const { context } = loadBackgroundScript();
 
+  const evidence = {
+    vadKind: 'energy',
+    speechDetected: true,
+    voicedDurationMs: 320,
+    utteranceDurationMs: 960,
+    clippingRatio: 0,
+  };
+  assert.equal(context.shouldRequestTranscription(320, evidence), true);
   assert.equal(context.shouldRequestTranscription(999), false);
-  assert.equal(context.shouldRequestTranscription(1000), true);
+  assert.equal(context.shouldRequestTranscription(320, { ...evidence, speechDetected: false }), false);
+  assert.equal(context.shouldRequestTranscription(320, { ...evidence, clippingRatio: 2 }), false);
 });
 
-test('transcribeOnly forwards speech duration to the server guardrails', async () => {
+test('transcribeOnly forwards speech evidence and preserves model diagnostics', async () => {
   const requests = [];
   const { context } = loadBackgroundScript({
     fetchImpl: async (url, options) => {
@@ -183,22 +324,97 @@ test('transcribeOnly forwards speech duration to the server guardrails', async (
       return {
         ok: true,
         async json() {
-          return { transcription: '', detected_language: '' };
+          return {
+            transcription: 'ご視聴ありがとうございました',
+            raw_text: 'Thank you for watching',
+            detected_language: 'ja',
+            backend: 'whisper.cpp',
+            segments: [{ start_ms: 0, end_ms: 900, avg_logprob: -0.91, no_speech_probability: 0.81 }],
+            quality_flags: ['LOW_LOGPROB', 'HIGH_NO_SPEECH', 'KNOWN_HALLUCINATION_PHRASE'],
+          };
         },
       };
     },
   });
 
-  await context.transcribeOnly(Buffer.from('RIFF').toString('base64'), {
+  const result = await context.transcribeOnly(Buffer.from('RIFF').toString('base64'), {
     serverUrl: 'http://localhost:17070',
     sourceLang: '',
     targetLang: 'ja',
     bidirectional: false,
-  }, 5123.8);
+  }, 5123.8, {
+    vadKind: 'energy',
+    speechDetected: true,
+    clippingRatio: 0.002,
+    voicedDurationMs: 5123.8,
+    utteranceDurationMs: 6000,
+  });
 
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, 'http://localhost:17070/transcribe');
   assert.equal(requests[0].options.body.get('speech_ms'), '5124');
+  assert.equal(requests[0].options.body.get('vad_kind'), 'energy');
+  assert.equal(requests[0].options.body.get('speech_detected'), 'true');
+  assert.equal(requests[0].options.body.get('clipping_ratio'), '0.002');
+  assert.equal(result.rawText, 'Thank you for watching');
+  assert.equal(result.backend, 'whisper.cpp');
+  assert.deepEqual(Array.from(result.qualityFlags), ['LOW_LOGPROB', 'HIGH_NO_SPEECH', 'KNOWN_HALLUCINATION_PHRASE']);
+  assert.equal(result.segments[0].avg_logprob, -0.91);
+});
+
+test('suspicious ASR output becomes a private candidate with its diagnostics', async () => {
+  const rpcMessages = [];
+  const { context } = loadBackgroundScript({
+    fetchImpl: async (url) => ({
+      ok: true,
+      async json() {
+        if (String(url).endsWith('/transcribe')) {
+          return {
+            transcription: 'ご視聴ありがとうございました',
+            raw_text: 'Thank you for watching',
+            detected_language: 'ja',
+            backend: 'whisper.cpp',
+            segments: [{ start_ms: 0, end_ms: 900, avg_logprob: -0.91, no_speech_probability: 0.81 }],
+            quality_flags: ['LOW_LOGPROB', 'HIGH_NO_SPEECH', 'KNOWN_HALLUCINATION_PHRASE'],
+          };
+        }
+        return { translation: 'ご視聴ありがとうございました' };
+      },
+    }),
+  });
+  const state = context.__testState;
+  state.isActive = true;
+  state.tabId = 7;
+  state.sessionId = 'session-a';
+  state.streamGenerations = { mic: 0, tab: 2 };
+  const port = {
+    postMessage(message) {
+      if (message.type !== 'CAPTION_RPC') return;
+      rpcMessages.push(message);
+      const result = message.action === 'upsert-candidate'
+        ? { ok: true, record: { ...message.payload.candidate, revision: 1 } }
+        : { ok: true, record: { segmentId: message.payload.segmentId } };
+      context.handleOffscreenPortMessage(port, {
+        type: 'CAPTION_RPC_RESULT',
+        requestId: message.requestId,
+        result,
+      });
+    },
+  };
+  state.offscreenPort = port;
+
+  await context.processAudioChunk('UklGRg==', null, 7, 900, {
+    sessionId: 'session-a', streamId: 'tab', streamGeneration: 2,
+    evidence: { vadKind: 'energy', speechDetected: true, voicedDurationMs: 900, utteranceDurationMs: 1100, clippingRatio: 0 },
+  });
+
+  const candidateRequest = rpcMessages.find((message) => message.action === 'upsert-candidate');
+  assert.ok(candidateRequest, 'ASR output should be stored for host review');
+  assert.equal(candidateRequest.payload.candidate.sourceText, 'ご視聴ありがとうございました');
+  assert.equal(candidateRequest.payload.candidate.rawText, 'Thank you for watching');
+  assert.ok(candidateRequest.payload.candidate.reasonCodes.includes('KNOWN_HALLUCINATION_PHRASE'));
+  assert.ok(candidateRequest.payload.candidate.reasonCodes.includes('LOW_LOGPROB'));
+  assert.equal(candidateRequest.payload.candidate.evidence.asrSegments[0].avgLogprob, -0.91);
 });
 
 test('resolveTranscriptLanguage rejects transcriptions outside the configured language set', () => {

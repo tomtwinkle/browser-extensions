@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title data-i18n="appTitle">Meet Auto-Translate Chat</title>
+  <title data-i18n="appTitle">Meet Translator</title>
   <style>
     * {
       box-sizing: border-box;
@@ -121,6 +121,19 @@
       cursor: not-allowed;
     }
 
+    .caption-page-button {
+      width: 100%;
+      margin-top: 8px;
+      padding: 9px 8px;
+      border: 1px solid #dadce0;
+      border-radius: 6px;
+      background: #fff;
+      color: #3c4043;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .caption-page-button:hover { background: #f8f9fa; }
+
     /* ---- quick toggles ---- */
     .quick-toggle-row {
       display: flex;
@@ -153,6 +166,13 @@
       display: none;
     }
 
+    #migration-notice {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #5f6368;
+      display: none;
+    }
+
     footer {
       margin-top: 14px;
       font-size: 11px;
@@ -168,20 +188,18 @@
   </style>
 </head>
 <body>
-  <h2 data-i18n="appTitle">Meet Auto-Translate Chat</h2>
+  <h2 data-i18n="appTitle">Meet Translator</h2>
 
   <div id="status-row">
     <div id="status-dot"></div>
     <span id="status-text" data-i18n="statusStopped">Stopped</span>
   </div>
 
-  <button id="toggle-btn" data-i18n="btnStart">Start Auto-Translate Chat</button>
+  <button id="toggle-btn" data-i18n="btnStart">Start local transcription</button>
 
-  <!-- quick toggles -->
-  <label class="quick-toggle-row" id="chat-enabled-row">
-    <input type="checkbox" id="chat-enabled-toggle">
-    <span class="quick-toggle-label">💬 チャットに投稿</span>
-  </label>
+  <button id="open-caption-share" class="caption-page-button" data-i18n="openCaptionShare">Open caption sharing tab</button>
+  <button id="open-correction-panel" class="caption-page-button" data-i18n="openCorrectionPanel">Open private corrections</button>
+
   <label class="quick-toggle-row" id="overlay-enabled-row">
     <input type="checkbox" id="overlay-enabled-toggle">
     <span class="quick-toggle-label">🖥 オーバーレイ表示</span>
@@ -201,12 +219,14 @@
   <div id="server-unavailable" data-i18n="serverUnavailable">⚠ Server not connected</div>
 
   <p id="error-msg"></p>
+  <p id="migration-notice"></p>
 
   <footer>
     <a id="settings-link" href="#" data-i18n="settingsLink">⚙ Settings</a>
     &nbsp;|&nbsp;<span data-i18n="footerOnly">Google Meet only</span>
   </footer>
 
+  <script src="shared.js"></script>
   <script src="i18n.js"></script>
   <script src="popup.js"></script>
 </body>
