@@ -344,6 +344,15 @@ func TestResolveWhisperModel_WhisperXUppercasePrefix(t *testing.T) {
 
 // ─── resolveLlamaModel ───────────────────────────────────────────────────────
 
+func TestCanonicalLlamaSpecLeavesUnspecifiedModelEmpty(t *testing.T) {
+	if got := canonicalLlamaSpec(""); got != "" {
+		t.Fatalf("canonical empty model = %q, want empty", got)
+	}
+	if got := templateFor(""); got != "qwen" {
+		t.Fatalf("template for an unspecified model = %q, want stable default qwen", got)
+	}
+}
+
 func TestResolveLlamaModel_ExistingFile(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "model-*.gguf")
 	if err != nil {
@@ -520,6 +529,51 @@ func TestResolveLlamaModel_QwenMLXPreferredOnAppleSilicon(t *testing.T) {
 	}
 	if got.ResolvedSpec != "mlx-community/Qwen3-0.6B-4bit" {
 		t.Errorf("resolved spec = %q, want %q", got.ResolvedSpec, "mlx-community/Qwen3-0.6B-4bit")
+	}
+}
+
+func TestRuntimeIdentityForModelSpecUsesExistingLocalFileBeforeMLXAlias(t *testing.T) {
+	patchPlatform(t, "darwin", "arm64")
+	const alias = "mlx-community/Qwen3-0.6B-4bit"
+
+	previousDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporaryDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(temporaryDir, filepath.Dir(alias)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(temporaryDir, alias), []byte("local model"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(temporaryDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previousDir); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+
+	resolved, err := resolveLlamaModel(alias)
+	if err != nil {
+		t.Fatalf("resolve local model file: %v", err)
+	}
+	if resolved.Backend != llmBackendLlamaCPP {
+		t.Fatalf("resolved backend = %q, want existing-file backend %q", resolved.Backend, llmBackendLlamaCPP)
+	}
+	if got, want := runtimeIdentityForModelSpec(alias), runtimeIdentityForResolvedModel(resolved); got != want {
+		t.Fatalf("runtime identity = %q, want resolved backend identity %q", got, want)
+	}
+
+	s := newServer(config{}, nil, nil, "", resolved, nil)
+	model, runtime := s.loadedLlamaIdentity()
+	if model != alias {
+		t.Fatalf("server model identity = %q, want startup alias %q", model, alias)
+	}
+	if want := runtimeIdentityForResolvedModel(resolved); runtime != want {
+		t.Fatalf("server runtime identity = %q, want resolved backend identity %q", runtime, want)
 	}
 }
 

@@ -174,4 +174,9 @@ test('audio queue drop counts are reported only to the private correction page',
   assert.ok(privateMessages.some((message) => message.type === 'CAPTION_QUEUE_STATUS' &&
     message.status.code === 'OVERLOAD' && message.status.droppedCount === 1 && message.status.droppedAudioMs === 1250));
   assert.equal(publicMessages.some((message) => message.type === 'CAPTION_QUEUE_STATUS'), false);
+
+  context.reportTranslationQueueDrop('TRANSLATION_STALE');
+  assert.ok(privateMessages.some((message) => message.type === 'CAPTION_TRANSLATION_QUEUE_STATUS' &&
+    message.status.code === 'TRANSLATION_STALE' && message.status.droppedCount === 1));
+  assert.equal(publicMessages.some((message) => message.type === 'CAPTION_TRANSLATION_QUEUE_STATUS'), false);
 });

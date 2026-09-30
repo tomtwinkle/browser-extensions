@@ -38,6 +38,10 @@ const MAX_SPEAKER_BATCH_DURATION_MS = 20000;
 const MAX_AUDIO_QUEUE_PENDING_ITEMS = 4;
 const MAX_AUDIO_QUEUE_PENDING_MS = 10_000;
 const MAX_AUDIO_QUEUE_STALE_MS = 5_000;
+const MAX_PENDING_TRANSLATION_ITEMS = 8;
+const MAX_PENDING_CORRECTION_LANE_CALLBACKS = MAX_PENDING_TRANSLATION_ITEMS;
+const MAX_TRANSLATION_WAIT_MS = 3_000;
+const MAX_TRANSLATION_AUDIO_AGE_MS = 8_000;
 const HEALTH_CHECK_INTERVAL_MS = 30_000;
 const HEALTH_CHECK_TIMEOUT_MS = 5_000;
 const API_REQUEST_TIMEOUT_MS = 30_000;
@@ -64,6 +68,10 @@ const state = {
   audioQueuePendingItems: 0,
   audioQueuePendingMs: 0,
   audioQueueStatus: { code: null, droppedCount: 0, droppedAudioMs: 0, updatedAtMs: null },
+  translationQueue: [],
+  translationQueueActive: null,
+  correctionLanePendingCallbacks: 0,
+  translationQueueStatus: { code: null, droppedCount: 0, updatedAtMs: null },
   offscreenPort: null,
   offscreenBootId: null,
   captionPersistQueue: Promise.resolve(),
@@ -163,6 +171,17 @@ function reportAudioQueueDrop(code, audioMs) {
     droppedCount: 1,
     droppedAudioMs: Math.round(audioMs),
   };
+}
+
+function reportTranslationQueueDrop(code) {
+  const status = state.translationQueueStatus;
+  status.code = code;
+  status.droppedCount += 1;
+  status.updatedAtMs = Date.now();
+  const message = { type: 'CAPTION_TRANSLATION_QUEUE_STATUS', status: { ...status } };
+  for (const port of state.captionPrivateClients) {
+    if (!postPortMessage(port, message)) state.captionPrivateClients.delete(port);
+  }
 }
 
 function sendPublicCaptionEvent(event) {
@@ -283,6 +302,7 @@ function handleOffscreenPortMessage(port, message) {
       state.sessionId = null;
       state.activeStreamIds = [];
       clearPendingSpeakerBatches();
+      clearPendingTranslationTasksForSession(oldSessionId);
       if (state.healthCheckTimer) clearInterval(state.healthCheckTimer);
       state.healthCheckTimer = null;
       if (oldTabId) dispatchToContentScript(oldTabId, { type: 'TRANSLATION_STOPPED', sessionId: oldSessionId }).catch(() => {});
@@ -324,6 +344,7 @@ function handleOffscreenPortMessage(port, message) {
       sessionId: message.sessionId,
       streamId: message.streamId,
       streamGeneration: message.streamGeneration,
+      audioEndedAtMs: Number.isFinite(message.audioEndedAtMs) ? message.audioEndedAtMs : null,
     };
     if (!state.isActive || !isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations) ||
         !shouldRequestTranscription(message.speechMs, message.evidence)) return;
@@ -340,6 +361,7 @@ function handleOffscreenPortMessage(port, message) {
 async function handleCaptionClientMessage(port, kind, message) {
   if (kind !== 'private' || message?.type !== 'CAPTION_ACTION') return;
   const action = message.action;
+  const correctionQueuedAtMs = action === 'correct' ? Date.now() : null;
   const payload = message.payload || {};
   let result;
   try {
@@ -349,25 +371,10 @@ async function handleCaptionClientMessage(port, kind, message) {
     result = await captionStoreRequest(action, payload);
     if (action === 'correct' && result?.ok && result.record?.translations?.length) {
       const translation = result.record.translations[0];
-      try {
-        const cfg = await getSettings();
-        const translated = await enqueueAudioTask(() => translateOnly(
-          result.record.sourceText,
-          result.record.sourceLanguage,
-          translation.targetLanguage,
-          cfg
-        ));
-        const translationResult = await captionStoreRequest('set-translation', {
-          segmentId: result.record.segmentId,
-          sourceRevision: result.record.sourceRevision,
-          targetLanguage: translation.targetLanguage,
-          text: translated,
-          state: translated ? 'ready' : 'failed',
-          allowHistorical: true,
-        });
-        if (translationResult?.ok && translationResult.record) result.record = translationResult.record;
-        else result.translationStale = true;
-      } catch (_) {
+      let correctionFailureRecorded = false;
+      const markCorrectionTranslationFailed = async (error) => {
+        if (correctionFailureRecorded) return;
+        correctionFailureRecorded = true;
         const translationResult = await captionStoreRequest('set-translation', {
           segmentId: result.record.segmentId,
           sourceRevision: result.record.sourceRevision,
@@ -377,6 +384,75 @@ async function handleCaptionClientMessage(port, kind, message) {
           allowHistorical: true,
         }).catch(() => {});
         if (translationResult?.ok && translationResult.record) result.record = translationResult.record;
+        result.translationStale = error?.reason === 'source-revision';
+        result.translationFailed = true;
+      };
+      try {
+        const cfg = await getSettings();
+        await enqueueTranslationTask(() => translateOnly(
+          result.record.sourceText,
+          result.record.sourceLanguage,
+          translation.targetLanguage,
+          cfg,
+          {
+            sessionId: result.record.sessionId,
+            streamId: result.record.streamId,
+            streamGeneration: result.record.streamGeneration,
+            segmentId: result.record.segmentId,
+            sourceRevision: result.record.sourceRevision,
+            sourceText: result.record.sourceText,
+          }
+        ), {
+          sessionId: result.record.sessionId,
+          streamId: result.record.streamId,
+          streamGeneration: result.record.streamGeneration,
+          segmentId: result.record.segmentId,
+          sourceRevision: result.record.sourceRevision,
+          sourceText: result.record.sourceText,
+          sourceLang: result.record.sourceLanguage,
+          targetLang: translation.targetLanguage,
+          serverUrl: cfg.serverUrl,
+          queuedAtMs: correctionQueuedAtMs,
+          ready: false,
+          onAdmitted: (job) => {
+            if (state.correctionLanePendingCallbacks >= MAX_PENDING_CORRECTION_LANE_CALLBACKS) {
+              const error = translationQueueError('TRANSLATION_OVERLOAD');
+              state.translationQueue = state.translationQueue.filter((pending) => pending !== job);
+              reportTranslationQueueDrop(error.code);
+              failTranslationJob(job, error, { report: false });
+              return;
+            }
+
+            state.correctionLanePendingCallbacks += 1;
+            enqueueAudioTask(async () => {
+              if (!state.translationQueue.includes(job)) return;
+              job.ready = true;
+              runNextTranslationTask();
+              await job.promise.catch(() => {});
+            }, { queuedAtMs: correctionQueuedAtMs }).then(
+              () => { state.correctionLanePendingCallbacks -= 1; },
+              () => { state.correctionLanePendingCallbacks -= 1; }
+            );
+          },
+          allowHistorical: true,
+          onResult: async (translated) => {
+            const translationResult = await captionStoreRequest('set-translation', {
+              segmentId: result.record.segmentId,
+              sourceRevision: result.record.sourceRevision,
+              targetLanguage: translation.targetLanguage,
+              text: translated,
+              state: translated ? 'ready' : 'failed',
+              allowHistorical: true,
+            });
+            if (translationResult?.ok && translationResult.record) result.record = translationResult.record;
+            else result.translationStale = true;
+          },
+          onFailure: async (error) => {
+            await markCorrectionTranslationFailed(error);
+          },
+        });
+      } catch (error) {
+        await markCorrectionTranslationFailed(error);
       }
     }
     postPortMessage(port, { type: 'CAPTION_ACTION_RESULT', requestId: message.requestId, action, result });
@@ -437,6 +513,7 @@ chrome.runtime.onConnect?.addListener?.((port) => {
           type: 'CAPTION_PRIVATE_SNAPSHOT',
           snapshot,
           queueStatus: { ...state.audioQueueStatus },
+          translationQueueStatus: { ...state.translationQueueStatus },
         });
       }
     })
@@ -649,9 +726,22 @@ async function transcribeOnly(wavB64, cfg, speechMs = null, evidence = null) {
  * @param {object}  cfg        - getSettings() の結果（serverUrl 取得用）
  * @returns {Promise<string|null>}
  */
-async function translateOnly(text, sourceLang, targetLang, cfg) {
+async function translateOnly(text, sourceLang, targetLang, cfg, identity = null) {
   const params = new URLSearchParams({ text, target_lang: targetLang });
   if (sourceLang) params.set('source_lang', sourceLang);
+  if (identity && typeof identity === 'object') {
+    const identityFields = {
+      sessionId: 'session_id',
+      streamId: 'audio_source',
+      streamGeneration: 'stream_generation',
+      segmentId: 'segment_id',
+      sourceRevision: 'source_revision',
+      sourceText: 'source_text',
+    };
+    for (const [key, field] of Object.entries(identityFields)) {
+      if (identity[key] !== undefined && identity[key] !== null) params.set(field, String(identity[key]));
+    }
+  }
 
   console.info('[background] translateOnly: POST', `${cfg.serverUrl}/translate`);
   const { translation } = await fetchWithTimeout(
@@ -844,6 +934,164 @@ function enqueueAudioTask(task, options = {}) {
   return next;
 }
 
+function translationQueueError(code, reason = null) {
+  const error = new Error(code === 'TRANSLATION_OVERLOAD'
+    ? 'translation queue is full'
+    : code === 'TRANSLATION_CONFLICT'
+      ? 'conflicting translation request for the same source revision'
+      : 'translation request became stale');
+  error.code = code;
+  error.reason = reason;
+  return error;
+}
+
+function translationScopeKey(options) {
+  if (typeof options.segmentId !== 'string' || !options.segmentId) return null;
+  return JSON.stringify([
+    options.sessionId ?? null,
+    options.streamId ?? null,
+    options.streamGeneration ?? null,
+    options.segmentId,
+  ]);
+}
+
+function translationRequestKey(options) {
+  return JSON.stringify([
+    options.sessionId ?? null,
+    options.streamId ?? null,
+    options.streamGeneration ?? null,
+    options.segmentId ?? null,
+    options.sourceRevision ?? null,
+    options.sourceText ?? null,
+    options.sourceLang ?? null,
+    options.targetLang ?? null,
+    options.serverUrl ?? null,
+    options.allowHistorical === true,
+  ]);
+}
+
+function failTranslationJob(job, error, { report = true } = {}) {
+  if (report && error?.code === 'TRANSLATION_STALE') reportTranslationQueueDrop(error.code);
+  Promise.resolve()
+    .then(() => job.onFailure?.(error))
+    .catch(() => {})
+    .finally(() => job.reject(error));
+}
+
+function translationJobIsStale(job, nowMs = Date.now()) {
+  return nowMs - job.queuedAtMs > MAX_TRANSLATION_WAIT_MS ||
+    (Number.isFinite(job.audioEndedAtMs) && nowMs - job.audioEndedAtMs > MAX_TRANSLATION_AUDIO_AGE_MS);
+}
+
+function expireStaleTranslationTasks(nowMs = Date.now()) {
+  const staleJobs = state.translationQueue.filter((job) => translationJobIsStale(job, nowMs));
+  if (staleJobs.length === 0) return;
+  state.translationQueue = state.translationQueue.filter((job) => !staleJobs.includes(job));
+  for (const stale of staleJobs) {
+    failTranslationJob(stale, translationQueueError('TRANSLATION_STALE', 'queue-expired'));
+  }
+}
+
+async function runNextTranslationTask() {
+  if (state.translationQueueActive) return;
+  expireStaleTranslationTasks();
+  const runnableIndex = state.translationQueue.findIndex((job) => job.ready);
+  if (runnableIndex < 0) return;
+  const [job] = state.translationQueue.splice(runnableIndex, 1);
+  if (!job) return;
+  state.translationQueueActive = job;
+  try {
+    const result = await job.task();
+    await job.onResult?.(result);
+    job.resolve(result);
+  } catch (error) {
+    failTranslationJob(job, error, { report: false });
+  } finally {
+    state.translationQueueActive = null;
+    runNextTranslationTask();
+  }
+}
+
+function enqueueTranslationTask(task, options = {}) {
+  if (typeof task !== 'function') return Promise.reject(new TypeError('translation task must be a function'));
+  const queuedAtMs = Number.isFinite(options.queuedAtMs) ? options.queuedAtMs : Date.now();
+  const audioEndedAtMs = Number.isFinite(options.audioEndedAtMs) ? options.audioEndedAtMs : null;
+  expireStaleTranslationTasks();
+  const scopeKey = translationScopeKey(options);
+  const requestKey = translationRequestKey(options);
+  const sourceRevision = Number.isSafeInteger(options.sourceRevision) ? options.sourceRevision : null;
+  const scopedJobs = [state.translationQueueActive, ...state.translationQueue].filter((job) =>
+    job && scopeKey && job.scopeKey === scopeKey && job.sourceRevision !== null
+  );
+
+  if (scopedJobs.length && sourceRevision !== null) {
+    const latestRevision = Math.max(...scopedJobs.map((job) => job.sourceRevision));
+    if (sourceRevision < latestRevision) {
+      const error = translationQueueError('TRANSLATION_STALE', 'source-revision');
+      reportTranslationQueueDrop(error.code);
+      return Promise.reject(error);
+    }
+    if (sourceRevision === latestRevision) {
+      const sameRevision = scopedJobs.find((job) => job.sourceRevision === sourceRevision);
+      if (requestKey === sameRevision.requestKey) return sameRevision.promise;
+      return Promise.reject(translationQueueError('TRANSLATION_CONFLICT'));
+    }
+    const obsolete = state.translationQueue.filter((job) =>
+      job.scopeKey === scopeKey && job.sourceRevision !== null && job.sourceRevision < sourceRevision
+    );
+    state.translationQueue = state.translationQueue.filter((job) => !obsolete.includes(job));
+    for (const job of obsolete) {
+      failTranslationJob(job, translationQueueError('TRANSLATION_STALE', 'source-revision'));
+    }
+  }
+
+  if (state.translationQueue.length >= MAX_PENDING_TRANSLATION_ITEMS) {
+    const error = translationQueueError('TRANSLATION_OVERLOAD');
+    reportTranslationQueueDrop(error.code);
+    const rejected = Promise.resolve()
+      .then(() => options.onFailure?.(error))
+      .catch(() => {})
+      .then(() => { throw error; });
+    return rejected;
+  }
+
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  const job = {
+    task,
+    onResult: options.onResult,
+    onFailure: options.onFailure,
+    sessionId: options.sessionId ?? null,
+    sourceRevision,
+    scopeKey,
+    requestKey,
+    queuedAtMs,
+    audioEndedAtMs,
+    isLiveAudio: options.isLiveAudio === true,
+    ready: options.ready !== false,
+    promise,
+    resolve,
+    reject,
+  };
+  state.translationQueue.push(job);
+  options.onAdmitted?.(job);
+  runNextTranslationTask();
+  return promise;
+}
+
+function clearPendingTranslationTasksForSession(sessionId) {
+  const pending = state.translationQueue.filter((job) => job.isLiveAudio && job.sessionId === sessionId);
+  if (pending.length === 0) return;
+  state.translationQueue = state.translationQueue.filter((job) => !pending.includes(job));
+  for (const job of pending) {
+    failTranslationJob(job, translationQueueError('TRANSLATION_STALE', 'session-ended'));
+  }
+}
+
 async function processAudioChunk(wavB64, speakerName, tabId, speechMs = null, audioMetadata = null) {
   // Live audio is accepted only with the active session and stream generation.
   // This also prevents legacy callers from publishing an untracked result.
@@ -949,24 +1197,53 @@ async function processAudioChunk(wavB64, speakerName, tabId, speechMs = null, au
 
   if (!needTranslation) return;
   try {
-    const translation = await translateOnly(textToTranslate, translSourceLang, translTargetLang, cfg);
-    if (!isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations)) return;
-    await captionStoreRequest('set-translation', {
+    await enqueueTranslationTask(() => {
+      if (!isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations)) {
+        throw translationQueueError('TRANSLATION_STALE', 'audio-session-changed');
+      }
+      return translateOnly(textToTranslate, translSourceLang, translTargetLang, cfg, {
+        sessionId: audioMetadata.sessionId,
+        streamId: audioMetadata.streamId,
+        streamGeneration: audioMetadata.streamGeneration,
+        segmentId,
+        sourceRevision: 1,
+        sourceText: transcription,
+      });
+    }, {
+      sessionId: audioMetadata.sessionId,
+      streamId: audioMetadata.streamId,
+      streamGeneration: audioMetadata.streamGeneration,
       segmentId,
       sourceRevision: 1,
-      targetLanguage: translTargetLang,
-      text: translation,
-      state: translation ? 'ready' : 'failed',
+      sourceText: transcription,
+      sourceLang: translSourceLang,
+      targetLang: translTargetLang,
+      serverUrl: cfg.serverUrl,
+      audioEndedAtMs: audioMetadata.audioEndedAtMs,
+      isLiveAudio: true,
+      onResult: async (translation) => {
+        if (!isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations)) return;
+        await captionStoreRequest('set-translation', {
+          segmentId,
+          sourceRevision: 1,
+          targetLanguage: translTargetLang,
+          text: translation,
+          state: translation ? 'ready' : 'failed',
+        });
+      },
+      onFailure: async () => {
+        await captionStoreRequest('set-translation', {
+          segmentId,
+          sourceRevision: 1,
+          targetLanguage: translTargetLang,
+          text: null,
+          state: 'failed',
+          allowHistorical: true,
+        }).catch(() => {});
+      },
     });
   } catch (_) {
-    if (!isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations)) return;
-    await captionStoreRequest('set-translation', {
-      segmentId,
-      sourceRevision: 1,
-      targetLanguage: translTargetLang,
-      text: null,
-      state: 'failed',
-    }).catch(() => {});
+    // Queue and inference failures are reflected on the candidate as failed.
   }
 }
 
@@ -1018,6 +1295,7 @@ async function handleAudioData(audioChunk, audioReservation = null) {
     sessionId: audioChunk?.sessionId,
     streamId: audioChunk?.streamId,
     streamGeneration: audioChunk?.streamGeneration,
+    audioEndedAtMs: Number.isFinite(audioChunk?.audioEndedAtMs) ? audioChunk.audioEndedAtMs : null,
     evidence: audioChunk?.evidence,
   };
   if (!isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations)) return;
@@ -1067,6 +1345,7 @@ async function handleAudioData(audioChunk, audioReservation = null) {
 
   appendSpeakerBatchChunk(pending, wavB64, speechMs, audioReservation);
   pending.totalDurationMs += durationMs;
+  pending.audioMetadata.audioEndedAtMs = audioMetadata.audioEndedAtMs;
   scheduleSpeakerBatchFlush();
 }
 
@@ -1228,6 +1507,7 @@ async function startCapture(tabId) {
     state.serverInfo = { whisperModel: health.whisperModel, llamaModel: health.llamaModel };
     clearPendingSpeakerBatches();
     state.audioQueueStatus = { code: null, droppedCount: 0, droppedAudioMs: 0, updatedAtMs: null };
+    state.translationQueueStatus = { code: null, droppedCount: 0, updatedAtMs: null };
 
     // Make sure the offscreen document is ready for audio processing
     await ensureOffscreenDocument();
@@ -1296,6 +1576,7 @@ async function stopCapture() {
   state.activeStreamIds = [];
   state.sessionId = null;
   clearPendingSpeakerBatches();
+  clearPendingTranslationTasksForSession(sessionId);
 
   // 定期ヘルスチェックを停止
   if (state.healthCheckTimer) {

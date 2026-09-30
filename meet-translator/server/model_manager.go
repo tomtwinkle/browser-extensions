@@ -406,6 +406,9 @@ func hasThinkingSupport(modelName string) bool {
 
 func canonicalLlamaSpec(spec string) string {
 	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return ""
+	}
 	if _, ok := llamaRegistry[spec]; ok {
 		return spec
 	}

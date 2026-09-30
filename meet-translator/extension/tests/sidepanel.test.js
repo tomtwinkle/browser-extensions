@@ -128,7 +128,71 @@ test('private panel reports dropped audio count and duration', () => {
     status: { code: 'OVERLOAD', droppedCount: 2, droppedAudioMs: 2750 },
   });
 
-  assert.match(elements.get('status').textContent, /累計2件・2\.8秒を破棄しました/);
+  assert.match(elements.get('status').textContent, /破棄した件数は累計2件・合計2\.8秒/);
+  assert.match(elements.get('status').textContent, /最新の区分は「音声処理の混雑」/);
+});
+
+test('private panel separates cumulative audio drops from the latest drop category', () => {
+  const { elements, emit } = loadSidepanel();
+  emit({
+    type: 'CAPTION_QUEUE_STATUS',
+    status: { code: 'STALE', droppedCount: 1, droppedAudioMs: 750 },
+  });
+  emit({
+    type: 'CAPTION_QUEUE_STATUS',
+    status: { code: 'OVERLOAD', droppedCount: 2, droppedAudioMs: 2750 },
+  });
+
+  assert.match(elements.get('status').textContent, /破棄した件数は累計2件・合計2\.8秒/);
+  assert.match(elements.get('status').textContent, /最新の区分は「音声処理の混雑」/);
+  assert.match(elements.get('status').textContent, /字幕履歴を確認してください/);
+});
+
+test('private panel reports stale translation drops and retained source', () => {
+  const { elements, emit } = loadSidepanel();
+  emit({
+    type: 'CAPTION_TRANSLATION_QUEUE_STATUS',
+    status: { code: 'TRANSLATION_STALE', droppedCount: 3 },
+  });
+
+  assert.match(elements.get('status').textContent, /開始せずに破棄した件数は累計3件/);
+  assert.match(elements.get('status').textContent, /最新の区分は「翻訳の期限切れ・原文\/セッション更新」/);
+  assert.match(elements.get('status').textContent, /原文は履歴に保持しました/);
+});
+
+test('private panel separates the cumulative drop total from the latest translation drop reason', () => {
+  const { elements, emit } = loadSidepanel();
+  emit({
+    type: 'CAPTION_TRANSLATION_QUEUE_STATUS',
+    status: { code: 'TRANSLATION_STALE', droppedCount: 1 },
+  });
+  emit({
+    type: 'CAPTION_TRANSLATION_QUEUE_STATUS',
+    status: { code: 'TRANSLATION_OVERLOAD', droppedCount: 2 },
+  });
+
+  assert.match(elements.get('status').textContent, /開始せずに破棄した件数は累計2件/);
+  assert.match(elements.get('status').textContent, /最新の区分は「翻訳処理の混雑」/);
+  assert.match(elements.get('status').textContent, /原文は履歴に保持しました/);
+});
+
+test('private panel reports a failed translation without claiming the source changed', () => {
+  const { elements, emit } = loadSidepanel();
+  const record = {
+    segmentId: 'segment-timeout', revision: 2, sourceRevision: 2, sessionId: 'session-a',
+    streamId: 'tab', sourceText: 'Unchanged corrected source', decision: 'uncertain', published: false,
+    translations: [{ targetLanguage: 'ja', sourceRevision: 2, state: 'failed', text: null }],
+  };
+  emit({ type: 'CAPTION_PRIVATE_SNAPSHOT', snapshot: { activeSessionId: 'session-a', records: [record] } });
+  elements.get('history').children[0].click();
+  emit({
+    type: 'CAPTION_ACTION_RESULT',
+    action: 'correct',
+    result: { ok: true, record, translationFailed: true },
+  });
+
+  assert.match(elements.get('status').textContent, /翻訳に失敗しました/);
+  assert.doesNotMatch(elements.get('status').textContent, /原文が更新された/);
 });
 
 test('100 incoming candidates keep the focused correction draft, selection, and target segment', () => {

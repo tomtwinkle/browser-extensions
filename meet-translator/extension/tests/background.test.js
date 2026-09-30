@@ -34,8 +34,8 @@ function makeWavBase64(durationMs) {
   return wav.toString('base64');
 }
 
-function sendAudioData(context, durationMs) {
-  context.handleOffscreenPortMessage({}, {
+function sendAudioData(context, durationMs, audioEndedAtMs = null) {
+  const message = {
     type: 'AUDIO_DATA',
     sessionId: 'session-a',
     streamId: 'tab',
@@ -49,7 +49,21 @@ function sendAudioData(context, durationMs) {
       utteranceDurationMs: durationMs,
       clippingRatio: 0,
     },
-  });
+  };
+  if (Number.isFinite(audioEndedAtMs)) message.audioEndedAtMs = audioEndedAtMs;
+  context.handleOffscreenPortMessage({}, message);
+}
+
+function setFakeClock(context, startMs) {
+  let now = startMs;
+  context.Date = class TestDate extends Date {
+    static now() { return now; }
+  };
+  return {
+    now: () => now,
+    set(value) { now = value; },
+    advance(delta) { now += delta; },
+  };
 }
 
 test('audio metadata requires a current session and stream generation', () => {
@@ -106,21 +120,461 @@ test('audio queue rejects aggregate duration overflow', async () => {
   }));
   await Promise.resolve();
 
-  const accepted = Array.from({ length: 3 }, () => context.enqueueAudioTask(
-    () => true,
-    { audioMs: 3000, queuedAtMs: Date.now() }
-  ));
+  const accepted = [
+    ...Array.from({ length: 3 }, () => context.enqueueAudioTask(
+      () => true,
+      { audioMs: 3000, queuedAtMs: Date.now() }
+    )),
+    context.enqueueAudioTask(() => true, { audioMs: 1000, queuedAtMs: Date.now() }),
+  ];
   let overflowTaskRan = false;
   const overflow = context.enqueueAudioTask(() => {
     overflowTaskRan = true;
-  }, { audioMs: 1500, queuedAtMs: Date.now() });
+  }, { audioMs: 1, queuedAtMs: Date.now() });
 
   releaseBlocker();
   const results = await Promise.all([blocker, ...accepted, overflow]);
   const overflowResult = results.at(-1);
   assert.equal(overflowResult.code, 'OVERLOAD');
-  assert.equal(overflowResult.droppedAudioMs, 1500);
+  assert.equal(overflowResult.droppedAudioMs, 1);
   assert.equal(overflowTaskRan, false);
+});
+
+test('translation wait and audio-age deadlines use strict fake-clock boundaries', async () => {
+  const cases = [
+    { name: 'wait D-1', waitMs: 2_999, audioAgeBeforeWaitMs: 0, accepted: true },
+    { name: 'wait D', waitMs: 3_000, audioAgeBeforeWaitMs: 0, accepted: true },
+    { name: 'wait D+1', waitMs: 3_001, audioAgeBeforeWaitMs: 0, accepted: false },
+    { name: 'audio age D-1', waitMs: 1_999, audioAgeBeforeWaitMs: 6_000, accepted: true },
+    { name: 'audio age D', waitMs: 2_000, audioAgeBeforeWaitMs: 6_000, accepted: true },
+    { name: 'audio age D+1', waitMs: 2_001, audioAgeBeforeWaitMs: 6_000, accepted: false },
+  ];
+
+  for (const tc of cases) {
+    const { context } = loadBackgroundScript();
+    const clock = setFakeClock(context, 10_000);
+    let releaseActive;
+    let markActiveStarted;
+    const activeStarted = new Promise((resolve) => { markActiveStarted = resolve; });
+    const active = context.enqueueTranslationTask(() => new Promise((resolve) => {
+      releaseActive = resolve;
+      markActiveStarted();
+    }), { segmentId: 'active', sourceRevision: 1 });
+    await activeStarted;
+
+    let queuedTaskRan = false;
+    const queued = context.enqueueTranslationTask(() => {
+      queuedTaskRan = true;
+      return 'queued';
+    }, {
+      segmentId: tc.name,
+      sourceRevision: 1,
+      queuedAtMs: clock.now(),
+      audioEndedAtMs: clock.now() - tc.audioAgeBeforeWaitMs,
+    });
+    const queuedOutcome = queued.then(
+      (value) => ({ value }),
+      (error) => ({ error })
+    );
+
+    clock.advance(tc.waitMs);
+    releaseActive('active');
+    await active;
+    const outcome = await queuedOutcome;
+    assert.equal(queuedTaskRan, tc.accepted, `${tc.name}: task execution`);
+    if (tc.accepted) {
+      assert.equal(outcome.value, 'queued', `${tc.name}: result`);
+    } else {
+      assert.equal(outcome.error?.code, 'TRANSLATION_STALE', `${tc.name}: drop reason`);
+    }
+  }
+});
+
+test('translation queue holds eight pending jobs and keeps only a newer pending source revision', async () => {
+  const { context } = loadBackgroundScript();
+  let releaseActive;
+  let markActiveStarted;
+  const activeStarted = new Promise((resolve) => { markActiveStarted = resolve; });
+  const active = context.enqueueTranslationTask(() => new Promise((resolve) => {
+    releaseActive = resolve;
+    markActiveStarted();
+  }), { segmentId: 'active', sourceRevision: 1 });
+  await activeStarted;
+
+  const oldRevisionOutcome = context.enqueueTranslationTask(() => 'old revision', {
+    segmentId: 'replace-me', sourceRevision: 1,
+  }).then(() => null, (error) => error);
+  const newRevision = context.enqueueTranslationTask(() => 'new revision', {
+    segmentId: 'replace-me', sourceRevision: 2,
+  });
+  assert.equal(context.__testState.translationQueue.length, 1);
+  assert.equal((await oldRevisionOutcome)?.code, 'TRANSLATION_STALE');
+
+  const pending = Array.from({ length: 7 }, (_, index) => context.enqueueTranslationTask(
+    () => index,
+    { segmentId: `segment-${index}`, sourceRevision: 1 }
+  ));
+  const overflow = context.enqueueTranslationTask(() => 'overflow', {
+    segmentId: 'segment-overflow', sourceRevision: 1,
+  }).then(() => null, (error) => error);
+  assert.equal(context.__testState.translationQueue.length, 8);
+  assert.equal((await overflow)?.code, 'TRANSLATION_OVERLOAD');
+
+  releaseActive('active');
+  await active;
+  const pendingResults = await Promise.all(pending);
+  assert.deepEqual(pendingResults, [0, 1, 2, 3, 4, 5, 6]);
+  assert.equal(await newRevision, 'new revision');
+  assert.equal(context.__testState.translationQueue.length, 0);
+});
+
+test('stale pending translations release capacity before a new admission', async () => {
+  const { context } = loadBackgroundScript();
+  const clock = setFakeClock(context, 10_000);
+  let releaseActive;
+  let markActiveStarted;
+  const activeStarted = new Promise((resolve) => { markActiveStarted = resolve; });
+  const active = context.enqueueTranslationTask(() => new Promise((resolve) => {
+    releaseActive = resolve;
+    markActiveStarted();
+  }), { segmentId: 'active', sourceRevision: 1 });
+  await activeStarted;
+
+  const oldPending = Array.from({ length: 8 }, (_, index) => context.enqueueTranslationTask(
+    () => `old-${index}`,
+    { segmentId: `old-${index}`, sourceRevision: 1 }
+  ).then(() => null, (error) => error));
+  assert.equal(context.__testState.translationQueue.length, 8);
+  clock.advance(3_001);
+  const fresh = context.enqueueTranslationTask(() => 'fresh', {
+    segmentId: 'fresh',
+    sourceRevision: 1,
+  });
+
+  assert.equal(context.__testState.translationQueue.length, 1);
+  const staleResults = await Promise.all(oldPending);
+  assert.ok(staleResults.every((error) => error?.code === 'TRANSLATION_STALE'));
+  releaseActive('done');
+  await active;
+  assert.equal(await fresh, 'fresh');
+});
+
+test('runnable translation work progresses around a correction waiting for the audio lane', async () => {
+  const { context } = loadBackgroundScript();
+  const state = context.__testState;
+  const order = [];
+  const correction = context.enqueueTranslationTask(() => {
+    order.push('correction');
+    return 'corrected';
+  }, {
+    segmentId: 'correction',
+    sourceRevision: 1,
+    ready: false,
+  });
+  const live = context.enqueueTranslationTask(() => {
+    order.push('live');
+    return 'live';
+  }, {
+    segmentId: 'live',
+    sourceRevision: 1,
+  });
+
+  assert.equal(await live, 'live');
+  assert.deepEqual(order, ['live']);
+  assert.equal(state.translationQueue.length, 1);
+  state.translationQueue[0].ready = true;
+  context.runNextTranslationTask();
+  assert.equal(await correction, 'corrected');
+  assert.deepEqual(order, ['live', 'correction']);
+});
+
+test('correction inference holds the serial audio lane until translation completes', async () => {
+  let releaseTranslation;
+  let markTranslationStarted;
+  let transcribeStarted = false;
+  const translationStarted = new Promise((resolve) => { markTranslationStarted = resolve; });
+  const pendingTranslation = new Promise((resolve) => { releaseTranslation = resolve; });
+  const { context } = loadBackgroundScript({
+    storageSettings: {
+      serverUrl: 'http://localhost:17070',
+      apiToken: 'local-test-token',
+    },
+    fetchImpl: async (url) => {
+      if (String(url).endsWith('/translate')) {
+        markTranslationStarted();
+        return await pendingTranslation;
+      }
+      transcribeStarted = true;
+      return { ok: true, async json() { return { transcription: 'ASR result' }; } };
+    },
+  });
+  const state = context.__testState;
+  const port = {
+    postMessage(message) {
+      if (message.type !== 'CAPTION_RPC') return;
+      const record = message.action === 'correct'
+        ? {
+            segmentId: 'corrected-segment',
+            sessionId: 'session-a',
+            streamId: 'tab',
+            streamGeneration: 2,
+            sourceRevision: 3,
+            sourceText: 'corrected source',
+            sourceLanguage: 'en',
+            translations: [{ targetLanguage: 'ja' }],
+          }
+        : { segmentId: 'corrected-segment' };
+      context.handleOffscreenPortMessage(port, {
+        type: 'CAPTION_RPC_RESULT',
+        requestId: message.requestId,
+        result: { ok: true, record },
+      });
+    },
+  };
+  state.offscreenPort = port;
+
+  const correction = context.handleCaptionClientMessage(port, 'private', {
+    type: 'CAPTION_ACTION',
+    action: 'correct',
+    requestId: 'correct-1',
+    payload: { segmentId: 'corrected-segment' },
+  });
+  for (let spin = 0; state.translationQueue.length === 0 && spin < 100; spin += 1) {
+    await Promise.resolve();
+  }
+  assert.equal(state.translationQueue.length, 1);
+  await translationStarted;
+
+  const followingAudioTask = context.enqueueAudioTask(async () => {
+    await context.transcribeOnly('UklGRg==', {
+      serverUrl: 'http://localhost:17070',
+      apiToken: 'local-test-token',
+      sourceLang: 'en',
+      targetLang: 'ja',
+      bidirectional: false,
+    }, 1_000, {
+      vadKind: 'energy',
+      speechDetected: true,
+      voicedDurationMs: 1_000,
+      utteranceDurationMs: 1_200,
+      clippingRatio: 0,
+    });
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  const transcribedDuringCorrection = transcribeStarted;
+  releaseTranslation({ ok: true, async json() { return { translation: '翻訳済み' }; } });
+  await Promise.all([correction, followingAudioTask]);
+  assert.equal(transcribedDuringCorrection, false,
+    'the next ASR item must wait for correction inference to settle');
+  assert.equal(transcribeStarted, true);
+});
+
+test('correction translations reserve bounded queue capacity and expire from action time', async () => {
+  const apiRequests = [];
+  const rpcActions = [];
+  const actionResults = [];
+  const { context } = loadBackgroundScript({
+    storageSettings: {
+      serverUrl: 'http://localhost:17070',
+      apiToken: 'local-test-token',
+      targetLang: 'ja',
+    },
+    fetchImpl: async (url, options) => {
+      apiRequests.push({ url, options });
+      return { ok: true, async json() { return { translation: 'translated' }; } };
+    },
+  });
+  const clock = setFakeClock(context, 10_000);
+  const state = context.__testState;
+  let releaseAudioLane;
+  let markAudioLaneStarted;
+  const audioLaneStarted = new Promise((resolve) => { markAudioLaneStarted = resolve; });
+  const audioLaneBlocker = context.enqueueAudioTask(() => new Promise((resolve) => {
+    releaseAudioLane = resolve;
+    markAudioLaneStarted();
+  }));
+  await audioLaneStarted;
+
+  const port = {
+    postMessage(message) {
+      if (message.type === 'CAPTION_RPC') {
+        rpcActions.push(message.action);
+        const record = {
+          segmentId: message.payload.segmentId,
+          sessionId: 'session-a',
+          streamId: 'tab',
+          streamGeneration: 2,
+          sourceRevision: 1,
+          sourceText: `source ${message.payload.segmentId}`,
+          sourceLanguage: 'en',
+          translations: [{ targetLanguage: 'ja' }],
+        };
+        context.handleOffscreenPortMessage(port, {
+          type: 'CAPTION_RPC_RESULT',
+          requestId: message.requestId,
+          result: message.action === 'correct'
+            ? { ok: true, record }
+            : { ok: true, record },
+        });
+      } else if (message.type === 'CAPTION_ACTION_RESULT') {
+        actionResults.push(message);
+      }
+    },
+  };
+  state.offscreenPort = port;
+
+  const corrections = Array.from({ length: 9 }, (_, index) => context.handleCaptionClientMessage(
+    port,
+    'private',
+    {
+      type: 'CAPTION_ACTION',
+      action: 'correct',
+      requestId: `correction-${index}`,
+      payload: { segmentId: `segment-${index}` },
+    }
+  ));
+
+  for (let spin = 0; (state.translationQueue.length < 8 ||
+      rpcActions.filter((action) => action === 'set-translation').length < 1) && spin < 100; spin += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  assert.equal(state.translationQueue.length, 8, 'corrections waiting for the audio lane count toward capacity');
+  assert.equal(state.correctionLanePendingCallbacks, 8,
+    'serial-lane activation callbacks have an independent hard bound');
+  assert.equal(apiRequests.length, 0, 'corrections do not infer before their serial-lane turn');
+  assert.equal(rpcActions.filter((action) => action === 'set-translation').length, 1,
+    'the ninth correction is failed immediately when the pending limit is full');
+
+  clock.advance(3_001);
+  const retryCorrections = Array.from({ length: 8 }, (_, index) => context.handleCaptionClientMessage(
+    port,
+    'private',
+    {
+      type: 'CAPTION_ACTION',
+      action: 'correct',
+      requestId: `correction-retry-${index}`,
+      payload: { segmentId: `retry-segment-${index}` },
+    }
+  ));
+  await Promise.all(retryCorrections);
+  assert.equal(state.translationQueue.length, 0,
+    'new jobs are rejected while expired activation callbacks still occupy the bounded lane backlog');
+  assert.equal(state.correctionLanePendingCallbacks, 8);
+
+  releaseAudioLane();
+  await audioLaneBlocker;
+  await Promise.all(corrections);
+  await state.audioQueue;
+  assert.equal(state.correctionLanePendingCallbacks, 0,
+    'the activation bound is released after the serial lane consumes the callbacks');
+
+  assert.equal(apiRequests.filter(({ url }) => String(url).endsWith('/translate')).length, 0,
+    'expired corrections are never dispatched');
+  assert.equal(state.translationQueue.length, 0);
+  assert.equal(state.translationQueueStatus.code, 'TRANSLATION_OVERLOAD');
+  assert.equal(rpcActions.filter((action) => action === 'set-translation').length, 17,
+    'all correction records retain their source and receive translation failure state');
+  assert.equal(actionResults.length, 17);
+  assert.ok(actionResults.every(({ result }) => result.translationFailed === true));
+  assert.equal(actionResults.some(({ result }) => result.translationStale === true), false,
+    'queue deadline must not be reported as a newer source revision');
+});
+
+test('stale live translation is not sent and marks only its translation failed', async () => {
+  const requests = [];
+  const { context } = loadBackgroundScript({
+    storageSettings: { targetLang: 'ja' },
+    fetchImpl: async (url) => {
+      requests.push(String(url));
+      if (String(url).endsWith('/transcribe')) {
+        return {
+          ok: true,
+          async json() {
+            return {
+              transcription: 'hello there',
+              raw_text: 'hello there',
+              detected_language: 'en',
+              backend: 'test-double',
+              segments: [],
+              quality_flags: [],
+            };
+          },
+        };
+      }
+      return { ok: true, async json() { return { translation: 'こんにちは' }; } };
+    },
+  });
+  const clock = setFakeClock(context, 10_000);
+  const state = context.__testState;
+  state.isActive = true;
+  state.tabId = 7;
+  state.sessionId = 'session-a';
+  state.streamGenerations = { mic: 0, tab: 2 };
+
+  let releaseBlocker;
+  let markBlockerStarted;
+  const blockerStarted = new Promise((resolve) => { markBlockerStarted = resolve; });
+  const blocker = context.enqueueTranslationTask(() => new Promise((resolve) => {
+    releaseBlocker = resolve;
+    markBlockerStarted();
+  }), { segmentId: 'blocking', sourceRevision: 1 });
+  await blockerStarted;
+
+  const rpcMessages = [];
+  const port = {
+    postMessage(message) {
+      if (message.type !== 'CAPTION_RPC') return;
+      rpcMessages.push(message);
+      const record = message.action === 'upsert-candidate'
+        ? { ...message.payload.candidate, revision: 1 }
+        : {
+            segmentId: message.payload.segmentId,
+            sourceRevision: message.payload.sourceRevision,
+            translations: [{
+              targetLanguage: message.payload.targetLanguage,
+              sourceRevision: message.payload.sourceRevision,
+              state: message.payload.state,
+              text: message.payload.text,
+            }],
+          };
+      context.handleOffscreenPortMessage(port, {
+        type: 'CAPTION_RPC_RESULT',
+        requestId: message.requestId,
+        result: { ok: true, record },
+      });
+    },
+  };
+  state.offscreenPort = port;
+
+  const processing = context.processAudioChunk('UklGRg==', null, 7, 900, {
+    sessionId: 'session-a',
+    streamId: 'tab',
+    streamGeneration: 2,
+    audioEndedAtMs: clock.now() - 1_000,
+    evidence: {
+      vadKind: 'energy',
+      speechDetected: true,
+      voicedDurationMs: 900,
+      utteranceDurationMs: 1100,
+      clippingRatio: 0,
+    },
+  });
+  for (let attempt = 0; attempt < 20 && state.translationQueue.length === 0; attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(state.translationQueue.length, 1);
+  clock.advance(3_001);
+  releaseBlocker('released');
+  await blocker;
+  await processing;
+
+  const candidate = rpcMessages.find((message) => message.action === 'upsert-candidate');
+  const failedTranslation = rpcMessages.find((message) => message.action === 'set-translation');
+  assert.equal(candidate.payload.candidate.sourceText, 'hello there');
+  assert.equal(failedTranslation.payload.state, 'failed');
+  assert.equal(failedTranslation.payload.text, null);
+  assert.equal(requests.some((url) => url.endsWith('/translate')), false);
+  assert.equal(state.translationQueueStatus.code, 'TRANSLATION_STALE');
 });
 
 test('audio queue rechecks staleness before running queued work', async () => {
@@ -187,6 +641,28 @@ test('speaker batches retain their audio reservation and delayed flushes drop st
   assert.equal(state.audioQueuePendingItems, 0);
   assert.equal(state.audioQueuePendingMs, 0);
   assert.equal(state.audioQueueStatus.code, 'STALE');
+});
+
+test('speaker batch translation deadline uses the end time of its newest audio chunk', async () => {
+  const { context } = loadBackgroundScript({
+    setTimeoutImpl() { return 1; },
+    clearTimeoutImpl() {},
+  });
+  const state = context.__testState;
+  state.isActive = true;
+  state.tabId = 7;
+  state.sessionId = 'session-a';
+  state.streamGenerations = { mic: 0, tab: 1 };
+  context.getActiveSpeaker = async () => 'Test Speaker';
+
+  sendAudioData(context, 1_000, 1_000);
+  await state.audioQueue;
+  sendAudioData(context, 1_000, 2_250);
+  await state.audioQueue;
+
+  const batch = [...state.pendingSpeakerBatches.values()][0];
+  assert.equal(batch.audioMetadata.audioEndedAtMs, 2_250);
+  context.clearPendingSpeakerBatches();
 });
 
 test('speaker-batched audio stays within aggregate item and duration limits', async () => {
@@ -416,6 +892,40 @@ test('translateOnly sends the local API token only as a bearer header', async ()
   assert.equal(requests[0].options.headers.Authorization, `Bearer ${token}`);
   assert.equal(requests[0].url.includes(token), false);
   assert.equal(String(requests[0].options.body).includes(token), false);
+});
+
+test('translateOnly sends revision identity without adding transcript data to logs', async () => {
+  const requests = [];
+  const logs = [];
+  const { context } = loadBackgroundScript({
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return { ok: true, async json() { return { translation: 'こんにちは' }; } };
+    },
+  });
+  context.console.info = (...args) => logs.push(args.join(' '));
+
+  await context.translateOnly('translation input', 'en', 'ja', {
+    serverUrl: 'http://localhost:17070',
+    apiToken: 'local-test-token',
+  }, {
+    sessionId: 'session-a',
+    streamId: 'tab',
+    streamGeneration: 4,
+    segmentId: 'segment-a',
+    sourceRevision: 2,
+    sourceText: 'original reviewed source',
+  });
+
+  const body = new URLSearchParams(requests[0].options.body);
+  assert.equal(body.get('session_id'), 'session-a');
+  assert.equal(body.get('audio_source'), 'tab');
+  assert.equal(body.get('stream_generation'), '4');
+  assert.equal(body.get('segment_id'), 'segment-a');
+  assert.equal(body.get('source_revision'), '2');
+  assert.equal(body.get('source_text'), 'original reviewed source');
+  assert.equal(logs.join(' ').includes('original reviewed source'), false);
+  assert.equal(logs.join(' ').includes('translation input'), false);
 });
 
 test('refuses to send the bearer token to a non-loopback server URL', async () => {

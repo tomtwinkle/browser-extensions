@@ -48,6 +48,7 @@
     let sampleCount = 0;
     let voicedMs = 0;
     let currentSampleRate = null;
+    let audioEndedAtMs = null;
 
     function updateNoiseFloor(rms) {
       const clamped = Math.max(rms, MIN_NOISE_FLOOR_RMS);
@@ -83,6 +84,7 @@
       clippedSamples = 0;
       sampleCount = 0;
       voicedMs = 0;
+      audioEndedAtMs = null;
     }
 
     function observe(samples, threshold, durationMs) {
@@ -112,6 +114,7 @@
         onUtterance({
           streamId,
           samples: speechSamples,
+          audioEndedAtMs: audioEndedAtMs ?? Date.now(),
           speechMs: voicedMs,
           sampleRate: currentSampleRate,
           evidence: {
@@ -176,7 +179,10 @@
             speechMs = 0;
             for (const chunk of speechSamples) {
               const chunkRms = observe(chunk, quietThreshold, (chunk.length / sampleRate) * 1000);
-              if (chunkRms >= quietThreshold) speechMs += (chunk.length / sampleRate) * 1000;
+              if (chunkRms >= quietThreshold) {
+                speechMs += (chunk.length / sampleRate) * 1000;
+                audioEndedAtMs = Date.now();
+              }
             }
             silenceMs = 0;
             confirmMs = 0;
@@ -190,7 +196,10 @@
         speechSamples.push(frame);
         utteranceMs += frameMs;
         const frameRms = observe(frame, quietThreshold, frameMs);
-        if (frameRms >= quietThreshold) speechMs += frameMs;
+        if (frameRms >= quietThreshold) {
+          speechMs += frameMs;
+          audioEndedAtMs = Date.now();
+        }
 
         if (smoothedRms < quietThreshold) {
           silenceMs += frameMs;

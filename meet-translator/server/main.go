@@ -214,11 +214,15 @@ type server struct {
 	whisperMu sync.Mutex
 
 	// llama モデル管理 (modelMu で保護)
-	modelMu         sync.Mutex
-	llmBackend      llmBackend
-	loadedModelSpec string // 現在ロード中のモデル名またはパス
-	llamaOps        sync.WaitGroup
-	shuttingDown    atomic.Bool
+	modelMu                    sync.Mutex
+	modelIdentityMu            sync.RWMutex
+	llmBackend                 llmBackend
+	loadedModelSpec            string // 現在ロード中のモデル名またはパス
+	loadedLLMRuntime           string
+	llamaOps                   sync.WaitGroup
+	shuttingDown               atomic.Bool
+	translationFlights         *translationFlightGroup
+	translationRequestSequence atomic.Uint64
 
 	// 直近の発話履歴 (LLM few-shot context に使用)
 	// ※ Whisper initial_prompt には使用しない（hallucination による翻訳連鎖防止）
@@ -228,10 +232,11 @@ type server struct {
 	glossary *Glossary
 
 	// テスト時にモック実装を注入できる関数フィールド
-	transcribeFn  func(audioData []byte, lang string) (string, string, error)
-	translateFn   func(text, srcLang, tgtLang string, opts ModelOptions, history []contextEntry) (string, error)
-	swapModelFn   func(spec string) error
-	rawGenerateFn func(prompt string) (string, error)
+	transcribeFn            func(audioData []byte, lang string) (string, string, error)
+	translateFn             func(text, srcLang, tgtLang string, opts ModelOptions, history []contextEntry) (string, error)
+	translateWithGlossaryFn func(text, srcLang, tgtLang string, opts ModelOptions, history []contextEntry, termsHint string) (string, error)
+	swapModelFn             func(spec string) error
+	rawGenerateFn           func(prompt string) (string, error)
 }
 
 type asrResponse struct {
@@ -253,19 +258,40 @@ type transcribeAndTranslateResponse struct {
 	QualityFlags  []string     `json:"quality_flags,omitempty"`
 }
 
-func newServer(cfg config, transcriber transcriber, llm llmBackend, whisperSpec, llamaSpec string, glossary *Glossary) *server {
-	s := &server{
-		cfg:              cfg,
-		mux:              http.NewServeMux(),
-		transcriber:      transcriber,
-		whisperModelSpec: whisperSpec,
-		llmBackend:       llm,
-		loadedModelSpec:  llamaSpec,
-		contextBuf:       newContextBuffer(3),
-		glossary:         glossary,
+func (s *server) loadedLlamaIdentity() (string, string) {
+	s.modelIdentityMu.RLock()
+	defer s.modelIdentityMu.RUnlock()
+	model := s.loadedModelSpec
+	runtime := s.loadedLLMRuntime
+	if runtime == "" {
+		runtime = runtimeIdentityForModelSpec(model)
 	}
+	return model, runtime
+}
+
+func (s *server) setLoadedLlamaIdentity(model, runtime string) {
+	s.modelIdentityMu.Lock()
+	s.loadedModelSpec = model
+	s.loadedLLMRuntime = runtime
+	s.modelIdentityMu.Unlock()
+}
+
+func newServer(cfg config, transcriber transcriber, llm llmBackend, whisperSpec string, llamaModel ResolvedLlamaModel, glossary *Glossary) *server {
+	s := &server{
+		cfg:                cfg,
+		mux:                http.NewServeMux(),
+		transcriber:        transcriber,
+		whisperModelSpec:   whisperSpec,
+		llmBackend:         llm,
+		loadedModelSpec:    llamaModel.Spec,
+		contextBuf:         newContextBuffer(3),
+		glossary:           glossary,
+		translationFlights: newTranslationFlightGroup(),
+	}
+	s.loadedLLMRuntime = runtimeIdentityForResolvedModel(llamaModel)
 	// ASR handlers call the selected backend directly so available segment evidence is preserved.
 	s.translateFn = s.translateInternal
+	s.translateWithGlossaryFn = s.translateInternalWithGlossary
 	s.swapModelFn = s.swapModel
 	s.rawGenerateFn = s.generateRaw
 	s.mux.HandleFunc("GET /health", s.handleHealth)
@@ -401,9 +427,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	s.modelMu.Lock()
-	llamaModel := s.loadedModelSpec
-	s.modelMu.Unlock()
+	llamaModel, _ := s.loadedLlamaIdentity()
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":        "ok",
 		"whisper_model": s.whisperModelSpec,
@@ -562,7 +586,8 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 // handleTranslate はテキストを受け取り、LLM で翻訳のみを行う。
 // POST /translate  application/x-www-form-urlencoded:
 //
-//	text, target_lang, source_lang(optional), llama_model(optional), llama_options(optional)
+//	text, target_lang, source_lang(optional), source/session revision metadata,
+//	llama_model(optional), llama_options(optional)
 func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "failed to parse form: "+err.Error(), http.StatusBadRequest)
@@ -583,44 +608,92 @@ func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 
 	requestedModel := strings.TrimSpace(r.FormValue("llama_model"))
 	rawOpts := r.FormValue("llama_options")
+	sourceText := r.FormValue("source_text")
+	for attempt := 0; attempt < 3; attempt++ {
+		loadedModel, loadedRuntime := s.loadedLlamaIdentity()
+		effectiveModel := loadedModel
+		if requestedModel != "" {
+			effectiveModel = requestedModel
+		}
+		effectiveRuntime := loadedRuntime
+		if effectiveModel != loadedModel {
+			effectiveRuntime = runtimeIdentityForModelSpec(effectiveModel)
+		}
+		opts := parseModelOptions(rawOpts, effectiveModel)
+		history := s.contextBuf.Entries()
+		termsHint := s.glossary.TermsForPrompt()
+		identity := translationRequestIdentity{
+			Text: text, SourceText: sourceText, SourceLanguage: sourceLang, TargetLanguage: targetLang,
+			SessionID: r.FormValue("session_id"), AudioSource: r.FormValue("audio_source"),
+			StreamGeneration: r.FormValue("stream_generation"), SegmentID: r.FormValue("segment_id"),
+			SourceRevision: r.FormValue("source_revision"), ContextHistoryRevision: fingerprintContextHistory(history),
+			GlossaryRevision: fingerprintGlossaryTerms(termsHint),
+			RequestedModel:   requestedModel, Model: effectiveModel, Runtime: effectiveRuntime,
+			Quantization: quantizationForModelSpec(effectiveModel), Template: templateFor(effectiveModel),
+			DecodeSettings: opts, MaxTokens: 512, Temperature: 0.1,
+		}
+		if !hasStableTranslationIdentity(identity) {
+			identity.RequestNonce = strconv.FormatUint(s.translationRequestSequence.Add(1), 10)
+		}
+		key := fingerprintTranslationRequest(identity)
+		translation, err := s.translationFlights.do(r.Context(), key, func() (string, error) {
+			if err := s.startLlamaOp(); err != nil {
+				return "", err
+			}
+			defer s.endLlamaOp()
 
-	// LLM の few-shot context を modelMu 取得前に読む (ネストロック回避)
-	history := s.contextBuf.Entries()
+			actualModel, _ := s.loadedLlamaIdentity()
+			if requestedModel == "" && actualModel != loadedModel {
+				return "", errTranslationModelChanged
+			}
+			if requestedModel != "" && requestedModel != actualModel {
+				if err := s.swapModelFn(requestedModel); err != nil {
+					return "", fmt.Errorf("model swap failed: %w", err)
+				}
+				actualModel, _ = s.loadedLlamaIdentity()
+			}
+			actualOptions := parseModelOptions(rawOpts, actualModel)
+			var result string
+			var err error
+			if s.translateWithGlossaryFn != nil {
+				result, err = s.translateWithGlossaryFn(text, sourceLang, targetLang, actualOptions, history, termsHint)
+			} else {
+				result, err = s.translateFn(text, sourceLang, targetLang, actualOptions, history)
+			}
+			if err != nil {
+				return "", err
+			}
+			result = strings.TrimSpace(result)
+			// Only the inference owner mutates history; joined requests are read-only.
+			s.contextBuf.Add(contextEntry{Transcription: text, Translation: result})
+			return result, nil
+		})
 
-	// モデルのホットスワップと翻訳は排他制御。
-	// シャットダウン開始後の新規 llama 処理は 503 で明示的に拒否する。
-	if err := s.startLlamaOp(); err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	defer s.endLlamaOp()
-	if requestedModel != "" && requestedModel != s.loadedModelSpec {
-		if err := s.swapModelFn(requestedModel); err != nil {
-			log.Printf("[model] hot-swap failed: %v", err)
-			http.Error(w, "model swap failed: "+err.Error(), http.StatusInternalServerError)
+		if errors.Is(err, errTranslationModelChanged) {
+			continue
+		}
+		if err != nil {
+			if r.Context().Err() != nil {
+				return
+			}
+			log.Printf("[translate] %v", err)
+			http.Error(w, "translation failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-	}
-	opts := parseModelOptions(rawOpts, s.loadedModelSpec)
-	translation, err := s.translateFn(text, sourceLang, targetLang, opts, history)
-
-	if err != nil {
-		log.Printf("[translate] %v", err)
-		http.Error(w, "translation failed: "+err.Error(), http.StatusInternalServerError)
+		if r.Context().Err() != nil {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"translation": translation})
 		return
 	}
-	translation = strings.TrimSpace(translation)
-
-	// バッファに追加 (全ロック解放後, text = 直前の /transcribe の出力)
-	s.contextBuf.Add(contextEntry{Transcription: text, Translation: translation})
-
-	writeJSON(w, http.StatusOK, map[string]string{"translation": translation})
+	http.Error(w, "model configuration changed repeatedly; retry translation", http.StatusServiceUnavailable)
 }
 
 // swapModel は現在ロード中のモデルを解放して新しいモデルをロードする。
 // 呼び出し元は modelMu を保持している必要がある。
 func (s *server) swapModel(spec string) error {
-	log.Printf("[model] swapping llama model: %s -> %s", s.loadedModelSpec, spec)
+	oldSpec, _ := s.loadedLlamaIdentity()
+	log.Printf("[model] swapping llama model: %s -> %s", oldSpec, spec)
 
 	resolved, err := resolveLlamaModel(spec)
 	if err != nil {
@@ -638,7 +711,7 @@ func (s *server) swapModel(spec string) error {
 		}
 	}
 	s.llmBackend = newBackend
-	s.loadedModelSpec = spec
+	s.setLoadedLlamaIdentity(spec, runtimeIdentityForResolvedModel(resolved))
 	log.Printf("[model] llama model swapped: %s", spec)
 	return nil
 }
@@ -759,7 +832,7 @@ func run() error {
 	log.Printf("[glossary] loaded: %d corrections, %d terms  (path: %s)",
 		len(glossary.GetData().Corrections), len(glossary.GetData().Terms), glossaryFilePath())
 
-	srv := newServer(cfg, asrTranscriber, llm, originalWhisperSpec, originalModelSpec, glossary)
+	srv := newServer(cfg, asrTranscriber, llm, originalWhisperSpec, resolvedLlama, glossary)
 
 	// llamaModel の解放責任を server に委譲する。
 	// シャットダウン開始後は新規 llama 処理を止め、進行中の CGo 呼び出しが終わってから

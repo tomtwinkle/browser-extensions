@@ -20,8 +20,10 @@ A delayed batch alarm could then process stale audio outside the bound.
   or when it reaches the head of the queue. Recheck the oldest reservation
   before a speaker batch is inferred.
 - Drop an item as `OVERLOAD` when adding it exceeds either queue limit.
-- Report the cumulative drop reason, count, and audio duration only to the
-  private correction UI. Do not send transcript or audio data in this status.
+- Report cumulative dropped count and audio duration only to the private
+  correction UI, and label the latest drop category separately so mixed stale
+  and overload events do not attribute the whole total to one category. Do not
+  send transcript or audio data in this status.
 - After awaiting a speaker-change or maximum-duration flush, recheck the
   incoming item's session and stream generation before retaining it in a new
   batch. A stopped or superseded stream must not recreate retained audio.
@@ -37,10 +39,12 @@ lost; there is no persistent replay of meeting audio. Hosts can see overload or
 stale drops while the worker is active. This is visible loss handling, not a
 quality improvement.
 
-This is a partial T15 implementation. Translation deduplication/deadlines,
-evaluation telemetry, a shared inference lock, adaptive load control, and
-in-flight cancellation remain open. It does not qualify latency or memory on
-M1 Max; the profile remains `PROFILE_NOT_QUALIFIED`.
+This is a partial T15 implementation. In-flight translation coalescing and
+independent waiter cancellation are recorded in ADR 0012; the bounded
+extension translation admission queue and its expiry behavior are in ADR
+0013. Evaluation telemetry, ASR/MT shared inference lock, and adaptive load
+control remain open. It does not qualify latency or memory on M1 Max; the
+profile remains `PROFILE_NOT_QUALIFIED`.
 
 ## Evidence
 

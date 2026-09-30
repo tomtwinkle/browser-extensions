@@ -38,10 +38,11 @@ func newTestServer(t *testing.T, m mockFuncs) *server {
 			apiToken:        testAPIToken,
 			extensionOrigin: testExtensionOrigin,
 		},
-		mux:             http.NewServeMux(),
-		loadedModelSpec: "",
-		contextBuf:      newContextBuffer(3),
-		glossary:        loadGlossary(), // テスト用：空の辞書
+		mux:                http.NewServeMux(),
+		loadedModelSpec:    "",
+		contextBuf:         newContextBuffer(3),
+		glossary:           loadGlossary(), // テスト用：空の辞書
+		translationFlights: newTranslationFlightGroup(),
 	}
 	if m.transcribe != nil {
 		s.transcribeFn = m.transcribe
@@ -59,7 +60,7 @@ func newTestServer(t *testing.T, m mockFuncs) *server {
 		s.swapModelFn = m.swapModel
 	} else {
 		s.swapModelFn = func(spec string) error {
-			s.loadedModelSpec = spec
+			s.setLoadedLlamaIdentity(spec, runtimeIdentityForModelSpec(spec))
 			return nil
 		}
 	}

@@ -28,8 +28,26 @@
     const droppedSeconds = Number.isFinite(queueStatus.droppedAudioMs)
       ? (queueStatus.droppedAudioMs / 1000).toFixed(1)
       : '0.0';
-    const cause = queueStatus.code === 'OVERLOAD' ? '音声処理が混み合ったため' : '古くなった音声のため';
-    setStatus(`${cause}累計${droppedCount}件・${droppedSeconds}秒を破棄しました。字幕履歴を確認してください。`, true);
+    const latestReason = queueStatus.code === 'OVERLOAD' ? '音声処理の混雑' : '音声の期限切れ';
+    setStatus(
+      `音声を破棄した件数は累計${droppedCount}件・合計${droppedSeconds}秒です。` +
+        `最新の区分は「${latestReason}」。字幕履歴を確認してください。`,
+      true
+    );
+    return true;
+  }
+
+  function showTranslationQueueStatus(queueStatus) {
+    if (!['TRANSLATION_OVERLOAD', 'TRANSLATION_STALE'].includes(queueStatus?.code)) return false;
+    const droppedCount = Number.isSafeInteger(queueStatus.droppedCount) ? queueStatus.droppedCount : 0;
+    const latestReason = queueStatus.code === 'TRANSLATION_OVERLOAD'
+      ? '翻訳処理の混雑'
+      : '翻訳の期限切れ・原文/セッション更新';
+    setStatus(
+      `翻訳を開始せずに破棄した件数は累計${droppedCount}件です。` +
+        `最新の区分は「${latestReason}」。原文は履歴に保持しました。`,
+      true
+    );
     return true;
   }
 
@@ -144,6 +162,7 @@
       historyEmpty.hidden = records.size > 0;
       setStatus('接続中');
       showAudioQueueStatus(message.queueStatus);
+      showTranslationQueueStatus(message.translationQueueStatus);
       if (selectedSegmentId && records.has(selectedSegmentId)) selectRecord(selectedSegmentId);
       return;
     }
@@ -153,6 +172,10 @@
     }
     if (message.type === 'CAPTION_QUEUE_STATUS') {
       showAudioQueueStatus(message.status);
+      return;
+    }
+    if (message.type === 'CAPTION_TRANSLATION_QUEUE_STATUS') {
+      showTranslationQueueStatus(message.status);
       return;
     }
     if (message.type === 'CAPTION_ACTION_RESULT') {
@@ -166,9 +189,13 @@
           selectedRecord = records.get(result.record?.segmentId) || selectedRecord || result.record;
           sourceText.value = selectedRecord?.sourceText || '';
           dirty = false;
-          setStatus(result.translationStale
-            ? '翻訳中に原文が更新されたため、古い翻訳結果を破棄しました。'
-            : '訂正を保存しました。');
+          if (result.translationStale) {
+            setStatus('翻訳中に原文が更新されたため、古い翻訳結果を破棄しました。', true);
+          } else if (result.translationFailed) {
+            setStatus('訂正を保存しましたが、翻訳に失敗しました。原文は履歴に保持されています。', true);
+          } else {
+            setStatus('訂正を保存しました。');
+          }
         } else if (message.action === 'approve') {
           setStatus(result.record?.published
             ? '承認した字幕を共有しました。'

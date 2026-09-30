@@ -25,6 +25,7 @@ test('tab and microphone VAD pipelines retain separate speech state', () => {
 
   assert.equal(captured.length, 1);
   assert.equal(captured[0].streamId, 'mic');
+  assert.ok(Number.isFinite(captured[0].audioEndedAtMs));
   assert.ok(captured[0].speechMs >= 500);
   assert.ok(captured[0].samples.length > 0);
 });

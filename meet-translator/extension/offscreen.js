@@ -183,6 +183,7 @@ function emitIndependentUtterance(streamId, streamGeneration, sessionId, utteran
     type: 'AUDIO_DATA',
     wavB64: bufferToBase64(wavBuffer),
     speechMs: utterance.speechMs,
+    audioEndedAtMs: utterance.audioEndedAtMs,
     streamId,
     streamGeneration,
     sessionId,
