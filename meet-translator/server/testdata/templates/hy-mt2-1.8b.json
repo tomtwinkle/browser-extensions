@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "candidateId": "hy-mt2-1.8b",
+  "templateId": "hy",
+  "input": {
+    "sourceLanguage": "en",
+    "targetLanguage": "ja",
+    "sourceText": "Hello"
+  },
+  "expectedPrompt": "<｜hy_begin▁of▁sentence｜><｜hy_User｜>Translate the following text into Japanese. Note that you should only output the translated result without any additional explanation:\nHello<｜hy_Assistant｜>",
+  "thinkingMode": "no thinking toggle is sent",
+  "stopBehavior": "llama.cpp stops on vocabulary EOG; exact GGUF token and generated stop were not run"
+}

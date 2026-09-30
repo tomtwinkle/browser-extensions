@@ -102,3 +102,10 @@ func TestDefaultModelOptions_UnknownModel_ThinkingFalse(t *testing.T) {
 		t.Error("unknown model should default to Thinking=false")
 	}
 }
+
+func TestQwen35DefaultsToNonThinkingMode(t *testing.T) {
+	opts := defaultModelOptions("qwen3.5:0.8b-q4_k_m")
+	if opts.Thinking {
+		t.Fatal("Qwen3.5 should use its documented non-thinking default")
+	}
+}

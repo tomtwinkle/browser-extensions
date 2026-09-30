@@ -16,13 +16,6 @@ const backgroundScriptSource = fs.readFileSync(
 function loadBackgroundScript() {
   const intervalCallbacks = [];
   const chrome = {
-    alarms: {
-      create() {},
-      clear() {},
-      onAlarm: {
-        addListener() {},
-      },
-    },
     offscreen: {
       async createDocument() {},
       async closeDocument() {},
@@ -132,6 +125,7 @@ test('runPeriodicHealthCheck stops only after sustained failures plus confirmati
   ];
 
   context.checkServerHealth = async () => healthResults.shift() || { ok: false };
+  context.captionStoreRequest = async (action) => action === 'start-audio' ? { ok: true } : { ok: true };
 
   let stopCalls = 0;
   context.stopCapture = async () => {
@@ -167,6 +161,7 @@ test('runPeriodicHealthCheck resets the failure streak after a recovery', async 
   ];
 
   context.checkServerHealth = async () => healthResults.shift() || { ok: false };
+  context.captionStoreRequest = async (action) => action === 'start-audio' ? { ok: true } : { ok: true };
 
   let stopCalls = 0;
   context.stopCapture = async () => {

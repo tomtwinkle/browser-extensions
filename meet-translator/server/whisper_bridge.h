@@ -27,6 +27,8 @@ void whisper_bridge_free(whisper_context* ctx);
  *   initial_prompt: glossary などの補助ヒント。NULL または "" で無効。
  *   lang_out_buf:   Whisper が検出した言語コードの出力先 (e.g. "ja", "en", "vi")
  *   lang_out_size:  lang_out_buf のバイト数
+ *   segments_buf:   Whisper が返した区間とスコアを含む JSON 配列
+ *   segments_size:  segments_buf のバイト数
  *   戻り値: 0=成功
  */
 int whisper_bridge_transcribe(
@@ -39,21 +41,14 @@ int whisper_bridge_transcribe(
     int              output_buf_size,
     char*            lang_out_buf,
     int              lang_out_size,
+    char*            segments_buf,
+    int              segments_size,
     char*            error_buf,
     int              error_buf_size
 );
 
-/*
- * whisper_bridge_should_keep_segment
- *   Whisper の no-speech / logprob メトリクスを使って
- *   セグメントを採用するか判定する。1=採用, 0=破棄。
- */
-int whisper_bridge_should_keep_segment(
-    const char* text,
-    int         token_count,
-    float       avg_logprob,
-    float       no_speech_prob
-);
+/* Return whether a decoded Whisper segment contains displayable candidate text. */
+int whisper_bridge_has_candidate_text(const char* text, int token_count);
 
 #ifdef __cplusplus
 }

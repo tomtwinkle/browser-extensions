@@ -20,15 +20,29 @@ type mockFuncs struct {
 	swapModel  func(string) error
 }
 
+type detailedASRMock struct{ result ASRBackendResult }
+
+func (m detailedASRMock) Transcribe([]byte, string, string, func(string, ...any)) (string, string, error) {
+	return m.result.RawText, m.result.DetectedLanguage, nil
+}
+func (m detailedASRMock) TranscribeDetailed([]byte, string, string, func(string, ...any)) (ASRBackendResult, error) {
+	return m.result, nil
+}
+func (detailedASRMock) Close() error { return nil }
+
 func newTestServer(t *testing.T, m mockFuncs) *server {
 	t.Helper()
 	s := &server{
-		cfg:             config{port: "7070"},
-		mux:             http.NewServeMux(),
-		loadedModelSpec: "",
-		contextBuf:      newContextBuffer(3),
-		glossary:        loadGlossary(), // テスト用：空の辞書
-		improver:        nil,            // テスト中はバックグラウンド LLM 解析なし
+		cfg: config{
+			port:            "7070",
+			apiToken:        testAPIToken,
+			extensionOrigin: testExtensionOrigin,
+		},
+		mux:                http.NewServeMux(),
+		loadedModelSpec:    "",
+		contextBuf:         newContextBuffer(3),
+		glossary:           loadGlossary(), // テスト用：空の辞書
+		translationFlights: newTranslationFlightGroup(),
 	}
 	if m.transcribe != nil {
 		s.transcribeFn = m.transcribe
@@ -46,7 +60,7 @@ func newTestServer(t *testing.T, m mockFuncs) *server {
 		s.swapModelFn = m.swapModel
 	} else {
 		s.swapModelFn = func(spec string) error {
-			s.loadedModelSpec = spec
+			s.setLoadedLlamaIdentity(spec, runtimeIdentityForModelSpec(spec))
 			return nil
 		}
 	}
@@ -92,6 +106,15 @@ func buildAudioFormForPath(t *testing.T, path string, fields map[string]string, 
 	return req
 }
 
+func containsQualityFlag(flags []string, wanted string) bool {
+	for _, flag := range flags {
+		if flag == wanted {
+			return true
+		}
+	}
+	return false
+}
+
 // fakeWAV は最小限の WAV ヘッダー (有効なバイト列ではないが audio フォームに渡せる)。
 var fakeWAV = []byte("RIFF\x00\x00\x00\x00WAVEfmt ")
 
@@ -124,8 +147,11 @@ func TestHandleHealth_CORS(t *testing.T) {
 	s := newTestServer(t, mockFuncs{})
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.Host = "localhost:7070"
+	req.Header.Set("Origin", testExtensionOrigin)
+	req.Header.Set("Authorization", "Bearer "+testAPIToken)
 	s.ServeHTTP(w, req)
-	if w.Header().Get("Access-Control-Allow-Origin") != "*" {
+	if w.Header().Get("Access-Control-Allow-Origin") != testExtensionOrigin {
 		t.Errorf("CORS header missing: %v", w.Header())
 	}
 }
@@ -134,6 +160,10 @@ func TestHandleHealth_CORS_Preflight(t *testing.T) {
 	s := newTestServer(t, mockFuncs{})
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodOptions, "/health", nil)
+	req.Host = "localhost:7070"
+	req.Header.Set("Origin", testExtensionOrigin)
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	req.Header.Set("Access-Control-Request-Headers", "authorization")
 	s.ServeHTTP(w, req)
 	if w.Code != http.StatusNoContent {
 		t.Errorf("OPTIONS should return 204, got %d", w.Code)
@@ -359,8 +389,8 @@ func TestHandleTranscribeAndTranslate_SourceLangPassed(t *testing.T) {
 
 // ─── context buffer 連携テスト ────────────────────────────────────────────────
 
-func TestHandleTranscribeAndTranslate_RepeatFiltered(t *testing.T) {
-	// Whisper が直近の発話と同一テキストを返した場合（hallucination）は破棄する
+func TestHandleTranscribeAndTranslate_RepeatPreservedForReview(t *testing.T) {
+	// Repetition is a review diagnostic and must not erase the ASR candidate.
 	s := newTestServer(t, mockFuncs{
 		transcribe: func(_ []byte, _ string) (string, string, error) {
 			return "previous utterance", "", nil // 直前と同一
@@ -375,15 +405,16 @@ func TestHandleTranscribeAndTranslate_RepeatFiltered(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d", w.Code)
 	}
-	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["transcription"] != "" || resp["translation"] != "" {
-		t.Errorf("repeated transcription should be filtered, got transcription=%q translation=%q",
-			resp["transcription"], resp["translation"])
+	var resp transcribeAndTranslateResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Transcription != "previous utterance" || resp.Translation != "" || !containsQualityFlag(resp.QualityFlags, "REPEATED_TRANSCRIPTION") {
+		t.Errorf("expected repeated candidate with diagnostic and no translation, got %#v", resp)
 	}
 }
 
-func TestHandleTranscribeAndTranslate_RepeatedHistoryLoopFiltered(t *testing.T) {
+func TestHandleTranscribeAndTranslate_RepeatedHistoryLoopPreservedForReview(t *testing.T) {
 	translateCalled := false
 	phrase := "Let's move on to the next topic."
 	s := newTestServer(t, mockFuncs{
@@ -404,24 +435,26 @@ func TestHandleTranscribeAndTranslate_RepeatedHistoryLoopFiltered(t *testing.T) 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d", w.Code)
 	}
-	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["transcription"] != "" || resp["translation"] != "" {
-		t.Errorf("looped replay should be filtered, got transcription=%q translation=%q",
-			resp["transcription"], resp["translation"])
+	var resp transcribeAndTranslateResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Transcription != phrase+" "+phrase || resp.Translation != "" || !containsQualityFlag(resp.QualityFlags, "REPEATED_TRANSCRIPTION") {
+		t.Errorf("expected repeated candidate with diagnostic and no translation, got %#v", resp)
 	}
 	if translateCalled {
-		t.Error("translation should not be called for filtered loop hallucination")
+		t.Error("translation should not be called for a repeated candidate awaiting review")
 	}
 	if got := len(s.contextBuf.Entries()); got != 1 {
-		t.Errorf("filtered loop should not be added to context buffer, got %d entries", got)
+		t.Errorf("review candidate should not be added to context buffer, got %d entries", got)
 	}
 }
 
-func TestHandleTranscribe_MicroLoopFiltered(t *testing.T) {
+func TestHandleTranscribe_MicroLoopPreservedWithDiagnostic(t *testing.T) {
+	const transcript = "Project update starts now. Project update starts now. Project update starts now."
 	s := newTestServer(t, mockFuncs{
 		transcribe: func(_ []byte, _ string) (string, string, error) {
-			return strings.Repeat("Project update starts now. ", 3), "", nil
+			return transcript, "", nil
 		},
 	})
 
@@ -432,14 +465,161 @@ func TestHandleTranscribe_MicroLoopFiltered(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d", w.Code)
 	}
-	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["transcription"] != "" {
-		t.Errorf("micro-loop transcription should be filtered, got %q", resp["transcription"])
+	var resp asrResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Transcription != transcript || !containsQualityFlag(resp.QualityFlags, "REPEATED_TRANSCRIPTION") {
+		t.Errorf("expected loop candidate retained with diagnostic, got %#v", resp)
 	}
 }
 
-func TestHandleTranscribe_DoubleSentenceLoopFiltered(t *testing.T) {
+func TestHandleTranscribe_PreservesSuspiciousSpeechAsDiagnostic(t *testing.T) {
+	const transcript = "ご視聴ありがとうございました"
+	s := newTestServer(t, mockFuncs{
+		transcribe: func(_ []byte, _ string) (string, string, error) {
+			return transcript, "ja", nil
+		},
+	})
+
+	req := buildAudioFormForPath(t, "/transcribe", nil, fakeWAV)
+	w := httptest.NewRecorder()
+	s.handleTranscribe(w, req)
+
+	var response struct {
+		Transcription string   `json:"transcription"`
+		QualityFlags  []string `json:"quality_flags"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Transcription != transcript {
+		t.Fatalf("transcription = %q, want candidate text %q", response.Transcription, transcript)
+	}
+	if !containsQualityFlag(response.QualityFlags, "KNOWN_HALLUCINATION_PHRASE") {
+		t.Fatalf("quality_flags = %v, want known phrase diagnostic", response.QualityFlags)
+	}
+}
+
+func TestHandleTranscribe_PreservesSingleCharacterSpeech(t *testing.T) {
+	s := newTestServer(t, mockFuncs{
+		transcribe: func(_ []byte, _ string) (string, string, error) { return "I", "en", nil },
+	})
+
+	req := buildAudioFormForPath(t, "/transcribe", nil, fakeWAV)
+	w := httptest.NewRecorder()
+	s.handleTranscribe(w, req)
+
+	var response struct {
+		Transcription string `json:"transcription"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Transcription != "I" {
+		t.Fatalf("transcription = %q, want short spoken word retained", response.Transcription)
+	}
+}
+
+func TestHandleTranscribe_PreservesRepeatedCandidateAsDiagnostic(t *testing.T) {
+	const transcript = "previous utterance"
+	s := newTestServer(t, mockFuncs{
+		transcribe: func(_ []byte, _ string) (string, string, error) { return transcript, "en", nil },
+	})
+	s.contextBuf.Add(contextEntry{Transcription: transcript, Translation: "前の発話"})
+
+	req := buildAudioFormForPath(t, "/transcribe", nil, fakeWAV)
+	w := httptest.NewRecorder()
+	s.handleTranscribe(w, req)
+
+	var response struct {
+		Transcription string   `json:"transcription"`
+		QualityFlags  []string `json:"quality_flags"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Transcription != transcript {
+		t.Fatalf("transcription = %q, want repeated candidate retained", response.Transcription)
+	}
+	if !containsQualityFlag(response.QualityFlags, "REPEATED_TRANSCRIPTION") {
+		t.Fatalf("quality_flags = %v, want repeat diagnostic", response.QualityFlags)
+	}
+}
+
+func TestASRQualityFlagsUseWhisperScoresOnlyForWhisper(t *testing.T) {
+	logprob := -0.95
+	noSpeech := 0.83
+	segment := ASRSegment{AvgLogprob: &logprob, NoSpeechProbability: &noSpeech}
+	whisper := ASRBackendResult{Backend: string(asrBackendWhisperCPP), Segments: []ASRSegment{segment}}
+	other := ASRBackendResult{Backend: "other-asr", Segments: []ASRSegment{segment}}
+
+	whisperFlags := asrQualityFlags(whisper, "candidate", 1200, nil)
+	if !containsQualityFlag(whisperFlags, "LOW_LOGPROB") || !containsQualityFlag(whisperFlags, "HIGH_NO_SPEECH") {
+		t.Fatalf("Whisper flags = %v, want its score diagnostics", whisperFlags)
+	}
+	otherFlags := asrQualityFlags(other, "candidate", 1200, nil)
+	if containsQualityFlag(otherFlags, "LOW_LOGPROB") || containsQualityFlag(otherFlags, "HIGH_NO_SPEECH") {
+		t.Fatalf("other ASR inherited Whisper thresholds: %v", otherFlags)
+	}
+}
+
+func TestASRQualityFlagsKeepVADAndClippingLimitsDiagnostic(t *testing.T) {
+	speech := true
+	clipping := 0.02
+	flags := asrQualityFlags(ASRBackendResult{}, "candidate", 1200, nil, ASRRequestEvidence{
+		Present: true, VADKind: "energy", SpeechDetected: &speech, ClippingRatio: &clipping,
+	})
+	if !containsQualityFlag(flags, "INSUFFICIENT_EVIDENCE") || !containsQualityFlag(flags, "CLIPPING") {
+		t.Fatalf("flags = %v, want energy-VAD and clipping diagnostics", flags)
+	}
+	if !containsQualityFlag(asrQualityFlags(ASRBackendResult{}, "", 0, nil, ASRRequestEvidence{
+		Present: true, VADKind: "neural", SpeechDetected: &speech,
+	}), "EMPTY_WITH_SPEECH") {
+		t.Fatal("empty output with positive VAD evidence must remain an explicit diagnostic")
+	}
+}
+
+func TestHandleTranscribeReturnsWhisperSegmentEvidence(t *testing.T) {
+	logprob := -0.95
+	noSpeech := 0.83
+	startMs := 100.0
+	endMs := 870.0
+	s := newTestServer(t, mockFuncs{})
+	s.transcriber = detailedASRMock{result: ASRBackendResult{
+		Backend:          string(asrBackendWhisperCPP),
+		RawText:          "candidate",
+		DetectedLanguage: "en",
+		Segments: []ASRSegment{{
+			StartMs:             &startMs,
+			EndMs:               &endMs,
+			Text:                "candidate",
+			AvgLogprob:          &logprob,
+			NoSpeechProbability: &noSpeech,
+		}},
+	}}
+
+	req := buildAudioFormForPath(t, "/transcribe", nil, fakeWAV)
+	w := httptest.NewRecorder()
+	s.handleTranscribe(w, req)
+
+	var response asrResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.RawText != "candidate" || response.Backend != string(asrBackendWhisperCPP) || len(response.Segments) != 1 {
+		t.Fatalf("response lost backend segment evidence: %#v", response)
+	}
+	if response.Segments[0].AvgLogprob == nil || *response.Segments[0].AvgLogprob != logprob ||
+		response.Segments[0].NoSpeechProbability == nil || *response.Segments[0].NoSpeechProbability != noSpeech {
+		t.Fatalf("response lost Whisper scores: %#v", response.Segments[0])
+	}
+	if !containsQualityFlag(response.QualityFlags, "LOW_LOGPROB") || !containsQualityFlag(response.QualityFlags, "HIGH_NO_SPEECH") {
+		t.Fatalf("quality flags = %v, want Whisper score diagnostics", response.QualityFlags)
+	}
+}
+
+func TestHandleTranscribe_DoubleSentenceLoopPreservedWithDiagnostic(t *testing.T) {
 	s := newTestServer(t, mockFuncs{
 		transcribe: func(_ []byte, _ string) (string, string, error) {
 			return strings.Repeat("Project update starts now. ", 2), "", nil
@@ -453,14 +633,16 @@ func TestHandleTranscribe_DoubleSentenceLoopFiltered(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d", w.Code)
 	}
-	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["transcription"] != "" {
-		t.Errorf("double sentence loop should be filtered, got %q", resp["transcription"])
+	var resp asrResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Transcription == "" || !containsQualityFlag(resp.QualityFlags, "REPEATED_TRANSCRIPTION") {
+		t.Errorf("expected repeated candidate retained with diagnostic, got %#v", resp)
 	}
 }
 
-func TestHandleTranscribe_LongDurationShortTranscriptFiltered(t *testing.T) {
+func TestHandleTranscribe_LongDurationShortTranscriptPreservedWithDiagnostic(t *testing.T) {
 	s := newTestServer(t, mockFuncs{
 		transcribe: func(_ []byte, _ string) (string, string, error) {
 			return "hello", "", nil
@@ -474,10 +656,12 @@ func TestHandleTranscribe_LongDurationShortTranscriptFiltered(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d", w.Code)
 	}
-	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["transcription"] != "" {
-		t.Errorf("long-duration unclear transcription should be filtered, got %q", resp["transcription"])
+	var resp asrResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Transcription != "hello" || !containsQualityFlag(resp.QualityFlags, "LONG_DURATION_SHORT_TRANSCRIPTION") {
+		t.Errorf("expected short candidate retained with diagnostic, got %#v", resp)
 	}
 }
 
@@ -502,7 +686,7 @@ func TestHandleTranscribe_LongDurationShortAcknowledgementKept(t *testing.T) {
 	}
 }
 
-func TestHandleTranscribeAndTranslate_DominantRepeatedOutroFiltered(t *testing.T) {
+func TestHandleTranscribeAndTranslate_DominantRepeatedOutroPreservedForReview(t *testing.T) {
 	translateCalled := false
 	s := newTestServer(t, mockFuncs{
 		transcribe: func(_ []byte, _ string) (string, string, error) {
@@ -521,21 +705,22 @@ func TestHandleTranscribeAndTranslate_DominantRepeatedOutroFiltered(t *testing.T
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d", w.Code)
 	}
-	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["transcription"] != "" || resp["translation"] != "" {
-		t.Errorf("dominant repeated outro should be filtered, got transcription=%q translation=%q",
-			resp["transcription"], resp["translation"])
+	var resp transcribeAndTranslateResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Transcription == "" || resp.Translation != "" || !containsQualityFlag(resp.QualityFlags, "REPEATED_TRANSCRIPTION") {
+		t.Errorf("expected repeated outro retained with diagnostic, got %#v", resp)
 	}
 	if translateCalled {
-		t.Error("translation should not be called for filtered repeated outro hallucination")
+		t.Error("translation should not be called for a repeated candidate awaiting review")
 	}
 	if got := len(s.contextBuf.Entries()); got != 0 {
-		t.Errorf("filtered repeated outro should not be added to context buffer, got %d entries", got)
+		t.Errorf("repeated candidate should not be added to context buffer, got %d entries", got)
 	}
 }
 
-func TestHandleTranscribeAndTranslate_KnownHallucinationPhraseFiltered(t *testing.T) {
+func TestHandleTranscribeAndTranslate_KnownPhrasePreservedForReview(t *testing.T) {
 	translateCalled := false
 	s := newTestServer(t, mockFuncs{
 		transcribe: func(_ []byte, _ string) (string, string, error) {
@@ -554,18 +739,19 @@ func TestHandleTranscribeAndTranslate_KnownHallucinationPhraseFiltered(t *testin
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d", w.Code)
 	}
-	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["transcription"] != "" || resp["translation"] != "" {
-		t.Errorf("known hallucination phrase should be filtered, got transcription=%q translation=%q",
-			resp["transcription"], resp["translation"])
+	var resp transcribeAndTranslateResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Transcription == "" || resp.Translation != "" || !containsQualityFlag(resp.QualityFlags, "KNOWN_HALLUCINATION_PHRASE") {
+		t.Errorf("expected known phrase retained with diagnostic, got %#v", resp)
 	}
 	if translateCalled {
-		t.Error("translation should not be called for filtered known hallucination phrase")
+		t.Error("translation should not be called for a flagged candidate awaiting review")
 	}
 }
 
-func TestHandleTranscribeAndTranslate_LongDurationShortTranscriptFiltered(t *testing.T) {
+func TestHandleTranscribeAndTranslate_LongDurationShortTranscriptPreservedForReview(t *testing.T) {
 	translateCalled := false
 	s := newTestServer(t, mockFuncs{
 		transcribe: func(_ []byte, _ string) (string, string, error) {
@@ -584,14 +770,15 @@ func TestHandleTranscribeAndTranslate_LongDurationShortTranscriptFiltered(t *tes
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d", w.Code)
 	}
-	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["transcription"] != "" || resp["translation"] != "" {
-		t.Errorf("long-duration unclear transcription should be filtered, got transcription=%q translation=%q",
-			resp["transcription"], resp["translation"])
+	var resp transcribeAndTranslateResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Transcription != "hello" || resp.Translation != "" || !containsQualityFlag(resp.QualityFlags, "LONG_DURATION_SHORT_TRANSCRIPTION") {
+		t.Errorf("expected short candidate retained with diagnostic, got %#v", resp)
 	}
 	if translateCalled {
-		t.Error("translation should not be called for filtered long-duration unclear transcription")
+		t.Error("translation should not be called for a flagged candidate awaiting review")
 	}
 }
 
@@ -645,7 +832,9 @@ func TestServerEndToEnd(t *testing.T) {
 		},
 	})
 
-	ts := httptest.NewServer(s)
+	// Route behavior is covered here; ServeHTTP host/token validation has its own
+	// tests because httptest.NewServer chooses an ephemeral port.
+	ts := httptest.NewServer(s.mux)
 	defer ts.Close()
 
 	// Health check

@@ -11,9 +11,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 )
 
-const whisperSampleRate = 16000
+const (
+	whisperSampleRate       = 16000
+	resampleFilterRadius    = 31
+	resampleFilterWindowRad = math.Pi / resampleFilterRadius
+)
 
 type wavData struct {
 	samples    []float32
@@ -76,6 +81,9 @@ func parseWAV(r io.Reader) (*wavData, error) {
 			if err := binary.Read(r, binary.LittleEndian, &numChannels); err != nil {
 				return nil, err
 			}
+			if numChannels == 0 {
+				return nil, errors.New("WAV: channel count must be greater than zero")
+			}
 			if err := binary.Read(r, binary.LittleEndian, &sampleRate); err != nil {
 				return nil, err
 			}
@@ -133,28 +141,46 @@ func parseWAV(r io.Reader) (*wavData, error) {
 	}
 }
 
-// resampleTo16k は任意サンプルレートの float32 サンプル列を
-// 線形補間で 16kHz にリサンプリングする。
-// 元のサンプルレートが既に 16kHz なら何もせず返す。
+// resampleTo16k は窓付きsinc FIRフィルターでfloat32サンプル列を
+// 16kHzにリサンプリングする。ダウンサンプリング時はナイキスト周波数より
+// 手前でローパスし、折り返し成分が音声帯域へ混入するのを抑える。
 func resampleTo16k(samples []float32, srcRate uint32) []float32 {
 	if srcRate == whisperSampleRate {
 		return samples
 	}
+	if srcRate == 0 || len(samples) == 0 {
+		return nil
+	}
 	ratio := float64(srcRate) / float64(whisperSampleRate)
-	outLen := int(float64(len(samples)) / ratio)
+	outLen := int(math.Round(float64(len(samples)) / ratio))
 	if outLen == 0 {
 		return nil
 	}
 	out := make([]float32, outLen)
+	cutoff := 0.45 / math.Max(1, ratio)
 	for i := range out {
 		pos := float64(i) * ratio
-		idx := int(pos)
-		frac := float32(pos - float64(idx))
-		if idx+1 < len(samples) {
-			out[i] = samples[idx]*(1-frac) + samples[idx+1]*frac
-		} else {
-			out[i] = samples[idx]
+		center := int(math.Floor(pos))
+		start := max(0, center-resampleFilterRadius)
+		end := min(len(samples)-1, center+resampleFilterRadius)
+		var weightedSum, weightSum float64
+		for sampleIndex := start; sampleIndex <= end; sampleIndex++ {
+			distance := float64(sampleIndex) - pos
+			window := 0.54 + 0.46*math.Cos(resampleFilterWindowRad*distance)
+			weight := 2 * cutoff * sinc(2*cutoff*distance) * window
+			weightedSum += float64(samples[sampleIndex]) * weight
+			weightSum += weight
+		}
+		if math.Abs(weightSum) > 1e-12 {
+			out[i] = float32(weightedSum / weightSum)
 		}
 	}
 	return out
+}
+
+func sinc(value float64) float64 {
+	if math.Abs(value) < 1e-12 {
+		return 1
+	}
+	return math.Sin(math.Pi*value) / (math.Pi * value)
 }

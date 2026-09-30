@@ -55,11 +55,11 @@ func printFullHelp() {
 }
 
 func printWhisperHelp(w io.Writer) {
-	fmt.Fprintf(w, "  First-run floor keeps Whisper at %s%s%s.\n", colorCyan, firstRunWhisperModel, colorReset)
-	fmt.Fprintf(w, "  If the machine has plenty of headroom, autoconfig can step up to large-v3.\n")
-	fmt.Fprintf(w, "  Common manual choices:\n")
-	fmt.Fprintf(w, "    %s--whisper-model large-v3-turbo%s (default floor, 809MB)\n", colorCyan, colorReset)
-	fmt.Fprintf(w, "    %s--whisper-model large-v3%s       (highest accuracy, 3.1GB)\n", colorCyan, colorReset)
+	fmt.Fprintf(w, "  Comparison baseline: %s%s%s (not a quality or M1 qualification).\n", colorCyan, firstRunWhisperModel, colorReset)
+	fmt.Fprintf(w, "  Hardware capacity alone does not select a different model.\n")
+	fmt.Fprintf(w, "  Registered manual choices (not ranked or M1-qualified):\n")
+	fmt.Fprintf(w, "    %s--whisper-model large-v3-turbo%s\n", colorCyan, colorReset)
+	fmt.Fprintf(w, "    %s--whisper-model large-v3%s\n", colorCyan, colorReset)
 	fmt.Fprintf(w, "    %s--whisper-model kotoba-whisper%s (Kotoba-Whisper v2.0 GGML, JA-focused)\n", colorCyan, colorReset)
 	fmt.Fprintf(w, "    %s--whisper-model sensevoice%s     (SenseVoiceSmall via local Python worker)\n", colorCyan, colorReset)
 	fmt.Fprintf(w, "    %s--whisper-model whisperx%s       (WhisperX turbo, latest OpenAI Whisper model via local Python worker)\n", colorCyan, colorReset)
@@ -84,15 +84,11 @@ func printWhisperHelp(w io.Writer) {
 }
 
 func printLlamaHelp(w io.Writer) {
-	fmt.Fprintf(w, "  First-run ladder:\n")
-	fmt.Fprintf(w, "    %s--llama-model %s%s   (default floor, 0.6GB, Thinking)\n", colorCyan, firstRunLlamaModel, colorReset)
-	fmt.Fprintf(w, "    %s--llama-model bonsai-8b%s            (next step, 1-bit 8B, 1.15GB, Thinking)\n", colorCyan, colorReset)
-	fmt.Fprintf(w, "    %s--llama-model qwen3:8b-q4_k_m%s     (higher tier, 5.2GB, Thinking)\n", colorCyan, colorReset)
-	fmt.Fprintf(w, "    %s--llama-model calm3:22b-q4_k_m%s    (top tier, JA/EN specialist, 13GB, needs ~16GB VRAM)\n", colorCyan, colorReset)
-	fmt.Fprintf(w, "  Also available manually: bonsai-4b, bonsai-1.7b, qwen3.5:2b/4b/9b, qwen3:0.6b/1.7b/4b, qwen2.5:7b/14b, gemma4:e2b/e4b/26b.\n")
-	fmt.Fprintf(w, "  Hy-MT2 aliases: tencent/Hy-MT2-1.8B, Hy-MT2-1.8B-GGUF, Hy-MT2-7B, Hy-MT2-7BGGUF (downloads Tencent's official Q4_K_M GGUF builds).\n")
-	fmt.Fprintf(w, "  Apple Silicon (darwin/arm64): models with a known MLX variant use MLX automatically.\n")
-	fmt.Fprintf(w, "    current coverage: bonsai, qwen2.5, qwen3/3.5, gemma4, calm3\n")
+	fmt.Fprintf(w, "  Comparison baseline: %s%s%s (not a quality or M1 qualification).\n", colorCyan, firstRunLlamaModel, colorReset)
+	fmt.Fprintf(w, "  Hardware capacity alone does not select a different model.\n")
+	fmt.Fprintf(w, "  Other registered model aliases can be set manually; they are not ranked or M1-qualified here.\n")
+	fmt.Fprintf(w, "  Hy-MT2 aliases: tencent/Hy-MT2-1.8B, Hy-MT2-1.8B-GGUF, Hy-MT2-7B, Hy-MT2-7BGGUF.\n")
+	fmt.Fprintf(w, "  Backend selection is model-specific; the selected backend is not an M1 qualification.\n")
 	fmt.Fprintf(w, "    if uv is installed, MLX dependencies are provisioned automatically\n")
 	fmt.Fprintf(w, "    otherwise install them manually with:\n")
 	fmt.Fprintf(w, "      python3 -m pip install -r ./python/requirements-llm.txt\n")

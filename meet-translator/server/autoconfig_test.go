@@ -2,68 +2,36 @@ package main
 
 import "testing"
 
-func TestAutoSelectModels(t *testing.T) {
-	const GB = uint64(1 << 30)
-
-	tests := []struct {
-		name        string
-		ram         uint64
-		hasGPU      bool
-		wantWhisper string
-		wantLlama   string
+func TestAutoSelectModelsDoesNotEscalateFromHardwareCapacity(t *testing.T) {
+	const gib = uint64(1 << 30)
+	profiles := []struct {
+		name string
+		info SystemInfo
 	}{
-		// ── GPU あり (Metal / CUDA) ─────────────────────────────────────────────
-		{"GPU 64GB", 64 * GB, true, "large-v3-turbo", "calm3:22b-q4_k_m"},
-		{"GPU 32GB", 32 * GB, true, "medium", "calm3:22b-q4_k_m"},
-		{"GPU 16GB", 16 * GB, true, "small", "qwen3:8b-q4_k_m"},
-		{"GPU 8GB", 8 * GB, true, "small", "qwen3:8b-q4_k_m"},
-		{"GPU 4GB", 4 * GB, true, "small", "qwen3:4b-q4_k_m"},
-		{"GPU <4GB (2GB)", 2 * GB, true, "base", "qwen3.5:0.8b-q4_k_m"},
-		{"GPU 0B", 0, true, "base", "qwen3.5:0.8b-q4_k_m"},
-
-		// 境界値: ちょうどしきい値
-		{"GPU exactly 64GB", 64 * GB, true, "large-v3-turbo", "calm3:22b-q4_k_m"},
-		{"GPU just below 64GB", 64*GB - 1, true, "medium", "calm3:22b-q4_k_m"},
-		{"GPU exactly 8GB", 8 * GB, true, "small", "qwen3:8b-q4_k_m"},
-		{"GPU just below 8GB", 8*GB - 1, true, "small", "qwen3:4b-q4_k_m"},
-
-		// ── GPU なし (CPU のみ) ──────────────────────────────────────────────────
-		{"CPU 16GB", 16 * GB, false, "base", "qwen3.5:0.8b-q4_k_m"},
-		{"CPU 8GB", 8 * GB, false, "base", "qwen3.5:0.8b-q4_k_m"},
-		{"CPU 4GB", 4 * GB, false, "base", "qwen3.5:0.8b-q4_k_m"},
-		{"CPU <4GB (2GB)", 2 * GB, false, "tiny", "bonsai-8b"},
-		{"CPU 0B", 0, false, "tiny", "bonsai-8b"},
-
-		// 境界値: CPU しきい値
-		{"CPU exactly 16GB", 16 * GB, false, "base", "qwen3.5:0.8b-q4_k_m"},
-		{"CPU just below 16GB", 16*GB - 1, false, "base", "qwen3.5:0.8b-q4_k_m"},
-		{"CPU exactly 4GB", 4 * GB, false, "base", "qwen3.5:0.8b-q4_k_m"},
-		{"CPU just below 4GB", 4*GB - 1, false, "tiny", "bonsai-8b"},
+		{"m1-max-32gb-24gpu", SystemInfo{TotalRAMBytes: 32 * gib, HasGPU: true}},
+		{"large-gpu-system", SystemInfo{TotalRAMBytes: 128 * gib, HasGPU: true}},
+		{"small-cpu-system", SystemInfo{TotalRAMBytes: 2 * gib, HasGPU: false}},
+		{"32gb-cpu-system", SystemInfo{TotalRAMBytes: 32 * gib, HasGPU: false}},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			info := SystemInfo{TotalRAMBytes: tt.ram, HasGPU: tt.hasGPU}
-			gotW, gotL := AutoSelectModels(info)
-			if gotW != tt.wantWhisper {
-				t.Errorf("whisper: got %q, want %q", gotW, tt.wantWhisper)
+	for _, profile := range profiles {
+		t.Run(profile.name, func(t *testing.T) {
+			gotWhisper, gotLlama := AutoSelectModels(profile.info)
+			if gotWhisper != firstRunWhisperModel {
+				t.Errorf("whisper = %q, want baseline %q", gotWhisper, firstRunWhisperModel)
 			}
-			if gotL != tt.wantLlama {
-				t.Errorf("llama:   got %q, want %q", gotL, tt.wantLlama)
+			if gotLlama != firstRunLlamaModel {
+				t.Errorf("llama = %q, want baseline %q", gotLlama, firstRunLlamaModel)
 			}
 		})
 	}
 }
 
-func TestAutoSelectModels_AllInRegistry(t *testing.T) {
-	// 全ティアで選択されるモデルが実際のレジストリに登録されていることを確認する
-	allTiers := append(gpuTiers, cpuTiers...)
-	for _, tier := range allTiers {
-		if _, ok := whisperRegistry[tier.whisper]; !ok {
-			t.Errorf("whisper model %q is not in whisperRegistry", tier.whisper)
-		}
-		if _, ok := llamaRegistry[tier.llama]; !ok {
-			t.Errorf("llama model %q is not in llamaRegistry", tier.llama)
-		}
+func TestAutoSelectModelsBaselineIsRegistered(t *testing.T) {
+	if _, ok := whisperRegistry[firstRunWhisperModel]; !ok {
+		t.Fatalf("baseline whisper model %q is not in whisperRegistry", firstRunWhisperModel)
+	}
+	if _, ok := llamaRegistry[firstRunLlamaModel]; !ok {
+		t.Fatalf("baseline translation model %q is not in llamaRegistry", firstRunLlamaModel)
 	}
 }
