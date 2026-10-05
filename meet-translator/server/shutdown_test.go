@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -33,7 +34,7 @@ func TestStartLlamaOp_ShuttingDownReturnsError(t *testing.T) {
 	s := newTestServer(t, mockFuncs{})
 	s.beginShutdown()
 
-	err := s.startLlamaOp()
+	err := s.startLlamaOp(context.Background())
 	if !errors.Is(err, errServerShuttingDown) {
 		t.Fatalf("startLlamaOp() error = %v, want %v", err, errServerShuttingDown)
 	}
@@ -42,7 +43,7 @@ func TestStartLlamaOp_ShuttingDownReturnsError(t *testing.T) {
 func TestReleaseLlamaModel_WaitsForInFlightLlamaOp(t *testing.T) {
 	s := newTestServer(t, mockFuncs{})
 
-	if err := s.startLlamaOp(); err != nil {
+	if err := s.startLlamaOp(context.Background()); err != nil {
 		t.Fatalf("startLlamaOp() error = %v", err)
 	}
 

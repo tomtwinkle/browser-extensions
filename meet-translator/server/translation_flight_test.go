@@ -66,6 +66,30 @@ func waitForActiveTranslationFlights(t *testing.T, s *server, want int) {
 	t.Fatalf("active translation flights = %d, want %d", s.translationFlights.activeFlightCount(), want)
 }
 
+func TestTranslationFlightPanicCompletesFlightAndAllowsRetry(t *testing.T) {
+	group := newTranslationFlightGroup()
+
+	result, err := group.do(context.Background(), "panic-key", func(context.Context) (string, error) {
+		panic("backend panic")
+	})
+	if !errors.Is(err, errTranslationFlightPanicked) {
+		t.Fatalf("panic flight error = %v, want %v", err, errTranslationFlightPanicked)
+	}
+	if result != "" {
+		t.Fatalf("panic flight result = %q, want empty result", result)
+	}
+	if got := group.activeFlightCount(); got != 0 {
+		t.Fatalf("active flights after panic = %d, want 0", got)
+	}
+
+	result, err = group.do(context.Background(), "panic-key", func(context.Context) (string, error) {
+		return "retry succeeded", nil
+	})
+	if err != nil || result != "retry succeeded" {
+		t.Fatalf("retry result = %q, error = %v; want successful retry", result, err)
+	}
+}
+
 func TestHandleTranslateCoalescesTwentyIdenticalRequests(t *testing.T) {
 	var calls atomic.Int32
 	started := make(chan struct{})
@@ -483,5 +507,171 @@ func TestCancellingOneTranslationWaiterDoesNotCancelSharedWork(t *testing.T) {
 	}
 	if got := len(s.contextBuf.Entries()); got != 1 {
 		t.Fatalf("context entries = %d, want one side effect", got)
+	}
+}
+
+func TestCanceledTranslationOwnerDuringInferenceKeepsSharedResultForSurvivor(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	s := newTestServer(t, mockFuncs{
+		translate: func(string, string, string, ModelOptions, []contextEntry) (string, error) {
+			close(started)
+			<-release
+			return "completed after cancellation", nil
+		},
+	})
+	fields := map[string]string{
+		"text": "shared work", "source_text": "shared work", "source_lang": "en", "target_lang": "ja",
+		"session_id": "session-a", "audio_source": "tab", "stream_generation": "4",
+		"segment_id": "segment-a", "source_revision": "1",
+	}
+
+	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	ownerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		response, _ := runTranslationRequest(s, fields, ownerCtx)
+		ownerDone <- response
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("translation owner did not start")
+	}
+
+	survivorDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		response, _ := runTranslationRequest(s, fields, nil)
+		survivorDone <- response
+	}()
+	waitForActiveTranslationWaiters(t, s, 2)
+	cancelOwner()
+	close(release)
+
+	select {
+	case <-ownerDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled owner did not return after native inference completed")
+	}
+	select {
+	case survivor := <-survivorDone:
+		if survivor == nil || survivor.Code != http.StatusOK {
+			t.Fatalf("surviving waiter response = %#v, want 200", survivor)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("surviving translation waiter did not receive the result")
+	}
+	if got := len(s.contextBuf.Entries()); got != 1 {
+		t.Fatalf("context entries after shared translation = %d, want 1", got)
+	}
+}
+
+func TestCanceledTranslationOwnerWhileQueuedKeepsSurvivingWaiter(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseBlocker := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseBlocker()
+	s := newTestServer(t, mockFuncs{
+		translate: func(string, string, string, ModelOptions, []contextEntry) (string, error) {
+			close(started)
+			return "translated after queue wait", nil
+		},
+	})
+	fields := map[string]string{
+		"text": "queued shared work", "source_text": "queued shared work", "source_lang": "en", "target_lang": "ja",
+		"session_id": "session-a", "audio_source": "tab", "stream_generation": "4",
+		"segment_id": "segment-queued", "source_revision": "1",
+	}
+
+	blockerStarted := make(chan struct{})
+	blockerDone := make(chan error, 1)
+	go func() {
+		blockerDone <- s.runInference(context.Background(), "test-blocker", func() error {
+			close(blockerStarted)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-blockerStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("inference lane blocker did not start")
+	}
+
+	ownerCtx, cancelOwner := context.WithCancel(context.Background())
+	ownerDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		response, _ := runTranslationRequest(s, fields, ownerCtx)
+		ownerDone <- response
+	}()
+	waitForInferenceWaiters(t, s.inferenceGate, 1)
+
+	survivorDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		response, _ := runTranslationRequest(s, fields, nil)
+		survivorDone <- response
+	}()
+	waitForActiveTranslationWaiters(t, s, 2)
+	cancelOwner()
+	select {
+	case <-ownerDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled queued owner did not return promptly")
+	}
+
+	releaseBlocker()
+	if err := <-blockerDone; err != nil {
+		t.Fatalf("inference lane blocker: %v", err)
+	}
+	select {
+	case survivor := <-survivorDone:
+		if survivor == nil || survivor.Code != http.StatusOK {
+			t.Fatalf("surviving waiter response = %#v, want 200", survivor)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("surviving translation waiter did not finish")
+	}
+	if got := len(s.contextBuf.Entries()); got != 1 {
+		t.Fatalf("context entries after shared work = %d, want 1", got)
+	}
+}
+
+func TestTranslationFlightCancelsWorkWhenLastWaiterLeaves(t *testing.T) {
+	flights := newTranslationFlightGroup()
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	defer cancelRequest()
+	workStarted := make(chan struct{})
+	workCanceled := make(chan struct{})
+	requestDone := make(chan error, 1)
+	go func() {
+		_, err := flights.do(requestCtx, "flight-key", func(workCtx context.Context) (string, error) {
+			close(workStarted)
+			<-workCtx.Done()
+			close(workCanceled)
+			return "", workCtx.Err()
+		})
+		requestDone <- err
+	}()
+	select {
+	case <-workStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shared work did not start")
+	}
+	cancelRequest()
+	select {
+	case err := <-requestDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled waiter error = %v, want context canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled waiter did not leave")
+	}
+	select {
+	case <-workCanceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shared work context was not canceled after the final waiter left")
+	}
+	if got := flights.activeFlightCount(); got != 0 {
+		t.Fatalf("active flights after final waiter left = %d, want 0", got)
 	}
 }

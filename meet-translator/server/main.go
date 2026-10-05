@@ -213,6 +213,11 @@ type server struct {
 	// 音声認識バックエンド保護 (whisper.cpp / Python worker ともに直列化)
 	whisperMu sync.Mutex
 
+	// ASRと翻訳が共有するMetal/Core ML/MLX等の単一推論レーン。
+	inferenceGate *inferenceGate
+	// モデル切替とLLMバックエンド操作の所有権。待機中のHTTP要求もキャンセルできる。
+	llamaOperationGate *cancellablePermit
+
 	// llama モデル管理 (modelMu で保護)
 	modelMu                    sync.Mutex
 	modelIdentityMu            sync.RWMutex
@@ -284,6 +289,8 @@ func newServer(cfg config, transcriber transcriber, llm llmBackend, whisperSpec 
 		whisperModelSpec:   whisperSpec,
 		llmBackend:         llm,
 		loadedModelSpec:    llamaModel.Spec,
+		inferenceGate:      newInferenceGate(),
+		llamaOperationGate: newCancellablePermit(),
 		contextBuf:         newContextBuffer(3),
 		glossary:           glossary,
 		translationFlights: newTranslationFlightGroup(),
@@ -370,16 +377,23 @@ func (s *server) logVerbose(format string, args ...any) {
 
 var errServerShuttingDown = errors.New("server shutting down")
 
-// startLlamaOp は llama モデルを使う処理を直列化し、シャットダウン中の新規実行を拒否する。
-// シャットダウン側は shuttingDown を立てたあとに modelMu でバリアを張ってから
-// llamaOps.Wait() することで、モデル解放前に既存の CGo 呼び出し完了を待てる。
-func (s *server) startLlamaOp() error {
+// startLlamaOp は llama モデルを使う処理を直列化し、待機中のキャンセルと
+// シャットダウン中の新規実行拒否を行う。シャットダウン側は推論レーンを閉じた後、
+// modelMu でバリアを張って既存の CGo 呼び出し完了を待つ。
+func (s *server) startLlamaOp(ctx context.Context) error {
 	if s.shuttingDown.Load() {
 		return errServerShuttingDown
+	}
+	if s.llamaOperationGate == nil {
+		return errors.New("llama operation gate is not initialized")
+	}
+	if err := s.llamaOperationGate.lock(ctx); err != nil {
+		return err
 	}
 	s.modelMu.Lock()
 	if s.shuttingDown.Load() {
 		s.modelMu.Unlock()
+		s.llamaOperationGate.unlock()
 		return errServerShuttingDown
 	}
 	s.llamaOps.Add(1)
@@ -389,6 +403,7 @@ func (s *server) startLlamaOp() error {
 func (s *server) endLlamaOp() {
 	s.llamaOps.Done()
 	s.modelMu.Unlock()
+	s.llamaOperationGate.unlock()
 }
 
 func (s *server) beginShutdown() {
@@ -403,6 +418,9 @@ func (s *server) waitForLlamaIdle() {
 
 func (s *server) releaseLlamaModel() {
 	s.beginShutdown()
+	if s.inferenceGate != nil {
+		s.inferenceGate.closeAndWait()
+	}
 	s.waitForLlamaIdle()
 
 	s.modelMu.Lock()
@@ -414,6 +432,35 @@ func (s *server) releaseLlamaModel() {
 			log.Printf("[llm] shutdown warning: %v", err)
 		}
 	}
+}
+
+// runInference measures queue wait independently from the synchronous native
+// call. It logs only stage and durations in verbose mode; request text is never included.
+func (s *server) runInference(ctx context.Context, stage string, operation func() error) error {
+	if s.inferenceGate == nil {
+		return errors.New("shared inference gate is not initialized")
+	}
+	timing, err := s.inferenceGate.run(ctx, operation)
+	if !timing.StartedAt.IsZero() {
+		s.logVerbose("inference timing: stage=%s queue_wait_ms=%d execution_ms=%d",
+			stage, timing.QueueWait.Milliseconds(), timing.Execution.Milliseconds())
+	}
+	return err
+}
+
+func (s *server) transcribeWithInference(ctx context.Context, audioData []byte, sourceLang string) (ASRBackendResult, string, error) {
+	var result ASRBackendResult
+	var transcription string
+	err := s.runInference(ctx, "asr", func() error {
+		// Keep the backend-specific mutex as a defense against future callers
+		// that may need to protect the Whisper context independently.
+		s.whisperMu.Lock()
+		defer s.whisperMu.Unlock()
+		var err error
+		result, transcription, err = s.transcribeWithDetails(audioData, sourceLang)
+		return err
+	})
+	return result, transcription, err
 }
 
 // ---------------------------------------------------------------------------
@@ -469,14 +516,18 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 	requestedModel := strings.TrimSpace(r.FormValue("llama_model"))
 	rawOpts := r.FormValue("llama_options")
 
-	// ASR バックエンドは直列化して扱う。
-	s.whisperMu.Lock()
-	asrResult, transcription, transcribeErr := s.transcribeWithDetails(audioData, sourceLang)
-	s.whisperMu.Unlock()
+	// ASR uses the same accelerator lane as translation.
+	asrResult, transcription, transcribeErr := s.transcribeWithInference(r.Context(), audioData, sourceLang)
 
 	if transcribeErr != nil {
+		if r.Context().Err() != nil {
+			return
+		}
 		log.Printf("[transcribe] %v", transcribeErr)
 		http.Error(w, "transcription failed: "+transcribeErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	if r.Context().Err() != nil {
 		return
 	}
 	history := s.contextBuf.Entries()
@@ -499,24 +550,43 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 
 	// モデルのホットスワップと翻訳は排他制御 (llama のみ)。
 	// シャットダウン開始後の新規 llama 処理は 503 で明示的に拒否する。
-	if err := s.startLlamaOp(); err != nil {
+	if err := s.startLlamaOp(r.Context()); err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer s.endLlamaOp()
-	if requestedModel != "" && requestedModel != s.loadedModelSpec {
-		if err := s.swapModelFn(requestedModel); err != nil {
-			log.Printf("[model] hot-swap failed: %v", err)
-			http.Error(w, "model swap failed: "+err.Error(), http.StatusInternalServerError)
-			return
+	var modelSwapErr error
+	var translation string
+	translateErr := s.runInference(r.Context(), "translation", func() error {
+		if requestedModel != "" && requestedModel != s.loadedModelSpec {
+			if err := s.swapModelFn(requestedModel); err != nil {
+				modelSwapErr = err
+				return err
+			}
 		}
-	}
-	opts := parseModelOptions(rawOpts, s.loadedModelSpec)
-	translation, translateErr := s.translateFn(transcription, sourceLang, targetLang, opts, history)
+		opts := parseModelOptions(rawOpts, s.loadedModelSpec)
+		var err error
+		translation, err = s.translateFn(transcription, sourceLang, targetLang, opts, history)
+		return err
+	})
 
 	if translateErr != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		if modelSwapErr != nil {
+			log.Printf("[model] hot-swap failed: %v", modelSwapErr)
+			http.Error(w, "model swap failed: "+modelSwapErr.Error(), http.StatusInternalServerError)
+			return
+		}
 		log.Printf("[translate] %v", translateErr)
 		http.Error(w, "translation failed: "+translateErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	if r.Context().Err() != nil {
 		return
 	}
 	translation = strings.TrimSpace(translation)
@@ -561,14 +631,18 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 
 	sourceLang := r.FormValue("source_lang")
 	speechMs, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("speech_ms")))
-	// contextBuf 読み取りはロック外で行う (contextBuf 自身に内部ロックあり)
-	// Whisper は非スレッドセーフ – whisperMu で直列化
-	s.whisperMu.Lock()
-	asrResult, transcription, err := s.transcribeWithDetails(audioData, sourceLang)
-	s.whisperMu.Unlock()
+	// contextBuf reads happen outside the inference gate; its implementation is
+	// internally synchronized. The native ASR call shares the accelerator lane.
+	asrResult, transcription, err := s.transcribeWithInference(r.Context(), audioData, sourceLang)
 	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
 		log.Printf("[transcribe] %v", err)
 		http.Error(w, "transcription failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if r.Context().Err() != nil {
 		return
 	}
 	requestEvidence := parseASRRequestEvidence(r)
@@ -636,36 +710,40 @@ func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 			identity.RequestNonce = strconv.FormatUint(s.translationRequestSequence.Add(1), 10)
 		}
 		key := fingerprintTranslationRequest(identity)
-		translation, err := s.translationFlights.do(r.Context(), key, func() (string, error) {
-			if err := s.startLlamaOp(); err != nil {
+		translation, err := s.translationFlights.do(r.Context(), key, func(operationCtx context.Context) (string, error) {
+			if err := s.startLlamaOp(operationCtx); err != nil {
 				return "", err
 			}
 			defer s.endLlamaOp()
-
-			actualModel, _ := s.loadedLlamaIdentity()
-			if requestedModel == "" && actualModel != loadedModel {
-				return "", errTranslationModelChanged
-			}
-			if requestedModel != "" && requestedModel != actualModel {
-				if err := s.swapModelFn(requestedModel); err != nil {
-					return "", fmt.Errorf("model swap failed: %w", err)
-				}
-				actualModel, _ = s.loadedLlamaIdentity()
-			}
-			actualOptions := parseModelOptions(rawOpts, actualModel)
 			var result string
-			var err error
-			if s.translateWithGlossaryFn != nil {
-				result, err = s.translateWithGlossaryFn(text, sourceLang, targetLang, actualOptions, history, termsHint)
-			} else {
-				result, err = s.translateFn(text, sourceLang, targetLang, actualOptions, history)
-			}
+			err := s.runInference(operationCtx, "translation", func() error {
+				actualModel, _ := s.loadedLlamaIdentity()
+				if requestedModel == "" && actualModel != loadedModel {
+					return errTranslationModelChanged
+				}
+				if requestedModel != "" && requestedModel != actualModel {
+					if err := s.swapModelFn(requestedModel); err != nil {
+						return fmt.Errorf("model swap failed: %w", err)
+					}
+					actualModel, _ = s.loadedLlamaIdentity()
+				}
+				actualOptions := parseModelOptions(rawOpts, actualModel)
+				var err error
+				if s.translateWithGlossaryFn != nil {
+					result, err = s.translateWithGlossaryFn(text, sourceLang, targetLang, actualOptions, history, termsHint)
+				} else {
+					result, err = s.translateFn(text, sourceLang, targetLang, actualOptions, history)
+				}
+				return err
+			})
 			if err != nil {
 				return "", err
 			}
 			result = strings.TrimSpace(result)
 			// Only the inference owner mutates history; joined requests are read-only.
-			s.contextBuf.Add(contextEntry{Transcription: text, Translation: result})
+			if operationCtx.Err() == nil {
+				s.contextBuf.Add(contextEntry{Transcription: text, Translation: result})
+			}
 			return result, nil
 		})
 

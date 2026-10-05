@@ -13,6 +13,7 @@ import (
 )
 
 var errTranslationModelChanged = errors.New("translation model changed before inference started")
+var errTranslationFlightPanicked = errors.New("translation flight panicked")
 
 // translationRequestIdentity captures the logical source revision and every
 // model or context input that defines one in-flight translation. Its JSON
@@ -98,6 +99,8 @@ type translationFlight struct {
 	result  string
 	err     error
 	waiters int
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
 // translationFlightGroup joins only concurrent requests with identical input
@@ -111,7 +114,7 @@ func newTranslationFlightGroup() *translationFlightGroup {
 	return &translationFlightGroup{flights: make(map[string]*translationFlight)}
 }
 
-func (g *translationFlightGroup) do(ctx context.Context, key string, translate func() (string, error)) (string, error) {
+func (g *translationFlightGroup) do(ctx context.Context, key string, translate func(context.Context) (string, error)) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -128,26 +131,70 @@ func (g *translationFlightGroup) do(ctx context.Context, key string, translate f
 	if active := g.flights[key]; active != nil {
 		active.waiters++
 		g.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-active.done:
-			return active.result, active.err
-		}
+		return g.wait(ctx, key, active)
 	}
 
-	active := &translationFlight{done: make(chan struct{}), waiters: 1}
+	workCtx, cancel := context.WithCancel(context.Background())
+	active := &translationFlight{done: make(chan struct{}), waiters: 1, ctx: workCtx, cancel: cancel}
 	g.flights[key] = active
 	g.mu.Unlock()
+	go g.run(key, active, translate)
+	return g.wait(ctx, key, active)
+}
 
-	active.result, active.err = translate()
-	g.mu.Lock()
-	if g.flights[key] == active {
-		delete(g.flights, key)
+func (g *translationFlightGroup) wait(ctx context.Context, key string, active *translationFlight) (string, error) {
+	select {
+	case <-ctx.Done():
+		// Prefer a completed shared result if completion raced with cancellation.
+		select {
+		case <-active.done:
+			return active.result, active.err
+		default:
+		}
+		g.leave(key, active)
+		return "", ctx.Err()
+	case <-active.done:
+		return active.result, active.err
 	}
-	close(active.done)
+}
+
+func (g *translationFlightGroup) leave(key string, active *translationFlight) {
+	g.mu.Lock()
+	if active.waiters > 0 {
+		active.waiters--
+	}
+	if active.waiters == 0 {
+		select {
+		case <-active.done:
+		default:
+			if g.flights[key] == active {
+				delete(g.flights, key)
+			}
+			active.cancel()
+		}
+	}
 	g.mu.Unlock()
-	return active.result, active.err
+}
+
+func (g *translationFlightGroup) run(key string, active *translationFlight, translate func(context.Context) (string, error)) {
+	completed := false
+	defer func() {
+		if !completed {
+			// Do not propagate backend panic details, which can contain input text.
+			_ = recover()
+			active.result = ""
+			active.err = errTranslationFlightPanicked
+		}
+		g.mu.Lock()
+		if g.flights[key] == active {
+			delete(g.flights, key)
+		}
+		close(active.done)
+		g.mu.Unlock()
+		active.cancel()
+	}()
+	active.result, active.err = translate(active.ctx)
+	completed = true
 }
 
 // activeWaiters is kept small and private to support deterministic concurrency

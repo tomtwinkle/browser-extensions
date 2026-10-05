@@ -14,6 +14,7 @@ package main
 import "C"
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"unsafe"
@@ -120,14 +121,20 @@ func (s *server) translateInternalWithGlossary(text, sourceLang, targetLang stri
 // バックグラウンドの GlossaryImprover が解析プロンプトを送るために使用する。
 // startLlamaOp/endLlamaOp により通常の翻訳と直列化され、シャットダウン中は拒否される。
 func (s *server) generateRaw(prompt string) (string, error) {
-	if err := s.startLlamaOp(); err != nil {
+	if err := s.startLlamaOp(context.Background()); err != nil {
 		return "", err
 	}
 	defer s.endLlamaOp()
 
-	if s.llmBackend == nil {
-		return "", fmt.Errorf("llama model not initialized")
-	}
-	s.logVerbose("generateRaw: prompt len=%d", len(prompt))
-	return s.llmBackend.Generate(prompt, 1024, 0.1)
+	var result string
+	err := s.runInference(context.Background(), "llm-raw", func() error {
+		if s.llmBackend == nil {
+			return fmt.Errorf("llama model not initialized")
+		}
+		s.logVerbose("generateRaw: prompt len=%d", len(prompt))
+		var err error
+		result, err = s.llmBackend.Generate(prompt, 1024, 0.1)
+		return err
+	})
+	return result, err
 }

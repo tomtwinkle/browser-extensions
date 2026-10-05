@@ -40,6 +40,8 @@ func newTestServer(t *testing.T, m mockFuncs) *server {
 		},
 		mux:                http.NewServeMux(),
 		loadedModelSpec:    "",
+		inferenceGate:      newInferenceGate(),
+		llamaOperationGate: newCancellablePermit(),
 		contextBuf:         newContextBuffer(3),
 		glossary:           loadGlossary(), // テスト用：空の辞書
 		translationFlights: newTranslationFlightGroup(),
