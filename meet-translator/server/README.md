@@ -1,7 +1,7 @@
 # meet-translator ローカルサーバー
 
-whisper.cpp / llama.cpp を Go バイナリに直接組み込んだローカルサーバーです。
-Kotoba-Whisper や GGUF LLM は同梱 backend で動作し、SenseVoice / WhisperX / Apple Silicon 向けの MLX 対応モデルを選んだ場合だけローカル Python worker を起動します。
+whisper.cpp / llama.cpp を Go バイナリに直接組み込んだローカルサーバーです。既定では `127.0.0.1:17070` だけで待ち受け、API token と設定済み拡張Originがないと起動しません。
+Kotoba-Whisper とGGUF LLMは同梱backendで動作し、SenseVoice / WhisperXなど任意のASR比較経路を選んだ場合はローカルPython workerを起動します。MLX等の別推論経路は、実機で検証するまでM1資格済みとは扱いません。
 
 ```
 拡張機能 → [meet-translator-server]
@@ -15,7 +15,7 @@ Kotoba-Whisper や GGUF LLM は同梱 backend で動作し、SenseVoice / Whispe
 |---|---|---|
 | Go 1.23+ | ビルド | https://go.dev/dl/ |
 | cmake + C++ コンパイラ | whisper.cpp / llama.cpp のビルド | OS パッケージマネージャー |
-| Python 3.10+ (optional) | SenseVoice / WhisperX バックエンド、Apple Silicon 向け MLX Bonsai | https://www.python.org/downloads/ |
+| Python 3.10+ (optional) | SenseVoice / WhisperX / Kotoba TransformersのASR backend | https://www.python.org/downloads/ |
 | ffmpeg (optional) | SenseVoice / WhisperX の音声デコード | https://ffmpeg.org/download.html |
 
 > `make` を実行すると whisper.cpp と llama.cpp が自動クローン・ビルドされ、
@@ -35,102 +35,59 @@ make build GPU=cpu    # 標準バイナリのみ
 make prism GPU=cpu    # PrismML バイナリのみ（bonsai-8b / server-prism 用）
 ```
 
-## モデルのダウンロード
+## モデルの比較候補と取得
 
-### whisper モデル (音声認識)
+通常の推論構成はASR 1個、翻訳1個、小型VAD 1個です。モデルがregistryに存在することは、実品質・M1性能・Meet統合の合格を意味しません。
 
-```bash
-curl -L -o ggml-base.bin \
-  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
-```
+### ASR
 
-| モデル | サイズ | 精度 |
-|---|---|---|
-| `ggml-tiny.bin`   | 75 MB  | △ |
-| `ggml-base.bin`   | 142 MB | ○ |
-| `ggml-small.bin`  | 466 MB | ○ |
-| `ggml-medium.bin` | 1.5 GB | ◎ |
-| `ggml-large-v3.bin` | 3.1 GB | ◎◎ |
-| `ggml-large-v3-turbo.bin` | 809 MB | ◎ default floor |
-| `ggml-kotoba-whisper-v2.0.bin` | 3.1 GB | ◎◎ JA-focused |
-| `ggml-kotoba-whisper-v2.0-q5_0.bin` | ≈ 1.0 GB | ◎ JA-focused (quantized) |
+| `--whisper-model` 値 | 説明 |
+|---|---|
+| `large-v3-turbo` | Whisper.cpp比較基準。未選定・未資格 |
+| `large-v3` | Whisperの明示比較alias。未選定・未資格 |
+| `kotoba-whisper-v2.2` / `kotoba-tech/kotoba-whisper-v2.2` | 作者checkpointをTransformers workerで実行するASR候補 |
+| `sensevoice` / `sensevoice-small` | SenseVoiceSmallのローカルPython経路 |
+| `whisperx` / `whisperX` / `whisperx-turbo` | WhisperX `turbo`のローカルPython経路 |
+| `whisperx-large-v3` | WhisperXの`large-v3`比較alias |
 
-モデル名でも指定できます: `large-v3-turbo`, `kotoba-whisper`, `kotoba-whisper-q5_0`, `kotoba-whisper-v2.2`, `kotoba-whisper-v2.2-faster`, `whisperx`, `whisperx-turbo`, `whisperx-large-v3`
+小型Whisper、large-v1/v2、Kotoba v2.0、第三者Kotoba変換は現行選択一覧から隠しています。保存済みの明示設定は互換警告付きで解決します。`sensevoice:<model-ref>` と `whisperx:<model-name>` は明示指定です。SenseVoice / WhisperX / Kotoba Transformersの手動依存には `python/requirements-asr-sensevoice.txt`、`python/requirements-asr-whisperx.txt`、`python/requirements-asr-transformers.txt` を使います。必要なbackendでは `ffmpeg` をPATHへ設定してください。
 
-Python バックエンドも `--whisper-model` で選択できます:
+### 翻訳
 
-| モデル名 | 実装 | 備考 |
-|---|---|---|
-| `kotoba-whisper-v2.2` / `kotoba-tech/kotoba-whisper-v2.2` | Transformers Whisper | Kotoba-Whisper v2.2、ローカル Python worker |
-| `kotoba-whisper-v2.2-faster` / `RoachLin/kotoba-whisper-v2.2-faster` | WhisperX (faster-whisper backend) | Kotoba-Whisper v2.2 の faster-whisper 変換版 |
-| `sensevoice` / `sensevoice-small` | FunASR SenseVoiceSmall | 高速な多言語 ASR、ローカル Python worker |
-| `whisperx` / `whisperX` / `whisperx-turbo` | WhisperX (faster-whisper backend) | VAD 付き、多言語 ASR。最新の OpenAI Whisper `turbo` をローカル Python worker で実行 |
-| `whisperx-large-v3` | WhisperX (faster-whisper backend) | VAD 付き、多言語 ASR。`large-v3` を明示利用したい場合の alias |
-| `sensevoice:<model-ref>` | FunASR | 任意の SenseVoice 系 model ref |
-| `whisperx:<model-name>` | WhisperX | 任意の WhisperX / faster-whisper モデル名（`whisperX:` でも可。例: `whisperx:turbo`, `whisperx:distil-large-v3`） |
+| `--llama-model` 値 | 説明 |
+|---|---|
+| `tencent/Hy-MT2-1.8B` | 現行の選択可能な候補。registryのartifactはTencent公式Hy-MT2 1.8B Q4_K_M。公開ベンチマークscreen通過、M1未資格 |
+| `qwen3.5:0.8b-q4_k_m` | 既存設定と再現用baseline。現行選択一覧から非表示。品質・M1未資格 |
 
-`whisperx:large-v3-turbo` も server 側の互換 alias として受け付け、WhisperX / faster-whisper の `turbo` に正規化します。
+公開値screenを通過した実験枠はHy-MT2 Q4_K_Mと、registry未登録のCAT-Translate 0.8B/1.4Bです。CATは小型の日英比較モデルで、圧縮方式とは分類していません。Hy-MT2の2-bit variantは品質維持率が基準未満、1.25-bit版はexact variantの翻訳scoreが不足、30B-A3B MoEは全重み量がM1予算を超えるため除外です。蒸留ASRの日本語CERは比較元より悪く、pruning評価は日英外です。CATのLoRAは学習手法で、weight sharingを含め、適切な日英推論artifactの数値は未確認です。詳細は `docs/research/compression-screen.md` を参照してください。
 
-> **Python バックエンドの準備**:
-> `uv` が入っていれば、選んだ backend に必要な依存だけ isolated 環境へ自動で入ります。
-> 手動で入れる場合は Python 3.11 を使い、backend に合わせて次を選んでください:
-> - `sensevoice`: `python3.11 -m pip install -r ./python/requirements-asr-sensevoice.txt`
-> - `whisperx*`, `whisperX*`, `kotoba-whisper-v2.2-faster`: `python3.11 -m pip install -r ./python/requirements-asr-whisperx.txt`
-> - `kotoba-whisper-v2.2`: `python3.11 -m pip install -r ./python/requirements-asr-transformers.txt`
-> - 全部まとめて入れる場合: `python3.11 -m pip install -r ./python/requirements-asr.txt`
->
-> SenseVoice / WhisperX 系は `ffmpeg` も PATH から参照できるようにしてください。
+TranslateGemma 4BとShisa V2.1 1.2Bは日英両方向の公開値が揃わず保留です。公式Qwen3.8 FP8は27Bで日本語翻訳値がなく、FP8生重みだけで10GiB推論予算を超えます。旧Qwen世代、Hy-MT2 7B、CALM3 22B、Bonsai、Gemma 4と重複aliasは現在の選択一覧から外しています。保存済みの明示設定は警告を出して解決し、別モデルへ自動置換しません。
 
-### llama モデル (翻訳 LLM)
+公開benchmark passはローカル評価や製品選定ではありません。重みhash、利用条件、正式template/EOS、pin済みruntimeでの実ロード、M1 memory/latency、Meet字幕共有を通過するまでは候補状態をDEFERREDにします。会議中に検索、重み取得、更新は行いません。
 
-モデル名を指定すると **HuggingFace から自動ダウンロード** します。  
-Ollama でダウンロード済みの GGUF があれば自動的に検索・再利用します。
-
-| モデル名 | サイズ | 備考 |
-|---|---|---|
-| `qwen3.5:0.8b-q4_k_m` | ≈ 0.6 GB | default floor、Thinking 対応 |
-| `tencent/Hy-MT2-1.8B` / `Hy-MT2-1.8B-GGUF` | ≈ 1.1 GB | Tencent Hy 公式 1.8B alias。`Q4_K_M` GGUF をダウンロード |
-| `bonsai-8b`           | ≈ 1.15 GB / MLX repo | 最初の step-up、Thinking 対応。Apple Silicon では MLX 自動選択、その他は PrismML |
-| `bonsai-4b`           | MLX repo | Apple Silicon 専用、Thinking 対応 |
-| `bonsai-1.7b`         | MLX repo | Apple Silicon 専用、Thinking 対応 |
-| `tencent/Hy-MT2-7B` / `Hy-MT2-7B` / `Hy-MT2-7B-GGUF` | ≈ 4.6 GB | Tencent Hy 公式 7B alias。`Hy-MT2-7BGGUF` も受け付け、`Q4_K_M` GGUF をダウンロード |
-| `qwen3:8b-q4_k_m`     | ≈ 5.2 GB | 上位 tier、Thinking 対応 |
-| `qwen3.5:2b-q4_k_m`   | ≈ 1.4 GB | 軽量、Thinking 対応 |
-| `qwen3.5:4b-q4_k_m`   | ≈ 3.2 GB | Thinking 対応 |
-| `qwen3.5:9b-q4_k_m`   | ≈ 5.3 GB | 高精度、Thinking 対応 |
-| `qwen3:4b-q4_k_m`     | ≈ 2.6 GB | Thinking 対応 |
-| `qwen2.5:7b-instruct-q4_k_m` | ≈ 4.7 GB | 安定版 |
-
-> **注意**: Qwen3.5 / Gemma4 は古い `llama.cpp` vendor clone だと
-> `unknown model architecture: 'qwen35'` / `unknown model architecture: 'gemma4'`
-> で失敗します。最新 `main` を pull した後は `make` または `make test` を再実行してください。
-> Apple Silicon (`darwin/arm64`) では MLX 対応版が分かっているモデル
-> (`bonsai-*`, `qwen2.5:*`, `qwen3:*`, `qwen3.5:*`, `calm3:*`, `gemma4:*`)
-> が MLX に自動切替されます。`uv` が入っていれば MLX 依存も自動で用意できます。
-> そうでない場合は、先に `python3 -m pip install -r ./python/requirements-llm.txt`
-> を実行してください。
-> それ以外の環境では `bonsai-8b` は `server-prism` が必要で、`bonsai-4b` / `bonsai-1.7b` は利用できません。
-> `make` なら `server` と `server-prism` を自動で両方ビルドします。
-> 登録済みの MLX repo ID を直接指定することもでき、たとえば
-> `prism-ml/Ternary-Bonsai-8B-mlx-2bit` や `mlx-community/Qwen3-0.6B-4bit`
-> を受け付けます。
-> `tencent/Hy-MT2-1.8B`、`Hy-MT2-1.8B-GGUF`、`Hy-MT2-7B`、`Hy-MT2-7BGGUF`
-> は Tencent 公式の `Q4_K_M` GGUF へ解決されます。ライセンスは
-> `Tencent HY Community License Agreement` です。
-
-GGUF ファイルを直接指定することも可能です:
+直接のローカルファイルパス指定もできます:
 
 ```bash
-./meet-translator-server --llama-model /path/to/model.gguf
+./server --llama-model /path/to/model.gguf
 ```
+
+## ローカルAPIの設定
+
+サーバーは127.0.0.1だけにbindし、全APIに `Authorization: Bearer <token>` を要求します。ブラウザー要求は `MEET_TRANSLATOR_EXTENSION_ORIGIN` に設定した完全一致の拡張Originだけを許可します。Originは認証の代わりにはならず、OriginのないCLI要求もtokenが必要です。tokenは32バイト以上の暗号学的乱数を使用し、サーバーは環境変数から読みます。tokenをログや設定ファイルへ保存しません。
+
+1. 拡張を読み込み、設定画面に表示される `chrome-extension://...` Originを確認します。
+2. 暗号学的乱数で32バイト以上のtokenを生成し、`MEET_TRANSLATOR_API_TOKEN` としてサーバー起動環境へ設定します。
+3. 同じtokenを拡張の設定画面へ入力し、設定画面に表示された完全一致Originを `MEET_TRANSLATOR_EXTENSION_ORIGIN` としてサーバー起動環境へ設定します。
+4. サーバーを起動し、拡張の「Check server connection」で認証済みの疎通を確認します。
+
+tokenの例をソース、コマンド履歴、ログへ書かないでください。既存configのportは維持されます。新しいconfigの既定portは17070です。
 
 ## 起動
 
-初回にモデル指定を省略した場合は、`large-v3-turbo` + `qwen3.5:0.8b-q4_k_m` を floor として
-起動し、RAM/GPU に余裕があれば `bonsai-8b` やさらに上位のモデルへ自動で引き上げます。
+モデル名を省略したときの `large-v3-turbo` + `qwen3.5:0.8b-q4_k_m` は、現在の比較基準です。モデル識別子が登録されていることや起動できることは品質・M1資格の合格を意味しません。RAM/GPU容量だけで未測定のモデルへ切り替えません。
 
 ```bash
-# モデル名を指定して初回起動（自動ダウンロード + 設定保存）
+# 既存のローカルモデル名を指定して起動
 ./meet-translator-server \
   --whisper-model large-v3-turbo \
   --llama-model qwen3.5:0.8b-q4_k_m
@@ -143,9 +100,11 @@ GGUF ファイルを直接指定することも可能です:
 
 | 変数 | デフォルト | 説明 |
 |---|---|---|
-| `PORT` | `7070` | リスンポート |
-| `WHISPER_MODEL` | `auto`（floor: `large-v3-turbo`） | whisper モデル名またはファイルパス |
-| `LLAMA_MODEL` | `auto`（floor: `qwen3.5:0.8b-q4_k_m`） | llama モデル名またはファイルパス |
+| `PORT` | `17070` | loopbackリスンポート。既存configの値を優先 |
+| `MEET_TRANSLATOR_API_TOKEN` | 必須 | 32バイト以上のBearer token。設定ファイルへ保存しない |
+| `MEET_TRANSLATOR_EXTENSION_ORIGIN` | 必須 | `chrome-extension://<extension-id>` の完全一致Origin |
+| `WHISPER_MODEL` | `auto`（baseline: `large-v3-turbo`） | whisper モデル名またはファイルパス |
+| `LLAMA_MODEL` | `auto`（reproduction baseline: `qwen3.5:0.8b-q4_k_m`） | llama モデル名またはファイルパス |
 | `LLAMA_GPU_LAYERS` | `-1` | GPU オフロードレイヤ数 (`0`=CPU only, `-1`=全レイヤ) |
 | `WHISPER_GPU_LAYERS` | `-1` | 同上 (whisper 用) |
 | `MODEL_CACHE_DIR` | OS 標準 | モデルキャッシュディレクトリ |
@@ -169,25 +128,31 @@ Windows:     %APPDATA%\meet-translator\glossary.json
 ### 辞書の手動管理 (REST API)
 
 ```bash
-# 全エントリ確認
-curl http://localhost:7070/glossary
+# 全エントリ確認。tokenはサーバー環境から読む。
+curl http://127.0.0.1:17070/glossary \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN"
 
 # ASR 修正を追加
-curl -X POST http://localhost:7070/glossary/corrections \
+curl -X POST http://127.0.0.1:17070/glossary/corrections \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"source":"a pie","target":"API","description":"Common Whisper misrecognition"}'
 
 # 専門用語を追加
-curl -X POST http://localhost:7070/glossary/terms \
+curl -X POST http://127.0.0.1:17070/glossary/terms \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"source":"pull request","target":"プルリクエスト"}'
 
 # エントリ削除
-curl -X DELETE http://localhost:7070/glossary/corrections/a%20pie
-curl -X DELETE http://localhost:7070/glossary/terms/pull%20request
+curl -X DELETE http://127.0.0.1:17070/glossary/corrections/a%20pie \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN"
+curl -X DELETE http://127.0.0.1:17070/glossary/terms/pull%20request \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN"
 
 # 外部から学習結果を送信 (kind = "correction" | "term")
-curl -X POST http://localhost:7070/glossary/learn \
+curl -X POST http://127.0.0.1:17070/glossary/learn \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"kind":"correction","source":"get hub","target":"GitHub"}'
 ```

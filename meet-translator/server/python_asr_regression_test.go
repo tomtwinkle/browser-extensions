@@ -100,6 +100,82 @@ print(json.dumps({"text": text, "detected": detected}))
 	}
 }
 
+func TestWhisperXWorkerReturnsSegmentTimingWithUnavailableScoresNull(t *testing.T) {
+	spec, err := resolveDirectPythonLaunchSpec("", false)
+	if err != nil {
+		t.Skipf("python interpreter not available: %v", err)
+	}
+	stubDir := t.TempDir()
+	writeTestFile(t, filepath.Join(stubDir, "numpy.py"), "# minimal stub for asr_worker import\n")
+	writeTestFile(t, filepath.Join(stubDir, "torch.py"), `
+class _Tensor:
+    def __init__(self, value): self.value = value
+    def unsqueeze(self, _axis): return self
+def from_numpy(value): return _Tensor(value)
+`)
+	writeTestFile(t, filepath.Join(stubDir, "whisperx", "__init__.py"), `
+from dataclasses import dataclass
+@dataclass
+class FakeOptions:
+    initial_prompt: str = None
+class FakeModel:
+    def __init__(self):
+        self.options = FakeOptions()
+        self._vad_params = {"vad_onset": 0.5, "vad_offset": 0.3}
+    def vad_model(self, request): return request
+    def transcribe(self, audio, batch_size=8, language=None):
+        return {"language": "en", "segments": [{"start": 0.125, "end": 0.875, "text": " short answer"}]}
+def load_model(model_ref, device=None, compute_type=None, asr_options=None): return FakeModel()
+`)
+	writeTestFile(t, filepath.Join(stubDir, "whisperx", "audio.py"), "SAMPLE_RATE = 16000\n")
+	writeTestFile(t, filepath.Join(stubDir, "whisperx", "vad.py"), `
+def merge_chunks(_segments, _chunk_size, onset=None, offset=None): return [object()]
+`)
+	serverDir := serverTestDir(t)
+	pythonPath := strings.Join([]string{stubDir, filepath.Join(serverDir, "python")}, string(os.PathListSeparator))
+	script := `
+import json
+import asr_worker
+class FakeAudio:
+    def __len__(self): return 16000
+asr_worker.load_wav_float32 = lambda _path: FakeAudio()
+backend = asr_worker.WhisperXBackend("fake-model", "cpu")
+text, detected, segments = backend.transcribe_detailed("ignored.wav", "en", "")
+print(json.dumps({"text": text, "detected": detected, "segments": segments}))
+`
+	cmd := exec.Command(spec.bin, "-c", script)
+	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1", "PYTHONPATH="+pythonPath)
+	cmd.Dir = serverDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("python worker regression script failed: %v\n%s", err, out)
+	}
+	var response struct {
+		Text     string `json:"text"`
+		Detected string `json:"detected"`
+		Segments []struct {
+			StartMs             *float64 `json:"start_ms"`
+			EndMs               *float64 `json:"end_ms"`
+			Text                string   `json:"text"`
+			AvgLogprob          *float64 `json:"avg_logprob"`
+			NoSpeechProbability *float64 `json:"no_speech_probability"`
+		} `json:"segments"`
+	}
+	if err := json.Unmarshal(out, &response); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v, output = %s", err, out)
+	}
+	if response.Text != "short answer" || response.Detected != "en" || len(response.Segments) != 1 {
+		t.Fatalf("response = %#v", response)
+	}
+	segment := response.Segments[0]
+	if segment.StartMs == nil || *segment.StartMs != 125 || segment.EndMs == nil || *segment.EndMs != 875 {
+		t.Fatalf("unexpected segment timing: %#v", segment)
+	}
+	if segment.AvgLogprob != nil || segment.NoSpeechProbability != nil {
+		t.Fatalf("unavailable score fields must remain null: %#v", segment)
+	}
+}
+
 func TestExecuteTestWorkflowPinsWhisperXDependencies(t *testing.T) {
 	workflowPath := filepath.Join(serverTestDir(t), "..", "..", ".github", "workflows", "execute-test.yml")
 	content, err := os.ReadFile(workflowPath)

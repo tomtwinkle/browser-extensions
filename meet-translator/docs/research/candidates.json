@@ -1,0 +1,667 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-09-29",
+  "profileId": "m1-max-balanced",
+  "candidateBudget": {
+    "additionalASR": 3,
+    "additionalTranslation": 3
+  },
+  "candidates": [
+    {
+      "candidateId": "baseline-whisper-large-v3-turbo",
+      "schemaVersion": 1,
+      "task": "asr",
+      "upstreamModelId": "openai/whisper-large-v3-turbo",
+      "modelRevision": null,
+      "artifactProvider": "ggerganov/whisper.cpp model registry",
+      "artifactName": "ggml-large-v3-turbo.bin",
+      "artifactHash": null,
+      "quantization": null,
+      "runtimeId": "whisper.cpp",
+      "runtimeRevision": "9386f239401074690479731c1e41683fbbeac557",
+      "executionBackend": "Metal intended by current native build; actual model run not verified",
+      "dtype": null,
+      "languages": [
+        "en",
+        "ja"
+      ],
+      "streamingKind": "utterance request; no incremental decode claim",
+      "auxiliaryModels": [],
+      "codeLicense": "MIT",
+      "weightTerms": "upstream artifact terms not reviewed for this exact file",
+      "redistributionStatus": "not reviewed",
+      "sourceIds": [
+        "SRC-ASR-HALLUCINATION",
+        "SRC-OPENAI-WHISPER-REPO",
+        "SRC-WHISPER"
+      ],
+      "sourceCheckedAt": "2026-09-29",
+      "templateHash": null,
+      "decodeOptions": null,
+      "gatePolicyId": "whisper-review-diagnostics-v1: avg_logprob < -0.8 or no_speech_probability > 0.6 adds a private review reason only; thresholds are not calibrated and never auto-publish",
+      "datasetHashes": [],
+      "evaluationRunIds": [],
+      "m1Measurement": null,
+      "status": "DEFERRED",
+      "reasonCodes": [
+        "WEIGHT_HASH_UNKNOWN",
+        "INSUFFICIENT_EVAL_DATA",
+        "M1_RUN_NOT_EXECUTED",
+        "GATE_NOT_CALIBRATED"
+      ],
+      "reconsiderWhen": [
+        "Record the exact local weight file hash and model revision.",
+        "Prepare an authorized human-reviewed bilingual development and holdout set.",
+        "Calibrate Whisper-specific review diagnostics and publication policy on human-labeled speech, then run the M1 integration profile."
+      ],
+      "runtimePatch": {
+        "id": "whisper-preserve-candidate-text-v1",
+        "file": "server/patches/whisper-preserve-candidate-text.patch",
+        "sha256": "9c277e88879b63c8822ffa3548e45d25441b2def9558d698626ba068cbcdd941",
+        "scope": "Preserve decoded candidate segments for private review while retaining decoder fallback behavior."
+      },
+      "compressionMethods": [],
+      "publishedBenchmarkScreen": null
+    },
+    {
+      "candidateId": "qwen3-asr-0.6b",
+      "schemaVersion": 1,
+      "task": "asr",
+      "upstreamModelId": "Qwen/Qwen3-ASR-0.6B-hf",
+      "modelRevision": null,
+      "artifactProvider": "Qwen official model repository; no local copy verified",
+      "artifactName": null,
+      "artifactHash": null,
+      "quantization": null,
+      "runtimeId": "Transformers >=5.13 official route; mlx-audio community conversion under investigation",
+      "runtimeRevision": null,
+      "executionBackend": null,
+      "dtype": "BF16 reported for the official hosted 0.6B checkpoint (page metadata reports 0.8B parameters); exact runtime artifact is not pinned",
+      "languages": [
+        "en",
+        "ja"
+      ],
+      "streamingKind": "Official card describes unified offline/streaming family behavior; repository says streaming is exposed through official vLLM and omits timestamps. Official processor template uses apply_transcription_request with optional language name/code and prompt, assistant prefix language <NAME><asr_text>, and separate forced aligner for timestamps. No official M1 route.",
+      "auxiliaryModels": null,
+      "codeLicense": "Apache-2.0 on upstream paper/card; exact converted artifact terms not reviewed",
+      "weightTerms": "official model card reviewed; exact converted artifact terms not reviewed",
+      "redistributionStatus": "not reviewed",
+      "sourceIds": [
+        "SRC-QWEN-ASR",
+        "SRC-QWEN-ASR-REPO",
+        "SRC-MLX-AUDIO",
+        "SRC-MLX-FRAMEWORK",
+        "SRC-QWEN-ASR-PAPER"
+      ],
+      "sourceCheckedAt": "2026-09-29",
+      "templateHash": null,
+      "decodeOptions": "Official Transformers card example uses max_new_tokens=256; the card does not pin an EOS or confidence contract. MLX conversion settings and app-equivalent decode options are unknown.",
+      "gatePolicyId": null,
+      "datasetHashes": [],
+      "evaluationRunIds": [],
+      "m1Measurement": null,
+      "status": "DEFERRED",
+      "reasonCodes": [
+        "WEIGHTS_NOT_AUTHORIZED",
+        "M1_RUNTIME_NOT_VERIFIED",
+        "OFFICIAL_STREAMING_BACKEND_M1_UNVERIFIED",
+        "SCORE_SEMANTICS_UNVERIFIED",
+        "INSUFFICIENT_EVAL_DATA",
+        "OFFICIAL_CARD_RUNTIME_DIFFERS_FROM_M1_PATH",
+        "EOS_AND_SCORE_CONTRACT_UNSPECIFIED"
+      ],
+      "reconsiderWhen": [
+        "Obtain explicit local weight preparation approval and pin upstream and converted artifact revisions plus SHA-256.",
+        "Pin one M1 runtime and verify the exact audio input, model-specific language/hotword template, output parsing, EOS, timestamps, score availability, stop, and actual Metal execution; do not assume the official vLLM streaming path is portable.",
+        "Define a model-specific review/publication policy without Whisper score thresholds, then run the same human-reviewed ASR-only and end-to-end cases and M1 memory/latency profile."
+      ],
+      "compressionMethods": [],
+      "publishedBenchmarkScreen": null
+    },
+    {
+      "candidateId": "nemotron-3.5-asr-streaming-0.6b",
+      "schemaVersion": 1,
+      "task": "asr",
+      "upstreamModelId": "nvidia/nemotron-3.5-asr-streaming-0.6b",
+      "modelRevision": null,
+      "artifactProvider": "NVIDIA official Hugging Face model repository",
+      "artifactName": "nemotron-3.5-asr-streaming-0.6b.q8_0.gguf",
+      "artifactHash": null,
+      "quantization": "Q8_0 (official card download example)",
+      "runtimeId": "NVIDIA NeMo-Speech.cpp (official card lists local GGUF route)",
+      "runtimeRevision": null,
+      "executionBackend": null,
+      "dtype": null,
+      "languages": [
+        "en",
+        "ja"
+      ],
+      "streamingKind": "model card describes streaming; cache behavior not verified in a local adapter",
+      "auxiliaryModels": null,
+      "codeLicense": null,
+      "weightTerms": "model card specifies OpenMDW-1.1; local artifact handling and redistribution review still pending",
+      "redistributionStatus": "not reviewed",
+      "sourceIds": [
+        "SRC-NEMOTRON-ASR",
+        "SRC-NEMO-RUNTIME"
+      ],
+      "sourceCheckedAt": "2026-09-28",
+      "templateHash": null,
+      "decodeOptions": null,
+      "gatePolicyId": null,
+      "datasetHashes": [],
+      "evaluationRunIds": [],
+      "m1Measurement": null,
+      "status": "DEFERRED",
+      "reasonCodes": [
+        "WEIGHTS_NOT_AUTHORIZED",
+        "ARTIFACT_HASH_UNKNOWN",
+        "PINNED_RUNTIME_BUILD_UNVERIFIED",
+        "M1_METAL_UNVERIFIED",
+        "INSUFFICIENT_EVAL_DATA"
+      ],
+      "reconsiderWhen": [
+        "After authorization, prepare the card's exact GGUF locally, record its revision and SHA-256, and review artifact terms.",
+        "Pin the NeMo-Speech.cpp build and verify the exact checkpoint on M1; do not infer Metal use from its native C++ route.",
+        "Build separate ASR and end-to-end evaluation and a model-specific gate."
+      ],
+      "compressionMethods": [],
+      "publishedBenchmarkScreen": null
+    },
+    {
+      "candidateId": "baseline-qwen3.5-0.8b-q4km",
+      "schemaVersion": 1,
+      "task": "translation",
+      "upstreamModelId": "Qwen/Qwen3.5-0.8B",
+      "modelRevision": null,
+      "artifactProvider": "Unsloth GGUF registry in server/model_manager.go; exact upstream revision unresolved",
+      "artifactName": "Qwen3.5-0.8B-Q4_K_M.gguf",
+      "artifactHash": null,
+      "quantization": "Q4_K_M (registry label; file not verified)",
+      "runtimeId": "llama.cpp",
+      "runtimeRevision": "4eb19514dd2984662f13aacbb052c559c8fde3b1",
+      "executionBackend": "Metal intended by current native build; actual model run not verified",
+      "dtype": null,
+      "languages": [
+        "en",
+        "ja"
+      ],
+      "streamingKind": "text request/response",
+      "auxiliaryModels": [],
+      "codeLicense": "Apache-2.0 on official Qwen model card; converted artifact terms/hash still unverified",
+      "weightTerms": "exact GGUF provenance and terms not verified",
+      "redistributionStatus": "not reviewed",
+      "sourceIds": [
+        "SRC-QWEN-08",
+        "SRC-LLAMA"
+      ],
+      "sourceCheckedAt": "2026-09-28",
+      "templateHash": "0227ebeb8b6c5542a26da32cd192ba9a8dceb26d722485461a6daf4f2e84bbb2",
+      "templateHashScope": "SHA-256 of server/testdata/templates/qwen35-0.8b.json synthetic prompt contract; it does not identify the GGUF tokenizer metadata or prove stop behavior.",
+      "decodeOptions": "Source sends max_tokens=512 and temperature=0.1; native sampler then uses greedy selection, context n_ctx=2048. Prompt uses the documented non-thinking default; exact GGUF behavior was not run.",
+      "gatePolicyId": null,
+      "datasetHashes": [],
+      "evaluationRunIds": [],
+      "m1Measurement": null,
+      "status": "DEFERRED",
+      "reasonCodes": [
+        "WEIGHT_HASH_UNKNOWN",
+        "TEMPLATE_EOS_UNVERIFIED",
+        "INSUFFICIENT_EVAL_DATA",
+        "M1_RUN_NOT_EXECUTED"
+      ],
+      "reconsiderWhen": [
+        "Record exact GGUF hash and conversion revision.",
+        "Compare the official non-thinking message format with the exact GGUF tokenizer/template, and verify stop/EOS behavior.",
+        "Run at least 120 verified holdout MT cases with both directions and required critical assertions, then M1 integration."
+      ],
+      "compressionMethods": [],
+      "publishedBenchmarkScreen": null
+    },
+    {
+      "candidateId": "hy-mt2-1.8b",
+      "schemaVersion": 1,
+      "task": "translation",
+      "upstreamModelId": "tencent/Hy-MT2-1.8B",
+      "modelRevision": "1cd5208700acedef4ef93019b6cfc148b8522d45",
+      "artifactProvider": "tencent/Hy-MT2-1.8B-GGUF",
+      "artifactName": "Hy-MT2-1.8B-Q4_K_M.gguf",
+      "artifactHash": null,
+      "quantization": "Q4_K_M (exact filename is pinned in server/model_manager.go; file not fetched)",
+      "runtimeId": "llama.cpp GGUF route under investigation",
+      "runtimeRevision": null,
+      "executionBackend": "Metal intended by the native build; current Makefile tag and inspected llama.cpp commit differ, and this artifact was not loaded",
+      "dtype": null,
+      "languages": [
+        "en",
+        "ja"
+      ],
+      "streamingKind": "text request/response; no streaming claim",
+      "auxiliaryModels": [],
+      "codeLicense": "Apache-2.0 displayed on the official Tencent GGUF repository; derivative redistribution review pending",
+      "weightTerms": "Official upstream model card is Apache-2.0; exact GGUF file/hash and its redistribution terms were not reviewed.",
+      "redistributionStatus": "not reviewed",
+      "sourceIds": [
+        "SRC-HY-MT2",
+        "SRC-HY-MT2-CARD",
+        "SRC-HY-MT2-GGUF",
+        "SRC-HY-MT2-PAPER",
+        "SRC-LLAMA"
+      ],
+      "sourceCheckedAt": "2026-09-29",
+      "templateHash": "3415789787f0e87303310928a230512dcde4ad595017bd6c77a1164578cefdce",
+      "templateHashScope": "SHA-256 of server/testdata/templates/hy-mt2-1.8b.json synthetic prompt contract; it does not identify the GGUF tokenizer metadata or prove stop behavior.",
+      "decodeOptions": "Current source sends max_tokens=512 and temperature=0.1, then uses greedy sampling with n_ctx=2048. Tencent recommends temperature=0.7, top_p=0.6, top_k=20, repetition_penalty=1.05, max_tokens=4096 for 1.8B; exact GGUF behavior was not run.",
+      "gatePolicyId": null,
+      "datasetHashes": [],
+      "evaluationRunIds": [],
+      "m1Measurement": null,
+      "status": "DEFERRED",
+      "reasonCodes": [
+        "WEIGHTS_NOT_AUTHORIZED",
+        "ARTIFACT_HASH_UNKNOWN",
+        "CONVERTED_ARTIFACT_TERMS_UNVERIFIED",
+        "EXACT_TEMPLATE_EOS_UNVERIFIED",
+        "PINNED_LLAMA_LOAD_UNVERIFIED",
+        "LLAMA_PIN_MISMATCH",
+        "STQ_KERNEL_UNVERIFIED",
+        "INSUFFICIENT_EVAL_DATA"
+      ],
+      "reconsiderWhen": [
+        "After authorization, verify the registry-pinned file revision and SHA-256 and review the exact GGUF terms.",
+        "Reconcile the Makefile llama.cpp tag with the inspected vendor commit and verify the STQ kernel and exact model load on the pinned native runtime.",
+        "Compare the exact tokenizer, special tokens, language behavior, EOG, and text-only output with the reviewed prompt contract.",
+        "Compare on reviewed bilingual development/holdout data and run the M1 profile."
+      ],
+      "compressionMethods": [
+        "quantization"
+      ],
+      "publishedBenchmarkScreen": {
+        "policyId": "published-mt-benchmark-screen-v1",
+        "decision": "PASS",
+        "rationale": "The exact Q4_K_M row retains at least 95% on the report primary general-translation metric and at least 90% on the secondary translation-instruction metric. This is a shortlist screen only.",
+        "evidence": [
+          {
+            "sourceId": "SRC-HY-MT2-PAPER",
+            "benchmark": "FLORES-200 (authors' aggregate multilingual score)",
+            "direction": "multilingual aggregate; report covers English and Japanese among 33 languages",
+            "metric": "author-reported score; higher is better",
+            "screenRole": "primary",
+            "value": 82.22,
+            "referenceModel": "Hy-MT2-1.8B-BF16",
+            "referenceValue": 83.49,
+            "higherIsBetter": true,
+            "relativeRetentionPercent": 98.48
+          },
+          {
+            "sourceId": "SRC-HY-MT2-PAPER",
+            "benchmark": "IFMTBench total",
+            "direction": "multilingual translation instruction following; Japanese is among benchmark languages",
+            "metric": "score (%)",
+            "screenRole": "secondary",
+            "value": 63.47,
+            "referenceModel": "Hy-MT2-1.8B-BF16",
+            "referenceValue": 69.36,
+            "higherIsBetter": true,
+            "relativeRetentionPercent": 91.51
+          }
+        ]
+      }
+    },
+    {
+      "candidateId": "granite-4.0-1b-speech-mlx-8bit",
+      "schemaVersion": 1,
+      "task": "asr",
+      "upstreamModelId": "ibm-granite/granite-4.0-1b-speech",
+      "modelRevision": null,
+      "artifactProvider": "mlx-community/granite-4.0-1b-speech-8bit (referenced by IBM model card)",
+      "artifactName": "granite-4.0-1b-speech-8bit",
+      "artifactHash": null,
+      "quantization": "8-bit label from the model-card example; exact quantizer not reviewed",
+      "runtimeId": "mlx-audio >=0.4.1 community route",
+      "runtimeRevision": null,
+      "executionBackend": "Apple M-series route documented by IBM; local Metal execution unverified",
+      "dtype": null,
+      "languages": [
+        "en",
+        "ja"
+      ],
+      "streamingKind": "Utterance transcription request; the card describes 4-second encoder blocks but does not establish a cache-aware streaming API.",
+      "auxiliaryModels": [],
+      "codeLicense": "Apache-2.0 on the official IBM card; community derivative terms not reviewed",
+      "weightTerms": "Official card lists Apache-2.0; exact community 8-bit artifact provenance and redistribution terms remain unverified.",
+      "redistributionStatus": "not reviewed",
+      "sourceIds": [
+        "SRC-GRANITE-ASR",
+        "SRC-MLX-AUDIO"
+      ],
+      "sourceCheckedAt": "2026-09-28",
+      "templateHash": null,
+      "decodeOptions": "IBM Transformers example uses an audio marker plus \"can you transcribe the speech into a written format?\", max_new_tokens=200, do_sample=false, num_beams=1. The MLX example does not pin equivalent decode settings.",
+      "gatePolicyId": null,
+      "datasetHashes": [],
+      "evaluationRunIds": [],
+      "m1Measurement": null,
+      "status": "DEFERRED",
+      "reasonCodes": [
+        "WEIGHTS_NOT_AUTHORIZED",
+        "ARTIFACT_HASH_UNKNOWN",
+        "COMMUNITY_CONVERSION_UNVERIFIED",
+        "M1_RUNTIME_NOT_VERIFIED",
+        "PARAMETER_COUNT_METADATA_MISMATCH",
+        "SCORE_SEMANTICS_UNVERIFIED",
+        "INSUFFICIENT_EVAL_DATA"
+      ],
+      "reconsiderWhen": [
+        "Obtain explicit local weight preparation approval and pin the official and quantized artifact revisions plus file hash.",
+        "Resolve the model page size discrepancy, inspect the exact MLX template/decode contract, and verify stop, score, and segment timing behavior in one local ASR adapter.",
+        "Run the same human-reviewed ASR-only and end-to-end cases, then verify actual M1 Metal execution, memory, latency, and lifecycle."
+      ],
+      "compressionMethods": [],
+      "publishedBenchmarkScreen": null
+    },
+    {
+      "candidateId": "translategemma-4b",
+      "schemaVersion": 1,
+      "task": "translation",
+      "upstreamModelId": "google/translategemma-4b-it",
+      "modelRevision": null,
+      "artifactProvider": "Google official Hugging Face repository; Gemma terms access required",
+      "artifactName": "google/translategemma-4b-it",
+      "artifactHash": null,
+      "quantization": null,
+      "runtimeId": "Official Transformers card route; no M1 runtime pinned",
+      "runtimeRevision": null,
+      "executionBackend": null,
+      "dtype": "BF16 shown by the official card example; exact downloaded artifact not inspected",
+      "languages": [
+        "en",
+        "ja"
+      ],
+      "streamingKind": "text request/response",
+      "auxiliaryModels": [],
+      "codeLicense": "Gemma license; user terms have not been accepted",
+      "weightTerms": "Official card requires reviewing and accepting Google Gemma usage terms before file access; no terms were accepted and no weights were retrieved.",
+      "redistributionStatus": "not reviewed",
+      "sourceIds": [
+        "SRC-TRANSLATEGEMMA",
+        "SRC-TRANSLATEGEMMA-REPORT"
+      ],
+      "sourceCheckedAt": "2026-09-29",
+      "templateHash": null,
+      "templateContract": "Use only User and Assistant roles. User content is a one-item list; the text item contains only source text plus source_lang_code and target_lang_code. 2K total input context. No Qwen prompt reuse; tokenizer serialization and EOS are not pinned.",
+      "decodeOptions": "Official example uses do_sample=false and a generation cap; no thinking switch or app EOS contract is established. The card requires its structured language-coded template.",
+      "gatePolicyId": null,
+      "datasetHashes": [],
+      "evaluationRunIds": [],
+      "m1Measurement": null,
+      "status": "DEFERRED",
+      "reasonCodes": [
+        "WEIGHTS_NOT_AUTHORIZED",
+        "TERMS_NOT_ACCEPTED",
+        "M1_RUNTIME_NOT_VERIFIED",
+        "TEMPLATE_EOS_UNVERIFIED",
+        "INSUFFICIENT_EVAL_DATA",
+        "M1_RUN_NOT_EXECUTED"
+      ],
+      "reconsiderWhen": [
+        "After authorized terms review, prepare an exact artifact revision and hash.",
+        "Implement and fixture the official language-coded template, tokenizer, stop/EOS, and text-only path in a pinned M1-compatible runtime.",
+        "Run both translation directions on reviewed development/holdout data, then measure integrated M1 memory and final-caption latency."
+      ],
+      "compressionMethods": [],
+      "publishedBenchmarkScreen": {
+        "policyId": "published-mt-benchmark-screen-v1",
+        "decision": "DEFERRED",
+        "rationale": "The report gives a positive WMT24++ English-to-Japanese result, but this compact non-compression candidate does not yet have matching published Japanese-to-English evidence in the reviewed model-specific sources. It is not admitted to the bounded shortlist.",
+        "evidence": [
+          {
+            "sourceId": "SRC-TRANSLATEGEMMA-REPORT",
+            "benchmark": "WMT24++",
+            "direction": "en->ja",
+            "metric": "MetricX (lower is better)",
+            "value": 4.44,
+            "referenceModel": "Gemma 3 4B",
+            "referenceValue": 5.09,
+            "higherIsBetter": false,
+            "relativeImprovementPercent": 12.77
+          },
+          {
+            "sourceId": "SRC-TRANSLATEGEMMA-REPORT",
+            "benchmark": "WMT24++",
+            "direction": "55-language aggregate",
+            "metric": "COMET22 (higher is better)",
+            "value": 80.1,
+            "referenceModel": "Gemma 3 4B",
+            "referenceValue": 77.2,
+            "higherIsBetter": true
+          }
+        ]
+      }
+    },
+    {
+      "candidateId": "cat-translate-1.4b",
+      "schemaVersion": 1,
+      "task": "translation",
+      "upstreamModelId": "CyberAgent/CAT-Translate-1.4b",
+      "modelRevision": null,
+      "artifactProvider": "CyberAgent AI Lab official Hugging Face repository",
+      "artifactName": "model.safetensors (card names model 1.4B; hosted metadata reports 1B parameters)",
+      "artifactHash": null,
+      "quantization": "BF16 shown in hosted metadata",
+      "runtimeId": "Transformers text-generation route in model card; no M1 adapter pinned",
+      "runtimeRevision": null,
+      "executionBackend": null,
+      "dtype": "BF16",
+      "languages": [
+        "en",
+        "ja"
+      ],
+      "streamingKind": "text request/response",
+      "auxiliaryModels": [],
+      "codeLicense": "MIT on model card",
+      "weightTerms": "Card and paper reviewed; exact artifact revision/hash and base-model redistribution details have not been inspected.",
+      "redistributionStatus": "not reviewed",
+      "sourceIds": [
+        "SRC-CAT-TRANSLATE-CARD",
+        "SRC-CAT-TRANSLATE-PAPER"
+      ],
+      "sourceCheckedAt": "2026-09-29",
+      "templateHash": null,
+      "templateContract": "Prompt: Translate the following {src_lang} text into {tgt_lang}.\\n\\n{src_text}; src_lang and tgt_lang are the English names Japanese/English. Apply the official Sarashina 2.2 1B chat template. max_new_tokens=512. No application tokenizer/EOS fixture yet.",
+      "decodeOptions": "Official card pipeline uses max_new_tokens=512 and the exact instruction above; tokenizer chat template and EOS/stop behavior must be checked from a pinned artifact. LoRA is a training method only, not a low-rank-compressed inference artifact.",
+      "gatePolicyId": null,
+      "datasetHashes": [],
+      "evaluationRunIds": [],
+      "m1Measurement": null,
+      "status": "DEFERRED",
+      "reasonCodes": [
+        "WEIGHT_REVISION_UNKNOWN",
+        "WEIGHT_HASH_UNKNOWN",
+        "M1_RUNTIME_NOT_VERIFIED",
+        "TEMPLATE_EOS_UNVERIFIED",
+        "INSUFFICIENT_EVAL_DATA",
+        "M1_RUN_NOT_EXECUTED"
+      ],
+      "reconsiderWhen": [
+        "Pin the official weight and tokenizer revisions and exact hashes.",
+        "Implement the author prompt with the model-specific chat template and verify tokenizer/EOS/stop behavior.",
+        "Run both directions on reviewed development/holdout data and the integrated M1 profile."
+      ],
+      "compressionMethods": [],
+      "publishedBenchmarkScreen": {
+        "policyId": "published-mt-benchmark-screen-v1",
+        "decision": "PASS",
+        "rationale": "The model-author card reports strong direct bilingual domain benchmark values in both directions, including a 33.73 average BLEU; model-specific local gates remain open.",
+        "evidence": [
+          {
+            "sourceId": "SRC-CAT-TRANSLATE-CARD",
+            "benchmark": "BSD, Court, JMed, PFMT, WAT 2025 Patent subsets",
+            "direction": "ja->en",
+            "metric": "average BLEU (higher is better)",
+            "value": 33.26,
+            "referenceModel": "google/translategemma-4b-it (same card evaluation)",
+            "referenceValue": 29.41,
+            "higherIsBetter": true,
+            "relativeRetentionPercent": 113.09
+          },
+          {
+            "sourceId": "SRC-CAT-TRANSLATE-CARD",
+            "benchmark": "BSD, Court, JMed, PFMT, WAT 2025 Patent subsets",
+            "direction": "en->ja",
+            "metric": "average BLEU (higher is better)",
+            "value": 34.19,
+            "referenceModel": "google/translategemma-4b-it (same card evaluation)",
+            "referenceValue": 26.76,
+            "higherIsBetter": true,
+        "relativeRetentionPercent": 127.77
+          },
+          {
+            "sourceId": "SRC-CAT-TRANSLATE-CARD",
+            "benchmark": "BSD, Court, JMed, PFMT, WAT 2025 Patent subsets",
+            "direction": "bidirectional",
+            "metric": "average BLEU (higher is better)",
+            "value": 33.73,
+            "referenceModel": "google/translategemma-4b-it (same card evaluation)",
+            "referenceValue": null,
+            "higherIsBetter": true
+          }
+        ]
+      }
+    },
+    {
+      "candidateId": "cat-translate-0.8b",
+      "schemaVersion": 1,
+      "task": "translation",
+      "upstreamModelId": "CyberAgent/CAT-Translate-0.8b",
+      "modelRevision": null,
+      "artifactProvider": "CyberAgent AI Lab official Hugging Face repository",
+      "artifactName": "model.safetensors (official card names 0.8B; BF16 metadata)",
+      "artifactHash": null,
+      "quantization": "BF16 shown in hosted metadata",
+      "runtimeId": "Transformers text-generation route in model card; no M1 adapter pinned",
+      "runtimeRevision": null,
+      "executionBackend": null,
+      "dtype": "BF16",
+      "languages": [
+        "en",
+        "ja"
+      ],
+      "streamingKind": "text request/response",
+      "auxiliaryModels": [],
+      "codeLicense": "MIT on model card",
+      "weightTerms": "Card and paper reviewed; exact artifact revision/hash and base-model redistribution details have not been inspected.",
+      "redistributionStatus": "not reviewed",
+      "sourceIds": [
+        "SRC-CAT-TRANSLATE-08-CARD",
+        "SRC-CAT-TRANSLATE-PAPER"
+      ],
+      "sourceCheckedAt": "2026-09-29",
+      "templateHash": null,
+      "templateContract": "Prompt: Translate the following {src_lang} text into {tgt_lang}.\\n\\n{src_text}; src_lang and tgt_lang are the English names Japanese/English. Apply the official Sarashina 2.2 0.5B chat template. max_new_tokens=512. No application tokenizer/EOS fixture yet.",
+      "decodeOptions": "Official card pipeline uses max_new_tokens=512 and the exact instruction above; tokenizer chat template and EOS/stop behavior must be checked from a pinned artifact. LoRA is a training method only, not a low-rank-compressed inference artifact.",
+      "gatePolicyId": null,
+      "datasetHashes": [],
+      "evaluationRunIds": [],
+      "m1Measurement": null,
+      "status": "DEFERRED",
+      "reasonCodes": [
+        "WEIGHT_REVISION_UNKNOWN",
+        "WEIGHT_HASH_UNKNOWN",
+        "M1_RUNTIME_NOT_VERIFIED",
+        "TEMPLATE_EOS_UNVERIFIED",
+        "INSUFFICIENT_EVAL_DATA",
+        "M1_RUN_NOT_EXECUTED",
+        "NO_M1_RUNTIME_OR_QUALITY_RESULT"
+      ],
+      "reconsiderWhen": [
+        "Pin the official weight, tokenizer, and model-specific chat-template revisions and exact hashes.",
+        "Implement the exact Sarashina 2.2 0.5B chat template and verify tokenizer/EOS/stop behavior on the local runtime.",
+        "Run both directions on reviewed development/holdout data and the integrated M1 profile."
+      ],
+      "compressionMethods": [],
+      "publishedBenchmarkScreen": {
+        "policyId": "published-mt-benchmark-screen-v1",
+        "decision": "PASS",
+        "rationale": "The author card reports higher BLEU than TranslateGemma 4B on the same benchmark in both directions (29.71 vs 29.41 JA→EN; 30.68 vs 26.76 EN→JA). This is a compact-model shortlist screen, not a compression claim or local qualification.",
+        "evidence": [
+          {
+            "sourceId": "SRC-CAT-TRANSLATE-08-CARD",
+            "benchmark": "BSD, Court, JMed, PFMT, WAT 2025 Patent subsets",
+            "direction": "ja->en",
+            "metric": "average BLEU (higher is better)",
+            "value": 29.71,
+            "referenceModel": "google/translategemma-4b-it (same card evaluation)",
+            "referenceValue": 29.41,
+            "higherIsBetter": true,
+            "relativeRetentionPercent": 101.02
+          },
+          {
+            "sourceId": "SRC-CAT-TRANSLATE-08-CARD",
+            "benchmark": "BSD, Court, JMed, PFMT, WAT 2025 Patent subsets",
+            "direction": "en->ja",
+            "metric": "average BLEU (higher is better)",
+            "value": 30.68,
+            "referenceModel": "google/translategemma-4b-it (same card evaluation)",
+            "referenceValue": 26.76,
+            "higherIsBetter": true,
+            "relativeRetentionPercent": 114.65
+          }
+        ]
+      }
+    },
+    {
+      "candidateId": "qwen3.8-27b-fp8",
+      "schemaVersion": 1,
+      "task": "translation",
+      "upstreamModelId": "Qwen/Qwen3.8-27B-FP8",
+      "modelRevision": null,
+      "artifactProvider": "Qwen official Hugging Face repository",
+      "artifactName": "FP8 safetensors (27B dense vision-language model)",
+      "artifactHash": null,
+      "quantization": "Fine-grained FP8, block size 128",
+      "runtimeId": "Transformers / vLLM / SGLang / TokenSpeed listed on official card; no M1 runtime identified",
+      "runtimeRevision": null,
+      "executionBackend": null,
+      "dtype": "FP8",
+      "languages": [],
+      "streamingKind": "multimodal chat generation; no translation-specific contract identified",
+      "auxiliaryModels": null,
+      "codeLicense": "Apache-2.0 on official card",
+      "weightTerms": "Official model card reviewed; exact artifact revision/hash not pinned.",
+      "redistributionStatus": "not reviewed",
+      "sourceIds": [
+        "SRC-QWEN38-27B",
+        "SRC-QWEN38-FP8"
+      ],
+      "sourceCheckedAt": "2026-09-29",
+      "templateHash": null,
+      "decodeOptions": "The card says thinking is on by default and can be disabled through API parameters. No translation-specific language-code/template, EOS, or stopping contract was verified.",
+      "gatePolicyId": null,
+      "datasetHashes": [],
+      "evaluationRunIds": [],
+      "m1Measurement": null,
+      "status": "DEFERRED",
+      "reasonCodes": [
+        "OUTSIDE_LOCAL_SIZE_BAND",
+        "FP8_WEIGHTS_EXCEED_PROCESS_BUDGET",
+        "TRANSLATION_LANGUAGE_SUPPORT_UNVERIFIED",
+        "NO_JA_EN_TRANSLATION_SCORE",
+        "NO_M1_RUNTIME_VERIFIED",
+        "WEIGHTS_NOT_AUTHORIZED"
+      ],
+      "reconsiderWhen": [
+        "A smaller exact FP8/quantized variant is published with numeric JA→EN and EN→JA results against a comparable parent; its artifact fits the process budget and an M1 Metal path is verified."
+      ],
+      "compressionMethods": [
+        "quantization"
+      ],
+      "publishedBenchmarkScreen": {
+        "policyId": "published-mt-benchmark-screen-v1",
+        "decision": "DEFERRED",
+        "rationale": "The official FP8 card gives no exact Japanese-English translation score or comparable parent measurement. The 27B model size also exceeds the fixed local process budget; general coding or vision scores do not qualify translation.",
+        "evidence": []
+      }
+    }
+  ]
+}

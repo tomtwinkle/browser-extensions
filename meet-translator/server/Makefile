@@ -139,7 +139,7 @@ build: deps
 	CGO_ENABLED=1 \
 	CGO_CFLAGS="$(CGO_CFLAGS_VAL)" \
 	CGO_LDFLAGS="$(CGO_LDFLAGS_VAL) $(CGO_EXTRA_LDFLAGS)" \
-	go build $(if $(GO_TAGS),-tags $(GO_TAGS)) -o $(BIN) .
+	go build -mod=mod $(if $(GO_TAGS),-tags $(GO_TAGS)) -o $(BIN) .
 
 ## prism: PrismML ビルド (bonsai-8b / Q1_0_g128 対応) → server-prism
 prism: deps-prism
@@ -147,7 +147,7 @@ prism: deps-prism
 	CGO_ENABLED=1 \
 	CGO_CFLAGS="$(CGO_CFLAGS_PRISM_VAL)" \
 	CGO_LDFLAGS="$(CGO_LDFLAGS_PRISM_VAL) $(CGO_EXTRA_LDFLAGS)" \
-	go build $(if $(GO_TAGS),-tags $(GO_TAGS)$(comma)prism,-tags prism) -o $(BIN_PRISM) .
+	go build -mod=mod $(if $(GO_TAGS),-tags $(GO_TAGS)$(comma)prism,-tags prism) -o $(BIN_PRISM) .
 
 ## deps: 標準ビルド用ライブラリをクローン＆ビルド
 deps: $(BUILD_STAMP)
@@ -176,6 +176,11 @@ $(WHISPER_STAMP):
 		echo "[deps] Syncing whisper.cpp to $(WHISPER_VERSION)..."; \
 		rm -rf $(WHISPER_DIR); \
 		git clone --depth=1 --branch $(WHISPER_VERSION) $(WHISPER_REPO) $(WHISPER_DIR); \
+	fi
+	@if git -C $(WHISPER_DIR) apply --unidiff-zero --check $(abspath patches/whisper-preserve-candidate-text.patch) >/dev/null 2>&1; then \
+		git -C $(WHISPER_DIR) apply --unidiff-zero $(abspath patches/whisper-preserve-candidate-text.patch); \
+	elif ! grep -q 'Preserve decoded text so the host can review it with these scores' $(WHISPER_DIR)/src/whisper.cpp; then \
+		echo "[deps] whisper.cpp candidate-preservation patch does not match $(WHISPER_VERSION)" >&2; exit 1; \
 	fi
 	@rm -f $(BUILD_DIR)/.whisper-version-*
 	@touch $@
@@ -229,6 +234,11 @@ $(WHISPER_PRISM_STAMP):
 		rm -rf $(WHISPER_PRISM_DIR); \
 		git clone --depth=1 --branch $(WHISPER_VERSION) $(WHISPER_REPO) $(WHISPER_PRISM_DIR); \
 	fi
+	@if git -C $(WHISPER_PRISM_DIR) apply --unidiff-zero --check $(abspath patches/whisper-preserve-candidate-text.patch) >/dev/null 2>&1; then \
+		git -C $(WHISPER_PRISM_DIR) apply --unidiff-zero $(abspath patches/whisper-preserve-candidate-text.patch); \
+	elif ! grep -q 'Preserve decoded text so the host can review it with these scores' $(WHISPER_PRISM_DIR)/src/whisper.cpp; then \
+		echo "[deps-prism] whisper.cpp candidate-preservation patch does not match $(WHISPER_VERSION)" >&2; exit 1; \
+	fi
 	@rm -f $(BUILD_PRISM_DIR)/.whisper-version-*
 	@touch $@
 
@@ -260,14 +270,14 @@ test: deps
 	CGO_ENABLED=1 \
 	CGO_CFLAGS="$(CGO_CFLAGS_VAL)" \
 	CGO_LDFLAGS="$(CGO_LDFLAGS_VAL) $(CGO_EXTRA_LDFLAGS)" \
-	go test $(if $(GO_TAGS),-tags $(GO_TAGS)) -v -count=1 -timeout=120s ./...
+	go test -mod=mod $(if $(GO_TAGS),-tags $(GO_TAGS)) -v -count=1 -timeout=120s ./...
 
 ## bench-build: ベンチマークツールをビルドする (CGo 不要)
 bench-build:
 	@echo "[go build] benchmark tool"
-	go build -o benchmark ./cmd/benchmark/
+	go build -mod=mod -o benchmark ./cmd/benchmark/
 
-## bench: 起動中のサーバー (localhost:7070) に対してベンチマークを実行する
+## bench: 起動中の認証済みloopbackサーバー (127.0.0.1:17070) に対して実行する
 ##        事前に ./server --llama-model <model> でサーバーを起動しておくこと
 ##        例: make bench OUTPUT=results/bonsai-8b.json
 bench: bench-build

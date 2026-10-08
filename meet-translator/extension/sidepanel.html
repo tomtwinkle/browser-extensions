@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>字幕履歴と訂正</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, sans-serif; color: #202124; background: #f8fafc; }
+    * { box-sizing: border-box; }
+    body { margin: 0 auto; padding: 20px; max-width: 1050px; }
+    h1 { margin: 0 0 6px; font-size: 21px; }
+    p { color: #5f6368; line-height: 1.5; }
+    #status { min-height: 22px; margin: 8px 0 14px; font-size: 13px; color: #475569; }
+    #status.error { color: #b91c1c; }
+    .layout { display: grid; grid-template-columns: minmax(250px, .8fr) minmax(320px, 1.2fr); gap: 18px; align-items: start; }
+    #history { display: grid; gap: 8px; max-height: 70vh; overflow: auto; }
+    .history-item { width: 100%; text-align: left; border: 1px solid #dbe1e8; border-radius: 8px; background: #fff; padding: 10px; cursor: pointer; color: inherit; }
+    .history-item[aria-pressed="true"] { border-color: #2563eb; box-shadow: 0 0 0 1px #2563eb; }
+    .history-item span { display: block; overflow-wrap: anywhere; }
+    .history-item .meta { margin-top: 5px; color: #64748b; font-size: 11px; }
+    .editor { padding: 16px; border: 1px solid #dbe1e8; border-radius: 10px; background: #fff; }
+    label { display: block; margin: 12px 0 5px; font-size: 13px; font-weight: 600; }
+    textarea { width: 100%; min-height: 100px; resize: vertical; padding: 9px; border: 1px solid #cbd5e1; border-radius: 6px; font: inherit; line-height: 1.45; }
+    #translation { min-height: 54px; white-space: pre-wrap; overflow-wrap: anywhere; color: #334155; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    button.action { padding: 9px 12px; border: 0; border-radius: 6px; background: #e2e8f0; cursor: pointer; font: inherit; }
+    button.primary { background: #2563eb; color: white; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    @media (max-width: 700px) { .layout { grid-template-columns: 1fr; } #history { max-height: 32vh; } }
+  </style>
+</head>
+<body>
+  <h1>字幕履歴と訂正</h1>
+  <p>ここでの候補と編集内容は非公開です。共有字幕へ出すには、発話ごとに「承認して共有」を選んでください。</p>
+  <div id="status" role="status">接続中</div>
+  <section aria-label="評価用テレメトリ">
+    <button id="prepare-telemetry-export" class="action" type="button">評価テレメトリを準備</button>
+    <a id="download-telemetry-export" hidden>本文・音声を含まないテレメトリをダウンロード</a>
+    <p>保存データは処理段階・時刻・キュー値・設定の部分識別子を含みます。音声、字幕本文、APIトークンは含みません。評価記録は`eval/private-data/`へ移してGitへ追加しないでください。</p>
+  </section>
+  <section aria-label="負荷制御">
+    <p id="load-control-status" role="status">負荷制御状態を確認しています。</p>
+    <button id="resume-translations" class="action" type="button" disabled>翻訳を再開</button>
+  </section>
+  <div class="layout">
+    <section aria-label="字幕履歴">
+      <div id="history"></div>
+      <p id="history-empty">字幕候補はまだありません。</p>
+    </section>
+    <section class="editor" aria-label="選択した字幕を編集">
+      <div id="selected-status">履歴から発話を選択してください。</div>
+      <label for="source-text">採用する原文</label>
+      <textarea id="source-text" maxlength="4096" disabled></textarea>
+      <label>翻訳</label>
+      <div id="translation">—</div>
+      <div class="actions">
+        <button id="save-correction" class="action" disabled>訂正を保存して再翻訳</button>
+        <button id="approve-caption" class="action primary" disabled>承認して共有</button>
+        <button id="undo-correction" class="action" disabled>訂正を戻す</button>
+      </div>
+    </section>
+  </div>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

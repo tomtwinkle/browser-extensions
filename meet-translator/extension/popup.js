@@ -13,12 +13,55 @@ const statusText   = document.getElementById('status-text');
 const errorMsg     = document.getElementById('error-msg');
 const serverInfo   = document.getElementById('server-info');
 const serverUnavailable = document.getElementById('server-unavailable');
-const chatEnabledToggle   = document.getElementById('chat-enabled-toggle');
 const overlayEnabledToggle = document.getElementById('overlay-enabled-toggle');
+const migrationNotice = document.getElementById('migration-notice');
+const openCaptionShareButton = document.getElementById('open-caption-share');
+const openCorrectionPanelButton = document.getElementById('open-correction-panel');
 
 let isActive = false;
 // Initialised to English; overwritten after settings load.
 let msgs = getMessages('');
+
+function openExtensionPage(fileName) {
+  const url = chrome.runtime.getURL(fileName);
+  chrome.tabs.query({ url }, (tabs) => {
+    const existing = tabs?.[0];
+    if (existing?.id != null) {
+      chrome.tabs.update(existing.id, { active: true });
+      return;
+    }
+    chrome.tabs.create({ url });
+  });
+}
+
+function isMeetPage(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && parsed.hostname.toLowerCase() === 'meet.google.com' &&
+      !parsed.username && !parsed.password;
+  } catch (_) {
+    return false;
+  }
+}
+
+openCaptionShareButton.addEventListener('click', () => openExtensionPage('caption-presenter.html'));
+
+async function openPrivateCorrections() {
+  if (!chrome.sidePanel?.open) {
+    openExtensionPage('sidepanel.html');
+    return;
+  }
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id == null) throw new Error(msgs.errorOpenCorrectionPanel);
+    await chrome.sidePanel.open({ tabId: tab.id });
+  } catch (error) {
+    showError(error.message || msgs.errorOpenCorrectionPanel);
+  }
+}
+
+openCorrectionPanelButton.addEventListener('click', () => openPrivateCorrections());
 
 // ---------------------------------------------------------------------------
 // UI helpers
@@ -62,15 +105,10 @@ function updateServerInfo(info) {
 }
 
 // ---------------------------------------------------------------------------
-// Quick toggles: chat posting / overlay
+// Quick toggle: current in-Meet overlay
 // ---------------------------------------------------------------------------
-chrome.storage.local.get({ chatEnabled: false, overlayEnabled: true }, (cfg) => {
-  chatEnabledToggle.checked   = cfg.chatEnabled;
+chrome.storage.local.get({ overlayEnabled: true }, (cfg) => {
   overlayEnabledToggle.checked = cfg.overlayEnabled;
-});
-
-chatEnabledToggle.addEventListener('change', () => {
-  chrome.storage.local.set({ chatEnabled: chatEnabledToggle.checked });
 });
 
 overlayEnabledToggle.addEventListener('change', () => {
@@ -83,6 +121,11 @@ overlayEnabledToggle.addEventListener('change', () => {
 chrome.storage.local.get({ sourceLang: '' }, ({ sourceLang }) => {
   msgs = getMessages(sourceLang);
   applyI18n(msgs);
+  MeetTranslatorShared.migrateLegacyChatSetting(chrome.storage.local).then((showNotice) => {
+    if (!showNotice) return;
+    migrationNotice.textContent = msgs.chatMigrationNotice;
+    migrationNotice.style.display = 'block';
+  });
   // Re-render the button / status with the correct language after i18n is applied.
   setUI(isActive);
 });
@@ -167,7 +210,7 @@ toggleBtn.addEventListener('click', async () => {
       // Make sure we are on a Meet tab
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-      if (!tab || !tab.url?.startsWith('https://meet.google.com/')) {
+      if (!tab || !isMeetPage(tab.url)) {
         showError(msgs.errorMeetTab);
         setLoading(false);
         return;
