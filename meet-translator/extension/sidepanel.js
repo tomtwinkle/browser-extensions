@@ -10,12 +10,18 @@
   const saveButton = document.getElementById('save-correction');
   const approveButton = document.getElementById('approve-caption');
   const undoButton = document.getElementById('undo-correction');
+  const telemetryExportButton = document.getElementById('prepare-telemetry-export');
+  const telemetryDownloadLink = document.getElementById('download-telemetry-export');
+  const loadControlStatus = document.getElementById('load-control-status');
+  const resumeTranslationsButton = document.getElementById('resume-translations');
   const records = new Map();
   const buttons = new Map();
   let selectedSegmentId = null;
   let selectedRecord = null;
   let dirty = false;
   let pending = false;
+  let telemetryObjectUrl = null;
+  let pendingTelemetryRequestId = null;
 
   function setStatus(message, isError = false) {
     status.textContent = message;
@@ -38,21 +44,46 @@
   }
 
   function showTranslationQueueStatus(queueStatus) {
-    if (!['TRANSLATION_OVERLOAD', 'TRANSLATION_STALE'].includes(queueStatus?.code)) return false;
+    if (!['TRANSLATION_OVERLOAD', 'TRANSLATION_STALE', 'TRANSLATION_PAUSED'].includes(queueStatus?.code)) return false;
     const droppedCount = Number.isSafeInteger(queueStatus.droppedCount) ? queueStatus.droppedCount : 0;
     const latestReason = queueStatus.code === 'TRANSLATION_OVERLOAD'
       ? '翻訳処理の混雑'
-      : '翻訳の期限切れ・原文/セッション更新';
+      : queueStatus.code === 'TRANSLATION_PAUSED'
+        ? '負荷制御による一時停止'
+        : '翻訳の期限切れ・原文/セッション更新';
+    const heldCount = Number.isSafeInteger(queueStatus.heldCount) ? queueStatus.heldCount : 0;
+    const rejectedCount = Number.isSafeInteger(queueStatus.rejectedCount) ? queueStatus.rejectedCount : 0;
     setStatus(
       `翻訳を開始せずに破棄した件数は累計${droppedCount}件です。` +
+        `保留${heldCount}件・停止中の受付拒否${rejectedCount}件。` +
         `最新の区分は「${latestReason}」。原文は履歴に保持しました。`,
-      true
+      queueStatus.code !== 'TRANSLATION_PAUSED'
     );
     return true;
   }
 
+  function showLoadControlStatus(value = {}) {
+    const messages = [];
+    if (!value.memorySourceAvailable) {
+      messages.push('メモリ状態を取得できないため、メモリ圧迫時の自動停止とモデル解放は利用できません。');
+    }
+    if (value.stopAsr) messages.push('ASR受付を一時停止しています。');
+    if (value.inferenceBlocked) messages.push('翻訳推論の受付を停止しています。');
+    else if (value.translationsPaused) messages.push('処理負荷のため翻訳を一時停止しています。');
+    else if (value.experimentsStopped) messages.push('高負荷のため実験・診断処理を停止しています。');
+    else messages.push('翻訳の一時停止はありません。');
+    if (value.translationsPaused && value.resumeEligible) {
+      messages.push('復帰条件を満たしました。ボタン操作で翻訳を再開できます。');
+    } else if (value.translationsPaused) {
+      messages.push('復帰条件を確認中です。再開時に過去の保留発話は積み直しません。');
+    }
+    loadControlStatus.textContent = messages.join(' ');
+    resumeTranslationsButton.disabled = !(value.translationsPaused && value.resumeEligible);
+  }
+
   function translationSummary(record) {
     const current = record.translations?.find((item) => item.sourceRevision === record.sourceRevision);
+    if (current?.state === 'paused') return '処理負荷のため翻訳を一時停止';
     if (!current || current.state === 'pending') return '翻訳中';
     if (current.state === 'failed') return '翻訳に失敗';
     return current.text || '翻訳なし';
@@ -110,7 +141,11 @@
         : '未承認の候補';
     const reasons = hasSelection ? reviewReasons(selectedRecord) : '';
     selectedStatus.textContent = reasons ? `${statusText}。確認理由: ${reasons}` : statusText;
-    translation.textContent = !translated ? '—' : translated.state === 'ready' ? translated.text : translated.state === 'failed' ? '翻訳に失敗しました' : '翻訳中';
+    translation.textContent = !translated ? '—'
+      : translated.state === 'ready' ? translated.text
+        : translated.state === 'failed' ? '翻訳に失敗しました'
+          : translated.state === 'paused' ? '処理負荷のため翻訳を一時停止'
+            : '翻訳中';
     sourceText.disabled = !hasSelection || pending;
     saveButton.disabled = !hasSelection || pending || !dirty || sourceText.value.trim() === '';
     approveButton.disabled = !hasSelection || pending || !selectedRecord.sourceText?.trim() ||
@@ -163,6 +198,7 @@
       setStatus('接続中');
       showAudioQueueStatus(message.queueStatus);
       showTranslationQueueStatus(message.translationQueueStatus);
+      showLoadControlStatus(message.loadControlStatus);
       if (selectedSegmentId && records.has(selectedSegmentId)) selectRecord(selectedSegmentId);
       return;
     }
@@ -178,6 +214,10 @@
       showTranslationQueueStatus(message.status);
       return;
     }
+    if (message.type === 'CAPTION_LOAD_CONTROL_STATUS') {
+      showLoadControlStatus(message.status);
+      return;
+    }
     if (message.type === 'CAPTION_ACTION_RESULT') {
       pending = false;
       const result = message.result;
@@ -191,6 +231,8 @@
           dirty = false;
           if (result.translationStale) {
             setStatus('翻訳中に原文が更新されたため、古い翻訳結果を破棄しました。', true);
+          } else if (result.translationPaused) {
+            setStatus('訂正を保存しました。処理負荷のため翻訳を一時停止し、原文を履歴に保持しています。');
           } else if (result.translationFailed) {
             setStatus('訂正を保存しましたが、翻訳に失敗しました。原文は履歴に保持されています。', true);
           } else {
@@ -207,6 +249,23 @@
       updateEditor();
     }
     if (message.type === 'CAPTION_CONNECTION_ERROR') setStatus('字幕ストアに接続できません。', true);
+    if (message.type === 'EVALUATION_TELEMETRY_EXPORT') {
+      if (message.requestId !== pendingTelemetryRequestId) return;
+      pendingTelemetryRequestId = null;
+      const payload = {
+        ...message.snapshot,
+        caseTimings: message.caseTimings,
+        privacy: { transcriptText: false, audio: false, credentials: false },
+      };
+      if (telemetryObjectUrl) URL.revokeObjectURL(telemetryObjectUrl);
+      telemetryObjectUrl = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], {
+        type: 'application/json',
+      }));
+      telemetryDownloadLink.href = telemetryObjectUrl;
+      telemetryDownloadLink.download = `meet-translator-telemetry-${Date.now()}.json`;
+      telemetryDownloadLink.hidden = false;
+      setStatus('本文・音声を含まない評価テレメトリを準備しました。保存先はignored領域にしてください。');
+    }
   });
   port.onDisconnect.addListener(() => setStatus('接続が切れました。', true));
 
@@ -226,4 +285,18 @@
   saveButton.addEventListener('click', () => sendAction('correct', { sourceText: sourceText.value }));
   approveButton.addEventListener('click', () => sendAction('approve', {}));
   undoButton.addEventListener('click', () => sendAction('undo', {}));
+  telemetryExportButton.addEventListener('click', () => {
+    telemetryDownloadLink.hidden = true;
+    setStatus('評価テレメトリを準備しています…');
+    pendingTelemetryRequestId = crypto.randomUUID();
+    port.postMessage({
+      type: 'EVALUATION_TELEMETRY_EXPORT_REQUEST',
+      requestId: pendingTelemetryRequestId,
+    });
+  });
+  resumeTranslationsButton.addEventListener('click', () => {
+    if (resumeTranslationsButton.disabled) return;
+    resumeTranslationsButton.disabled = true;
+    port.postMessage({ type: 'CAPTION_LOAD_CONTROL_RESUME' });
+  });
 })();

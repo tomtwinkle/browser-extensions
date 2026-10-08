@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -222,10 +221,13 @@ type QualificationRollback struct {
 }
 
 // AssessQualification applies the M1 Max product gates. Missing evidence is
-// BLOCKED; a measured product or quality failure is REJECTED. The current
-// report-only interface has no trusted executor provenance verifier, so it
-// never promotes caller-authored fields to QUALIFIED.
+// BLOCKED; a measured product or quality failure is REJECTED. Caller-authored
+// reports do not carry verified execution provenance and cannot qualify.
 func AssessQualification(report QualificationReport) QualificationAssessment {
+	return assessQualificationWithProvenance(report, nil)
+}
+
+func assessQualificationWithProvenance(report QualificationReport, provenance *verifiedQualificationProvenance) QualificationAssessment {
 	assessment := QualificationAssessment{Status: QualificationStatusQualified, Findings: make([]QualificationFinding, 0)}
 	seen := make(map[string]int)
 	add := func(kind, code, detail string) {
@@ -319,7 +321,9 @@ func AssessQualification(report QualificationReport) QualificationAssessment {
 	validateQuality(report, block, reject)
 	validatePerformance(report.Performance, block, reject)
 	validateRollback(report.Rollback, block)
-	block("TRUSTED_PROVENANCE_UNAVAILABLE", "Caller-authored report fields are not verified executor evidence; qualification remains blocked until a trusted collector and evidence verifier exist.")
+	if provenance == nil || provenance.keyID == "" || provenance.runID != report.RunID || provenance.reportSemanticSHA256 != sha256JSON(report) {
+		block("TRUSTED_PROVENANCE_UNAVAILABLE", "Caller-authored report fields are not verified executor evidence; qualification remains blocked until a trusted collector and evidence verifier exist.")
+	}
 	sort.Slice(assessment.Findings, func(i, j int) bool {
 		return assessment.Findings[i].Code < assessment.Findings[j].Code
 	})
@@ -328,27 +332,11 @@ func AssessQualification(report QualificationReport) QualificationAssessment {
 }
 
 func runQualificationCheck(input io.Reader, output io.Writer) (QualificationAssessment, error) {
-	decoder := json.NewDecoder(input)
-	decoder.DisallowUnknownFields()
-	var report QualificationReport
-	if err := decoder.Decode(&report); err != nil {
-		return QualificationAssessment{}, fmt.Errorf("decode qualification report: %w", err)
+	reportRaw, err := readLimited(input, maxQualificationReportBytes)
+	if err != nil {
+		return QualificationAssessment{}, fmt.Errorf("read qualification report: %w", err)
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return QualificationAssessment{}, fmt.Errorf("qualification report must contain one JSON object")
-		}
-		return QualificationAssessment{}, fmt.Errorf("read end of qualification report: %w", err)
-	}
-
-	assessment := AssessQualification(report)
-	encoder := json.NewEncoder(output)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(assessment); err != nil {
-		return QualificationAssessment{}, fmt.Errorf("write qualification assessment: %w", err)
-	}
-	return assessment, nil
+	return runQualificationCheckWithAttestation(reportRaw, nil, nil, nil, productionTrustedQualificationKeys(), output)
 }
 
 func qualificationExitCode(status QualificationStatus) int {

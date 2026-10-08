@@ -54,7 +54,13 @@ function loadBackground({ persisted = null, publishMicrophoneCaptions = false } 
     AbortController, Blob, FormData, URL, URLSearchParams, chrome, console: { info() {}, log() {}, warn() {}, error() {} },
     fetch: async () => ({ ok: true, json: async () => ({ status: 'ok' }) }),
     globalThis: null,
-    importScripts() {},
+    importScripts(...files) {
+      for (const file of files) {
+        if (file === 'shared.js') continue;
+        const dependency = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+        vm.runInNewContext(dependency, context, { filename: file });
+      }
+    },
     clearInterval() {}, clearTimeout, setInterval() { return 1; }, setTimeout,
   };
   context.globalThis = context;

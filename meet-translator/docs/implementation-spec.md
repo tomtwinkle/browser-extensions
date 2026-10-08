@@ -133,6 +133,8 @@ UI操作応答	制御したUI試験で訂正操作への応答p95が100ms以下
 - 初回モデル取得時間、モデルロード時間、ウォームアップ、定常推論を別々に報告する。
 - 発話開始から最初の原文・訳が出るまでの遅延も別に記録する。終話基準の数字で長いバッファ待ちを隠さない。
 - M1実機やモデルがない環境では計測器・試験を実装するが、実機性能を合格と報告しない。
+- resource sample recordは1秒を固定間隔、900〜1,500msをサンプル継続の許容幅とし、root/child processをPIDと起動時刻で識別する。process membershipが不完全ならgroup合計を出さず、取得不能なphys_footprint・memory pressure・accelerator情報はnullのまま保持する。steady-state p95はwarmup後の測定区間だけ、peakはload/stopを含む全sampleから集計し、3区間のsample countを分ける。
+- ローカルのmeasurement recordとsummaryはcaller-editable入力として扱い、署名検証だけで実行を信頼しない。承認済みexecutor/collectorと独立trust anchorがない間、品質・資格証拠やM1性能合格へ使用しない。
 2.5 過負荷時の挙動
 - ASR未処理音声は合計10秒かつ最大4件。古い未開始区間の終話から5秒を超えたらSTALEを記録して破棄する。
 - 上限を超える新規区間はOVERLOADを記録する。捨てた件数・音声時間をUIと評価へ出す。
@@ -359,6 +361,8 @@ caseId、音声参照、正解、言語、発話区間、unknown区間、タグ�
 - 挿入数を意味的ハルシネーションの完全測定と呼ばない。人手の「音声にない内容」評価欄を別に設ける。
 - 終話から原文/翻訳まで、発話開始から初表示まで、キュー待ち、ASR処理、翻訳処理、描画を分離。
 - 機械間の時刻を比較する場合は時計ずれを補正する。未同期のDate.now()差を片方向遅延として扱わない。
+- モデル出力JSONLはcaseId/splitで照合し、選択したsplitの欠落・重複・未知・別split出力を拒否する。レポートには入力ファイルhashと指標signatureを記録し、音声本文・書き起こし・翻訳本文・assertion本文を複写しない。
+- score-onlyレポートは常に未信頼として扱い、合成/未審査の値を品質証拠や候補昇格へ使用しない。holdout全件保留、空の公開訳、方向別公開率の低下を比較器で検出する。
 8.4 軽量化と品質の同時判定
 M1プロファイルは次を満たして初めて合格候補になる：
 - 固定の音声評価セットで、公開字幕CER/WERがbaselineより1パーセントポイント超悪化しない。
@@ -396,6 +400,7 @@ TranslationAdapter に、モデルfamilyごとのlanguage mapping、入力組立
 - 空応答、誤った翻訳先言語、打切り、余計な説明、原文コピーだけ、タグ漏れ、テンプレート残骸を明示した失敗ケースとする。ただし言語判定器だけで固有名詞を多く含む短文を自動拒否しない。
 指標と採用基準
 - 自動指標はSacreBLEUのchrF2を主な補助指標とする。character_order=6、word_order=0、beta=2、whitespace=falseを固定し、パッケージversion・実際のsignature・入力hashを保存する。BLEU等を追加する場合は言語別tokenizerも記録する。[SRC-SACREBLEU]
+- 再現用chrF2 scorerは確認済みSacreBLEU v2.6.0の既定mixed-case/effective-order、多参照のsegment-best-referenceとcorpus集計を使い、reference数を方向内で固定する。Go移植版である場合はPython packageを実行したかのように報告しない。
 - 自動指標だけで合格にしない。欠落、過剰な追加、否定反転、数値/単位、主語/責任主体、用語逸脱、誤言語を人手で分類する。
 - 重要ケース群では、新たな重大誤訳が1件でも確認された候補を昇格させない。過剰な文章追加や重要情報の欠落も対象。
 - 一般ケースでも重大誤訳率、用語誤り率、訳の空/失敗率を現行より増やさない。小さな評価集合で観測した0件を未知音声での保証と呼ばない。

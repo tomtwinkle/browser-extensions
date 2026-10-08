@@ -33,6 +33,15 @@
   <h1>字幕履歴と訂正</h1>
   <p>ここでの候補と編集内容は非公開です。共有字幕へ出すには、発話ごとに「承認して共有」を選んでください。</p>
   <div id="status" role="status">接続中</div>
+  <section aria-label="評価用テレメトリ">
+    <button id="prepare-telemetry-export" class="action" type="button">評価テレメトリを準備</button>
+    <a id="download-telemetry-export" hidden>本文・音声を含まないテレメトリをダウンロード</a>
+    <p>保存データは処理段階・時刻・キュー値・設定の部分識別子を含みます。音声、字幕本文、APIトークンは含みません。評価記録は`eval/private-data/`へ移してGitへ追加しないでください。</p>
+  </section>
+  <section aria-label="負荷制御">
+    <p id="load-control-status" role="status">負荷制御状態を確認しています。</p>
+    <button id="resume-translations" class="action" type="button" disabled>翻訳を再開</button>
+  </section>
   <div class="layout">
     <section aria-label="字幕履歴">
       <div id="history"></div>

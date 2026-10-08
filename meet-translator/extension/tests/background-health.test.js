@@ -71,7 +71,13 @@ function loadBackgroundScript() {
     },
     fetch: async () => ({ ok: true, async json() { return {}; } }),
     globalThis: null,
-    importScripts() {},
+    importScripts(...files) {
+      for (const file of files) {
+        if (file === 'shared.js') continue;
+        const dependency = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+        vm.runInNewContext(dependency, context, { filename: file });
+      }
+    },
     clearInterval() {},
     clearTimeout() {},
     setInterval(fn) {

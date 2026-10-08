@@ -1,12 +1,63 @@
 # 実装状況
 
-更新日: 2026-10-05
+更新日: 2026-10-08
 
 対象: `meet-translator/`
 
 作業開始時HEAD: `6ac37a149a0314ba1b989a1c1f66d5dedf35ff47` (`main`)
 
 作業開始時作業ツリー: 既存の未コミット変更があった。内容を維持し、開始時HEADとともに追跡した。
+
+### 継続作業チェックポイント (R29 review fixes, 2026-10-08)
+
+- 既存のbranch・HEADとtracked/untracked差分を維持し、reset/stash/cleanup/commit/pushはしていない。
+- C3 load-controlの連続sample条件を仕様どおり900〜1,500ms inclusiveへ修正。500/899/900/1,500/1,501msを検査し、旧実装が500msの高メモリ2点で早期発火することをRed testで確認した。
+- E provenanceはmeasurement artifactをstrict JSONとしてdecodeし、record schema/sample schedule/process treeを検証する。reportとmeasurementのrun ID・warmup/measured durationを結合し、attestationの開始終了時刻が最後のsampleを包含することを確認する。60分測定に1秒署名を付けたケースとreport duration不一致をRed testで再現してから修正した。production trust-key registryは空のまま。
+- F analyzerは各processの起動時刻が親より前でないことをrootまでの全edgeで検証する。root直下と複数階層の異常ケースを追加した。
+- R29の原因別一次情報再確認はR28に記録済みのOpenAI harness、Qwen3-ASR、CAT-Translate、MLX/MLX-LM公式情報を再照合し、現行ページの内容に差分がないため`NO_MATERIAL_CHANGE`。候補・model/runtime/quantization/template/decode/gate/publication条件は変更なし。10候補DEFERRED、0 SELECTED、3 public score screens、`PROFILE_NOT_QUALIFIED`を維持。
+- indexにEdge isolated fixtureの最終記録run (2026-09-29 11:31 UTC, 13/13)とR28未再実行を明記。過去のEdge fixtureはsyntheticで、実Meet/モデル/M1 qualificationを証明しない。
+- 修正後のfull model-free checks: `go test -mod=mod ./... -count=1` 3 packages PASS、extension tests 110/110 PASS、eval/device 21/21 PASS、offline research integrity 123 sources / 10 DEFERRED / 3 benchmark screens / 0 selected PASS、synthetic contract check PASS (inference false, quality evidence false)、`git diff --check` PASS。GoはmacOS xcrun temp cache権限warningとduplicate `-lc++` warningを出したがexit 0。
+- 独立実装reviewは元の3 findingsを修正後に再確認して0 findings。文書reviewはR29の再確認範囲に関する1 P3を修正・再確認し、残件0。実機Edge/Meet再試験は今回も行っていない。
+- 2026-10-08の最終Computer Use再確認でもEdgeのAccessibility/Screen Recording permissionが未付与で、`getApp`は`Computer Use permissions are not granted`を返した。このターンでEdge/Meetは操作していない。UI権限、承認済み評価データ、production trust anchor/collectorは引き続き不足。実Meet、M1モデル品質・性能・memory/latency、60分統合はBLOCKED/NOT RUN。
+
+### 継続作業チェックポイント (R25/C3, 2026-10-07)
+
+- 再開時HEAD: `a755fd7bfb5ad725f6b26a7b499740db52b2f4ef` (`feat/meet-translator-local-evaluation`)。C3変更はtracked/untrackedの未コミット差分として存在し、staged changesはなかった。全差分を保持し、リセット・stash・破棄は行っていない。
+- C3: `chrome.storage.session`に上限付きの許可イベントだけを保存し、private side panelから明示操作でexportできる。イベントはtranscript/audio/prompt/URL/pathを受け付けず、ASR/翻訳、承認、字幕公開イベント、訂正/undo、queue drop/hold/reject、load-controlの区分と段階時間を別々に記録する。`caption_publication_event`はstoreへの公開更新を送る直前のイベントで、画面描画完了時刻ではない。
+- 設定識別子は観測できた一部設定のFNV-1a 32-bitラベルで、`configCoverage=partial`。完全なmodel/runtime/template/decode/gate fingerprintやtrusted run provenanceではなく、改ざん耐性もない。telemetryはprivate export専用で、public caption projectionへ追加しない。
+- 仕様§2.5のqueue制御はextensionのserial audio admission待ち時間を使う。2秒超が3回続けば実験/診断を停止し、10秒後も1秒間隔の直近3測定がすべて2秒超なら翻訳受付を一時停止する。保留中翻訳は原文を残したままprivate status `paused`へ移し、古い翻訳を再投入せず、条件成立後の明示操作で新しい発話から再開する。これはserver/native inference laneのqueue時間計測ではない。
+- reviewer指摘を受け、nominal 1,000msの連続サンプルは実間隔900〜1,500msで許容し、範囲外の間隔はpause・memory threshold・recoveryの連続区間をリセットする。翻訳pause時にはprivate `paused`値を含まない公開projectionをupsertし、既存の「翻訳中」表示を原文のみへ更新する。
+- process-group memory providerと安全なnative model-release APIは未実装。memory/pressureの実測値はありません。10 GiB/critical分岐はpure controllerで検査できるのみで、本番のmemory stop/unload保護としてはBLOCKED。side panelにも未対応と明記する。実会議と推論modelを含むM1統合は未実施で、`PROFILE_NOT_QUALIFIED`を維持。
+- 2026-10-07のComputer Use再確認はOS Accessibility/Screen Recording権限が未付与のためEdge UIを操作できず、Meet/Edge実機確認は`BLOCKED/NOT RUN`。この試行中はブラウザー、拡張、会議、camera/mic、画面共有、mediaを操作していない。
+- focused C3 model-free test 16/16 PASS、extension test suite 107/107 PASS。どちらも実機、モデル品質、M1 Metal、memory、確定遅延を認定しない。
+- R25一次情報再確認は`NO_MATERIAL_CHANGE`。Qwen3.8-27Bは27Bのdense vision-language modelで、カードに日英方向別翻訳値がなく、M1/MLX経路の公式記載もQwen3.5系列に限られる。Qwen3.5-0.8BのWMT24++は55言語平均で日英個別値ではない。Qwen3-ASR公式例はTransformers/CUDAまたはvLLMで、M1 Metalを示さない。MLX v0.32.3とMLX-LM v0.31.3は別package。候補、runtime、template、量子化、gate、publication条件は変更せず、重み/評価データを取得・実行していない。
+
+### 継続作業チェックポイント (R26/D score-only evaluator, 2026-10-07)
+
+- R26は公式SacreBLEU v2.6.0 chrF実装、Go `x/text` v0.28.0のGo 1.23対応、`cases.Fold`とNFC仕様を確認。一次情報と確認内容はsources.jsonl/R26へ保存し、研究結論はモデル/runtime/品質閾値/publication policy `NO_MATERIAL_CHANGE`。
+- `server/cmd/eval/scorer.go`はASR-onlyの日本語CER/英語WERとS/D/I/N、MT-onlyの方向別chrF2、E2E raw/public ASR・公開訳・方向別coverage・critical assertion・無音誤出力を別集計する。SacreBLEU v2.6.0のsignatureを出し、reference数/方向を固定する。
+- `--score-outputs`と`--score-split`は出力JSONLのcase/splitを完全照合し、manifest/output両方のSHA-256を記録する。公開されない/空の訳はpublic hypothesisを空文字として削除扱いにし、baselineより低いtotal/方向coverageと全件保留を拒否する。レポートへ音声・本文・参照訳・assertion本文を含めず、常に`score-only-untrusted`/`qualityEvidence=false`/`not-evaluated`とする。
+- Unicode比較のためGo 1.23互換の`golang.org/x/text v0.28.0`をpinし、C++ native vendorを置き換えずMakefile Go命令をmodule modeにした。現行の確定チェックは`go test -mod=mod ./cmd/eval -count=1` PASS。これはsynthetic/model-free scorer testのみであり、外部品質やM1性能を証明しない。
+- 実推論adapter、認可済み人手holdout、署名済みtrusted provenance、運用用計測collector、M1 real Meet/Edge統合qualificationは未完/未実施。候補10件全DEFERRED、0 SELECTED、`PROFILE_NOT_QUALIFIED`を維持する。
+
+### 継続作業チェックポイント (R27/E provenance and F measurement record, 2026-10-08)
+
+- 再開時HEADは`a755fd7bfb5ad725f6b26a7b499740db52b2f4ef`、branchは`feat/meet-translator-local-evaluation`。既存tracked/untracked変更をすべて維持し、reset/stash/cleanup/commit/pushはしていない。
+- E: `server/cmd/eval`へDSSE v1/Ed25519のdetached signature検証を追加。payload type、完全なJSON、run ID、正確なreport/output/measurement bytes、environment/config/manifest hash、executor/scorer revision、実行時刻/exit status、明示的なtestDouble/synthetic状態を照合する。attestationを使うCLI経路はoutputsとmeasurements artifactの両方を必須とする。production trust-key registryは空で、独立executor/collectorも未配備のため、全てのcaller-authored reportは引き続きBLOCKED。
+- F: 厳密なmodel-free process measurement record analyzerを追加。root/childはPIDと起動時刻で識別し、process membershipの完全性、900〜1,500msのsample間隔、warmup/measured/stop sample countを検査する。steady p95と全run peakを分離し、RSSと`phys_footprint`、memory pressure、swapを混同せず、取得不能値はnullのままにする。run IDの文字種/長さも検証する。これはcollectorではなく、summaryは常に`qualificationEvidence=false`/`qualityEvidence=false`/`not-evaluated`。
+- 2026-10-08の一次資料確認でQwen3-ASRの経路を分けて記録した。R27が述べたstreaming経路の制約（vLLM限定、batch/timestamps非対応）は現在のREADMEでも維持される。別経路ではbatch transcriptionがあり、timestampには0.6B ForcedAlignerを追加する。Transformers例はCUDAを示し、公開WERに日本語単独値や公式M1 Metal/MLX経路はないため候補はDEFERRED。候補選定・model/runtime/quantization/template/gateは`NO_MATERIAL_CHANGE`。
+- Go全3 package `go test -mod=mod ./... -count=1` PASS。`node --test meet-translator/extension/tests/*.test.js`は109/109 PASS、eval/deviceは21/21 PASS、research integrityは123 sources / 10 DEFERRED / 3 published-score screen / 0 selected、contract fixturesは全てsynthetic・`not-evaluated`でPASS。Goの直接実行は`-mod=mod`が必要で、vendorを同期していない既定vendor modeは失敗する。GitHub Actionsは`make test`を使い、Makefileは`-mod=mod`指定。
+- macOS Computer Use再確認は過去にAccessibility/Screen Recordingが未許可で、今回もEdge/Meetを操作していない。隔離Edge browser fixture、実Google Meet字幕/画面共有、M1モデル推論、品質、memory、latency、60分実機統合は今回NOT RUN。M1/Meet qualificationはBLOCKEDのまま。
+- 実装と文書の再レビューは指摘0件。次は確定した検証結果を既存PR #74へ反映してopenを維持し、mergeしない。実Meet試験はOS Computer Use accessが得られた後、従来のユーザー承認済みテスト室で再開する。
+
+### 継続作業チェックポイント (R28 source correction and final model-free verification, 2026-10-08)
+
+- 2026-10-08にハーネス、Qwen3-ASR、CAT-Translate 0.8B、MLX/MLX-LM、Core ML計測、Ed25519/DSSEの一次情報を再確認した。R27の記述はstreaming経路についての制約であり、現行READMEでもstreamingはvLLM限定・batch/timestamps非対応と確認した。R28は別経路としてのbatch inferenceとForcedAligner timestampsを追加確認した。確認したTransformers例はCUDA向け、公開WERに日本語単独値や公式M1 Metal/MLX経路はない。候補は引き続きDEFERRED。9 source rows追加で123 sources、10候補全てDEFERRED、3 public benchmark screens、0 SELECTED、`PROFILE_NOT_QUALIFIED`。モデル/runtime/quantization/template/decode/gateは`NO_MATERIAL_CHANGE`。
+- `docs/research/index.md`、`research-log.md`、`handoff-2026-09-30.md`にR28の根拠と制限を同期。handoffには外部一次情報の要点も記載し、R27のstreaming限定の記述を維持したまま、別経路のbatch/ForcedAligner機能を明確化した。
+- 最終model-free suiteは全てPASS: Go全3 package、Extension 109/109、eval/device 21/21、offline research integrity 123/10/3/0、synthetic contracts、`git diff --check`。Go compilerはmacOS `xcrun` temp cacheの書込拒否とduplicate `-lc++` warningを出したが、Go test process exit 0。全評価fixtureはsyntheticで推論なし、quality evidenceなし。
+- `go test -mod=mod ./... -count=1`が全3 Go packageを通過した。裸の`go test`はこの作業ツリーではdefault vendor modeの不整合で失敗した既往があり、CI `make test`は`-mod=mod`を明示する。C++ vendor treeを再clone/buildする`make test`の`deps`は今回実行していない。
+- Computer Useを再確認したところmacOS Accessibility/Screen Recording permissionsが未付与だった。Edge/Meet、通常profile、extension、camera/mic、screen share、mediaを操作していない。隔離Edge fixtureの過去13/13 PASSは今回再実行していない。A/Bと実Meet、実モデル品質・M1性能・memory/latency・60分結合試験は`BLOCKED/NOT RUN`。
+- provenance/measurement/C3/docsの独立subagent reviewはこの記録時点で進行中。レビュー指摘を修正・再レビューした後、既存PR #74だけを更新してOPENのまま保持し、mergeしない。
 
 ### 継続作業チェックポイント (2026-09-30)
 
@@ -58,7 +109,7 @@
 | 拡張UI追加memory | Meetのみbaselineとの差分512 MiB以下を目標。 | <= (target) | 制御したChrome比較。共有processの二重計上を避け、分離不能時は推定と明記。 | implementation-spec.md §2.4; m1-max-performance.md |
 | 音声queue | 最大4件、累積音声長10,000ms。未開始音声の終話後5,000ms超でSTALE。 | 件数/累積長は上限以下。staleは経過時間 > 5,000ms。 | 10秒は滞留時間でなく、処理待ち・実行中・話者batch予約を含む累積音声長。 | implementation-spec.md §2.5; ADR 0006 |
 | 翻訳queue | 未開始最大8件。同一session/stream/generation/segmentでは最新sourceRevisionのみ。enqueue後3,000ms超、またはVAD終話時刻後8,000ms超でTRANSLATION_STALE。 | 厳密な >。境界ちょうどは受理可能。原文保持、訳failed。 | pending item。8秒用のVAD wall-clock時刻は一時メタデータで、字幕session-relative endMsとは別。 | implementation-spec.md §2.5; ADR 0013 |
-| 適応負荷制御 | queue wait > 2,000msが3回連続で実験/診断停止。停止後10秒経過し、直近3回(1秒間隔)すべて > 2,000msなら新規翻訳を一時停止。再開条件はmemory pressure normalが30秒連続かつASR wait < 500ms、その後ユーザー操作。 | すべて厳密な超過。 | 1秒間隔計測。既定で実験処理は無効。現在の実装は未完。 | implementation-spec.md §2.5 |
+| 適応負荷制御 | queue wait > 2,000msが3回連続で実験/診断停止。停止後10秒経過し、直近3回(公称1秒間隔)すべて > 2,000msなら新規翻訳を一時停止。再開条件はmemory pressure normalが30秒連続かつASR wait < 500ms、その後ユーザー操作。 | すべて厳密な超過。サンプルは900〜1,500msの隣接間隔を許容し、その外は連続条件をリセット。 | 1秒間隔計測を意図したextension audio-admission queueのみ。memory providerとsafe unloadは未実装。 | implementation-spec.md §2.5; ADR 0015 |
 | 60分/メディア結合試験 | 2分warm-up後60分測定。通常有声音率50%、10分ごとに2分80%。host込み4参加端末、720p目標。crash/OOM/無制限queue/通常負荷のOVERLOAD音声欠落は0。 | 違反0件。Meetの品質差は拡張なしbaselineと比較。解像度・差分許容の独立数値は未定義。 | 5分ごとに訂正/undo/用語登録。lifecycleは別試験。 | implementation-spec.md §9; m1-max-performance.md |
 
 ## 固定した基準と段階
@@ -67,8 +118,8 @@
 
 | 段階 | 状態 | 根拠・残件 |
 | --- | --- | --- |
-| S0 調査・基準確認 | DONE | 指示書、開始時HEAD・既存dirty差分、既存テスト、実推論経路を確認。仕様全文を `docs/implementation-spec.md` に保存し、R0〜R23と原因別追記を記録。 |
-| S1 API・評価基盤・基準凍結 | IN_PROGRESS | 3評価track、音声hash/split検査、API認証/Origin/Host/body上限、FIR resampler、モデル別翻訳prompt fixture、圧縮モデルの公開benchmark screen、T15音声queue、server-side translation in-flight dedupe、extension側8件translation scheduler/3秒・音声終端+8秒期限、M1 Max上の隔離EdgeブラウザーE2E、fail-closed M1 qualification report assessorを追加。Edge 154のnative side panel判定はM1 Maxで13/13 PASS。違反を申告するreportは`REJECTED`、それ以外でもtrusted provenanceのないreportは`BLOCKED`で、report-only経路から`QUALIFIED`にはならない。評価scorer、信頼できる実行証跡collector/verifier、実測レポート作成器、モデル性能計測器、C2以降の残りT15制御は未完。 |
+| S0 調査・基準確認 | DONE | 指示書、開始時HEAD・既存dirty差分、既存テスト、実推論経路を確認。仕様全文を `docs/implementation-spec.md` に保存し、R0〜R29と原因別追記を記録。 |
+| S1 API・評価基盤・基準凍結 | IN_PROGRESS | 3評価track、score-only evaluator、detached DSSE/Ed25519 verifier mechanics、model-free resource measurement analyzer、API認証/Origin/Host/body上限、モデル別prompt fixture、圧縮screen、C3 queue controls/telemetryと既存Edge fixtureを実装。production trust keys、独立collector、human-reviewed data、model output adapter、実測report作成器、deadline ordering、実M1/Meet資格は未完。Edge 154 isolated fixtureの歴史的な13/13 PASSは実Meet/実推論の合格ではない。caller-authored reportは`BLOCKED`、違反が観測されたreportは`REJECTED`。 |
 | S2 ASR・VAD・公開判定 | PARTIAL | native WhisperとWhisperXの詳細結果を保持し、Whisper scoreは診断表示だけに使用。mic/tabを別energy-VADで処理。待機/実行/話者batchを4件・10秒以内に数え、5秒超のqueue項目とbatchは推論前に破棄する。話者batch flush待機後にsession/generationを再確認し、停止後のincoming音声再保持を防ぐ。短いidle flushはone-shot timerを使用する。非音声・短発話の実音声評価、校正済みgate、全backendの同等segment metadataは未完。 |
 | S3 字幕共有・訂正UI | PARTIAL | 公開字幕ページと非公開訂正ページ、明示承認、訂正/undo/sourceRevisionを実装。M1 Max上のEdge fixtureはnative side panel、合成tab音声、private review、訂正/undo、明示承認、stop/restartを13/13 PASS。通常Edgeで読み込まれていた拡張は古く、Chat権限が残った版だった。ソースのunpacked extensionを再読込した後は、Meetタブから訂正UIがEdgeのnative side panelに開き、通常タブfallbackは発生しなかった。実Meetにはカメラ/マイクを切って単独参加し、Meet UIの開始/退出まで確認したが、参加者音声・拡張字幕・画面共有の結合は未確認。 |
 | S4 候補比較・M1統合資格 | BLOCKED | M1 Maxの実機はあるが、許可済みの重みと人手確認済み日英dev/holdoutがない。ASR-only/MT-only/E2Eのモデル出力、品質、メモリ、確定遅延、60分結合試験は未実施。 |
@@ -93,13 +144,13 @@
 | T12 | PARTIAL | synthetic 341 ms voiced fixtureがdurationだけで捨てられないことを確認。自然な短い否定・数字、無音/雑音誤検出は未評価。 |
 | T13 | PARTIAL | native WhisperとWhisperXは構造化segmentを返し、得られないscoreはnull。SenseVoiceなど他adapterのsegment/timing契約が揃っていない。 |
 | T14 | PARTIAL | stop/restart、stream generation、mic非公開、終了sessionをsynthetic store testで確認。Edge実機fixtureでtabCaptureの開始、停止後のoverlay/session終了、再開、無音時送信なしを確認。通常Edgeの実Meetではカメラ/マイクをオフにした単独参加・退出のみ確認。実マイク入力・参加者音声は未試験。 |
-| T15 | PARTIAL | 音声queue上限4件/累積10秒、5秒超STALEと非公開drop statusを実装。`/translate`の同一prompt identity single-flight、20要求→推論/context追加1回、失敗後retry、waiter cancelを検査。extension未開始翻訳は8件上限、sourceRevision置換、厳密な3,000ms/8,000ms stale境界を確認。C2共通inference laneはASR/MT/raw LLMの同時実行を1以下に保ち、20 `/transcribe` + 20 `/translate` の同時handler test、timeout/cancel/error/session/shutdown testを追加。native演算中のcancelはpermitを早期解放せず、待機ownerのcancelは履歴へ結果を追加しない。deadline順dispatch、C3永続telemetry/adaptive load controlは未実装。|
+| T15 | PARTIAL | 音声queue上限4件/累積10秒、5秒超STALEとprivate-only drop statusを実装。`/translate`の同一prompt identity single-flight、20要求→推論/context追加1回、失敗後retry、waiter cancelを検査。extension未開始翻訳は8件上限、sourceRevision置換、厳密な3,000ms/8,000ms stale境界を確認。C2共通inference laneはASR/MT/raw LLMの同時実行を1以下に保ち、20 `/transcribe` + 20 `/translate` の同時handler testを含む。C3ではextension audio-admission queue waitによる適応停止/翻訳pause、private bounded telemetry、原文を保持するpause/resumeをmodel-free testで確認。nominal 1,000msサンプルの900〜1,500ms間隔許容、1,500ms超で連続区間をリセット、pause時の公開「翻訳中」解除もtestする。測定はnative/server inference queue waitではない。deadline順dispatch、実process-group memory/pressure provider、安全なmodel unload、trusted telemetry provenanceは未完。|
 | T16 | PARTIAL | bearer token、loopback、Origin/Host、preflight、8 MiB拒否をGo testで確認。Edge 154から隔離loopback APIへ認証付きhealth/transcribe/translateが届くことをfixtureで確認。Originなしの拡張要求を実サーバーと同じBearer認証契約で処理。配布IDとGoサーバーbinaryの結合は未確認。 |
 | T17 | PARTIAL | storageをtrusted contextに制限し、旧chat設定と通知の移行を追加。全設定/辞書/明示モデルの保存互換性は未監査。 |
 | T18 | PARTIAL | 字幕/訂正画面はtextContentで描画し、Chat権限なし。Edge実機fixtureで悪意あるHTML風字幕が`#caption-list`内に要素を生成せず文字列表示されることを確認。QR表示・復号は未実装。 |
 | T19 | PARTIAL | Offscreen Port再接続、session復元、重複開始拒否のsynthetic test。Chrome強制SW終了試験は未実施。 |
 | T20 | PARTIAL | 一般ログと辞書feedbackから字幕本文/話者/会議URLを外した。全ログ経路のsecret checkerは未実装。 |
-| T21 | NOT_STARTED | 全件保留や字幕消失を精度改善として扱わない評価器・negative fixtureは未完。 |
+| T21 | PARTIAL | score-only evaluatorはhold/blank translationをdeletion扱いし、方向別/total coverage低下とall-holdを拒否するnegative testsを実装。全てsynthetic/untrustedで、承認済みholdoutと実品質判定はBLOCKED。 |
 | T22 | NOT_STARTED | QR送受信のprotocol・画像・再送試験は未実装。 |
 | M01 | BLOCKED | M1実機は確認済み。選択runtimeのarm64/Metal実使用、CPU fallbackなしをモデルと一緒に測っていない。 |
 | M02 | PARTIAL | 通常経路はASR/翻訳モデル各1個を想定。`modelMu`とcancellable LLM-operation permitがLLMモデル状態を保護し、server-wide capacity-one inference laneがASR/MT/raw generationを直列化する。model-free handler regressionでmax(active inference)=1を確認。実ロード数・子process・backendのasync GPU work完了契約・Metal実使用は未実測。|
@@ -108,11 +159,11 @@
 | M05 | BLOCKED | M1 60分の負荷・memory・遅延・Meet結合計測なし。 |
 | M06 | BLOCKED | 人手確認済みholdoutと実モデル出力がなく、品質閾値を判定できない。 |
 | M07 | PARTIAL | 実験用処理を通常経路に追加していない。任意Python backend等を含む実行時resident model/processの確認は未完。 |
-| M08 | NOT_STARTED | memory pressure検知、安全停止、モデル解放・ユーザー操作による再開を実装していない。 |
-| MT01 | PARTIAL | ASR-only・正解原文MT-only・E2E manifestと検査器を分離。モデル出力adapter/scorerは未完で、現fixtureはsyntheticのみ。 |
+| M08 | PARTIAL | model-free load policyでmemory超過/critical時のblock・release requestと、回復後の明示resume条件を検査する。実process-group memory/pressure providerと安全なnative model解放APIがないため、本番でのmemory検知・停止・解放は動作せずBLOCKED。 |
+| MT01 | PARTIAL | ASR-only・正解原文MT-only・E2Eを分けるscore-only evaluatorを追加。callerが用意した出力JSONLの正規化・集計・厳密なcase/split照合をテストするが、実推論adapter、認可済み人手確認holdout、trusted scorer provenanceはない。 |
 | MT02 | BLOCKED | 翻訳prompt fixtureはあるが、選定済みartifactのtemplate/tokenizer/EOS/thinking/text-only出力がない。 |
 | MT03 | BLOCKED | 日英の人手確認済みquality cases、重要意味assertions、SacreBLEU固定版の評価なし。 |
-| MT04 | NOT_STARTED | scorerがgoldを通し、捏造・反転・全件保留などを落とすnegative fixtureは未実装。 |
+| MT04 | PARTIAL | scorerのsynthetic unit fixturesで完全一致、意味assertion違反、無音誤出力、全件保留/方向別coverage低下、case欠損・重複を検査。これは人手評価コーパスではなく、実品質gateは未校正。 |
 | R01 | DONE | R0/R4/R5/R6/R7/R8/R9/R10および原因別追記について確認日、一次情報、候補screen、差分、制約をresearch logに記録。 |
 | R02 | PARTIAL | 候補の言語/利用条件/runtime/テンプレート/quantizationと6圧縮方式を整理。公開数値は候補枠のscreenにだけ使い、未確認の重みhashとM1互換性はDEFERREDに保持。 |
 | R03 | DONE | offline checkerは出典付き数値、圧縮スコア維持率の再計算、compact翻訳の同一benchmark/metric/referenceによる両方向比較、hash・runtime・template・M1証拠を検査。 |
@@ -131,7 +182,7 @@
 - `extension/`: mic/tab別energy-VAD、session/generation検査、host-only訂正UI、字幕用public/private channel、承認・訂正・undo・translation revision管理、字幕ページを追加。
 - `server/`: loopback API認証と上限、FIRリサンプル、構造化ASR結果、Whisper固有診断、Whisper候補文を保持する固定source patch、Python音声入力のin-memory処理を追加。
 - `eval/` と `server/cmd/eval/`: ASR-only、正しい原文MT-only、E2Eを分離し、synthetic fixture・local WAV hash・track/split検査を追加。モデル推論は実行しない。
-- `docs/research/`: 一次情報・候補・調査log・圧縮benchmark screen・PROFILE_NOT_QUALIFIED lockを保存。現在90 sources / 10 candidates、全候補DEFERRED。公開screen PASSは3件だが、実機適格モデルは0件。R20でARK-ASRの蒸留版とQwen3-ASR MLX量子化版の公開数値を確認したが、該当する日本語スコアがないため候補枠へ登録せずDEFERREDにした。R21では外部資料の数値・テンプレート・実行経路・適用限界をhandoff本文にも要約し、R22では実験段階のANEForge経路とMLX共有メモリの限界を追記し、R23ではCAT-Translate 3.3Bの両方向スコア (37.51/34.80 BLEU) がTranslateGemma 4B参照値 (29.41/26.76) を超えることを記録した。翻訳候補枠は既に3件使っているため追加候補として登録せず、次ラウンド待ちのDEFERRED leadにした。
+- `docs/research/`: 一次情報・候補・調査log・圧縮benchmark screen・PROFILE_NOT_QUALIFIED lockを保存。現在106 sources / 10 candidates、全候補DEFERRED。公開screen PASSは3件だが、実機適格モデルは0件。R20でARK-ASRの蒸留版とQwen3-ASR MLX量子化版の公開数値を確認したが、該当する日本語スコアがないため候補枠へ登録せずDEFERREDにした。R21では外部資料の数値・テンプレート・実行経路・適用限界をhandoff本文にも要約し、R22では実験段階のANEForge経路とMLX共有メモリの限界を追記し、R23ではCAT-Translate 3.3Bの両方向スコア (37.51/34.80 BLEU) がTranslateGemma 4B参照値 (29.41/26.76) を超えることを記録した。翻訳候補枠は既に3件使っているため追加候補として登録せず、次ラウンド待ちのDEFERRED leadにした。R26はSacreBLEU v2.6.0互換score-only実装の一次情報とGo Unicode APIを記録し、候補・publication policyは変更しない。
 - Qualification assessor: trusted provenanceなしでJSON自己申告だけでは昇格できない。`testDouble`/`synthetic`の欠落をBLOCKEDにし、ASR-onlyは日本語/英語別、MT-onlyは翻訳方向別、公開字幕はE2E方向別に全caseの採点数を照合する。保留字幕を削除として計上し、全件/大量保留、baselineより少ない公開件数・方向別公開率・浮動runtime aliasを拒否する。違反を含むreportは`REJECTED`、他の要件を満たしてもprovenance verifierがないreportは`BLOCKED`で、現在のreport-only経路から`QUALIFIED`にはならない。
 - `docs/decisions/`: hardware-only昇格禁止、モデル別prompt、ASR候補保持/host review、開始排他、audio queue、holdout適格性判断を記録。
 
@@ -139,6 +190,12 @@
 
 | 検証 | 結果 |
 | --- | --- |
+| `GOMODCACHE=/private/tmp/meet-translator-gomodcache GOPATH=/private/tmp/meet-translator-gopath GOCACHE=/private/tmp/meet-translator-gocache go test -mod=mod ./... -count=1` (`server/`, 2026-10-08) | PASS。server / benchmark / evalの全3 package。`xcrun` temp cacheへの書込拒否とduplicate `-lc++` warningあり、exit 0。モデル不要のunit/integration testsのみ。 |
+| `node --test meet-translator/extension/tests/*.test.js` (2026-10-08) | PASS 109/109。モデル不要のextension regressions。 |
+| `node --test meet-translator/eval/*.test.mjs meet-translator/eval/device/*.test.mjs` (2026-10-08) | PASS 21/21。Edge launcher safetyのunit testsを含む。Edgeを起動した実機fixtureではない。 |
+| `node eval/check-research.mjs --offline` (`meet-translator/`, 2026-10-08) | PASS。123 sources / 10 deferred candidates / 3 published benchmark screens / 0 selected / `PROFILE_NOT_QUALIFIED`。 |
+| `node meet-translator/eval/check-contracts.mjs` (2026-10-08) | PASS。ASR 1 / MT 3 / E2E 1 synthetic cases、2 synthetic audio assets、`inferenceExecuted=false`、`qualityEvidence=false`、product `not-evaluated`。 |
+| `git diff --check` (2026-10-08) | PASS。現在のtracked diffにwhitespace errorsなし。 |
 | `GOCACHE=/private/tmp/meet-translator-go-cache go test ./... -count=1` (`server/`, 2026-09-30) | PASS。全3 Go package。C2共通推論レーンの20 ASR + 20 MT同時handler test、single-flight owner cancellation/survivor、最後のwaiterによる共有context cancel、model wait cancellationとshutdown barrierを含む。Apple linker duplicate-library warningは出たが終了コード0。 |
 | `GOCACHE=/private/tmp/meet-translator-go-cache go test -race ./... -count=1` (`server/`, 2026-09-30) | PASS。全3 Go packageでrace reportなし。ASR/MT共通gate、translation flightの待機cancelと生存waiter、history side effect、shutdownを含む。 |
 | `GOCACHE=/private/tmp/meet-translator-go-cache go test . -run '^TestTranslationFlightPanicCompletesFlightAndAllowsRetry$' -count=1` (`server/`, 2026-09-30) | NOT RUN。Go buildはCGo一時objectの作成時に`No space left on device`で終了し、test binaryは起動しなかった。確認時のdisk空きは約287 MiB。 |
@@ -153,9 +210,16 @@
 | `node --test meet-translator/extension/tests/*.test.js` | PASS 86/86. C1 fake-clock deadlines, 8-item translation/callback bounds, stale-slot release, correction admission and serial-lane holding through MT completion, revision replacement, source retention, expiry-reason UI, mixed audio/translation drop status, and private-status regressions are included. |
 | `node --test --test-name-pattern='correction translations reserve bounded queue capacity|private panel reports a failed translation without claiming' meet-translator/extension/tests/background.test.js meet-translator/extension/tests/sidepanel.test.js` | PASS 2/2。訂正queue期限切れを原文revision変更と区別し、失敗表示で原文更新を誤報しないことを確認。 |
 | `node --test meet-translator/extension/tests/offscreen-vad.test.js meet-translator/extension/tests/background-caption-bridge.test.js meet-translator/extension/tests/sidepanel.test.js` | PASS 16/16。VAD終端時刻、private-only status、原文保持UI、音声・翻訳で混在した破棄理由と合計数の表示を含む。 |
+| focused C3 model-free extension suites (`background*.test.js`, `caption*.test.js`, `sidepanel.test.js`, `evaluation-telemetry.test.js`, `load-control.test.js`, 2026-10-07) | PASS 16/16。telemetry allowlist/persistence/export, queue-drop reasons, correction outcomes, caption publication-event timing label, exact load thresholds, explicit pause/resume and no requeue were checked. |
+| `node --test meet-translator/extension/tests/*.test.js` (2026-10-07) | PASS 107/107, after fixing two VM test harnesses that had not evaluated their `importScripts` dependencies. Model-free extension regression only. |
+| `TMPDIR=/private/tmp/meet-translator-go-temp GOTMPDIR=/private/tmp/meet-translator-go-temp GOCACHE=/private/tmp/meet-translator-go-cache go test ./... -count=1` (`server/`, 2026-10-07) | PASS。server / benchmark / evalの全3 Go package。Apple `xcrun` cacheへの書込拒否warningとduplicate-library warningは出たが、process exit 0。 |
+| `node --test meet-translator/eval/*.test.mjs meet-translator/eval/device/*.test.mjs` (2026-10-07) | PASS 21/21。Edge device launcher safetyのunit testsを含むが、Edgeは起動せず実機E2Eではない。 |
+| `node meet-translator/eval/check-research.mjs --offline` (2026-10-07) | PASS。101 sources / 10 deferred candidates / 3 published-score screens / 0 selected / `PROFILE_NOT_QUALIFIED`。 |
+| `node meet-translator/eval/check-contracts.mjs` (2026-10-07) | PASS。ASR 1 / MT 3 / E2E 1 fixturesはsynthetic、`inferenceExecuted=false`、`qualityEvidence=false`、product status `not-evaluated`。 |
 | `node meet-translator/eval/device/run-browser-e2e.mjs` (2026-09-30 01:19 UTC) | M1 Max / Edge 154で13/13 PASS。extension side panel、合成tab音声、訂正/undo、承認、stop/restart、認証付きloopback APIを確認。`cleanupError:null`、無効認証0。RSSはEdge/fixture合計の目安1907→1504 MiBであり、モデル資源値ではない。Metal・実推論・品質・実Google Meet音声は未計測。 |
 | `GOCACHE=/private/tmp/meet-translator-go-cache go test -count=1 ./cmd/eval` (`server/`) | PASS。Qualification assessorのunit testsを含む。架空fixtureは評価ロジック専用で、実機結果ではない。 |
 | `GOCACHE=/private/tmp/meet-translator-go-cache go test ./cmd/eval -count=1` (`server/`) | PASS。自己申告reportの昇格拒否、attestation欠落、ASR日英別/MT方向別の採点数、E2E方向別公開数、全件/大量/片方向保留、浮動runtime aliasを含む。 |
+| `GOMODCACHE=/private/tmp/meet-translator-gomodcache GOPATH=/private/tmp/meet-translator-gopath GOCACHE=/private/tmp/meet-translator-gocache go test -mod=mod ./cmd/eval -count=1` (`server/`, 2026-10-07) | PASS。D scorer focused suite after the latest scorer change, including exact output joins, chrF2 multi-reference signature, publication and blank-translation coverage, content-free score-only reports, and qualification assessor regression tests. Synthetic/model-free only; no local audio or model output was evaluated. |
 | `node --test meet-translator/eval/*.test.mjs meet-translator/eval/device/*.test.mjs` | PASS 21/21。評価trackの既存14件とEdge launcher test 7件を含む。 |
 | `node --test meet-translator/eval/device/*.test.mjs` | PASS 7/7。PID再利用時にシグナルを送らないこと、終了未確認時のprofile保持を含む。 |
 | `node eval/check-research.mjs --offline` (`meet-translator/`, 2026-09-30) | PASS。90 sources、10 candidates、10 DEFERRED、現在登録済みpublished benchmark screen PASS 3件、0 SELECTED、PROFILE_NOT_QUALIFIED。CAT-Translate 3.3Bの数値passは枠満杯のため別途DEFERRED leadに記録し、候補registryは増やしていない。 |
@@ -174,10 +238,10 @@ C1の境界test、訂正queue予約・stale処理、UI経路は上表のmodel-fr
 
 ## 次に進める作業
 
-1. A/Bを実施する。開始条件はEdgeが別会議に使われていないこと。最初に許可済みtest roomが単独利用できることを確認し、A-01〜A-10をcase別に記録する。共有する場合は字幕専用ページだけを対象にする。
-2. A/Bが環境都合で続けて実施できない場合は、C2共通推論排他をmodel-free API doubleで実装する。実推論境界でASR 20件とMT 20件を同時投入し、`max(active_inference)=1`と正常終了・例外・timeout・待機cancel・実行中cancel・session切替を検査する。native演算が戻るまでlockを解放しない。
-3. C3のevaluation telemetry/適応負荷制御、Dのscorerと意味assertion、Eのtrusted provenance、Fの資源測定器を順に追加する。
-4. 許可済みモデルとreviewed日英データが揃った後に候補を一軸ずつ比較し、ASR-only、MT-only、E2EとM1統合を記録する。品質確認なしで候補を昇格しない。
+1. provenance、measurement、C3、documentationの独立レビュー結果を取り込み、actionable findingを全て修正・再レビューする。修正後に該当suiteと最終検証を再実行する。
+2. 検証済みの変更だけを既存PR #74へ反映し、openのまま保持する。新規PRを作らず、mergeしない。
+3. macOS Computer Use権限が利用可能になった後、許可済みテスト室でEdge side panel、Meet音声/字幕共有、訂正UIの実機ケースを再開する。隔離fixtureやモックは実Meetの代替にしない。
+4. 重みと人手確認済み日英データの利用条件が揃った後に、候補を一軸ずつASR-only / 正解原文MT-only / E2E / M1統合で評価する。外部スコアだけで品質・M1合格へ昇格しない。
 
 ## M1 Max Edge 実機fixture記録 (2026-09-29)
 

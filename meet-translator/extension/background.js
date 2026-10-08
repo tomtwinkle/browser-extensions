@@ -14,7 +14,7 @@
 
 'use strict';
 
-importScripts('shared.js');
+importScripts('shared.js', 'evaluation-telemetry.js', 'load-control.js');
 
 if (typeof chrome.storage.local.setAccessLevel === 'function') {
   chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => {});
@@ -65,13 +65,23 @@ const state = {
   pendingSpeakerBatches: new Map(),
   speakerBatchFlushTimer: null,
   audioQueue: Promise.resolve(),
+  audioQueuePendingTasks: 0,
+  audioQueueEntries: [],
   audioQueuePendingItems: 0,
   audioQueuePendingMs: 0,
   audioQueueStatus: { code: null, droppedCount: 0, droppedAudioMs: 0, updatedAtMs: null },
   translationQueue: [],
   translationQueueActive: null,
   correctionLanePendingCallbacks: 0,
-  translationQueueStatus: { code: null, droppedCount: 0, updatedAtMs: null },
+  translationQueueStatus: { code: null, droppedCount: 0, heldCount: 0, rejectedCount: 0, updatedAtMs: null },
+  evaluationRunId: null,
+  evaluationObservedConfigId: null,
+  loadControlController: null,
+  loadControlTimer: null,
+  translationPaused: false,
+  inferenceAdmissionStopped: false,
+  asrAdmissionStopped: false,
+  memoryStatus: { pressure: 'unknown', processGroupMemoryGiB: null, sourceAvailable: false },
   offscreenPort: null,
   offscreenBootId: null,
   captionPersistQueue: Promise.resolve(),
@@ -81,6 +91,197 @@ const state = {
   captionPrivateClients: new Set(),
   captionHeartbeatTimer: null,
 };
+
+const evaluationTelemetry = globalThis.MeetTranslatorEvaluationTelemetry.createEvaluationTelemetry({
+  storage: chrome.storage.session || null,
+});
+state.evaluationTelemetry = evaluationTelemetry;
+const evaluationTelemetryReady = evaluationTelemetry.restore().then(() => {
+  const snapshot = evaluationTelemetry.snapshot();
+  if (!snapshot.activeRunId) return;
+  state.evaluationRunId = snapshot.activeRunId;
+  const runStarted = [...snapshot.events].reverse().find((event) =>
+    event.type === 'run_started' && event.runId === snapshot.activeRunId
+  );
+  if (runStarted) {
+    state.sessionId = runStarted.sessionId || state.sessionId;
+    state.evaluationObservedConfigId = runStarted.observedConfigId || null;
+  }
+});
+state.evaluationTelemetryReady = evaluationTelemetryReady;
+
+function evaluationObservedConfigId(settings, serverInfo = state.serverInfo) {
+  return globalThis.MeetTranslatorEvaluationTelemetry.configurationId({
+    asrModel: serverInfo?.whisperModel || null,
+    translationModel: settings?.llamaModel || serverInfo?.llamaModel || null,
+    sourceLang: settings?.sourceLang || null,
+    targetLang: settings?.targetLang || null,
+    bidirectional: settings?.bidirectional === true,
+    decodeOptions: settings?.llamaOptions || settings?.decodeOptions || null,
+    runtimeRevision: settings?.runtimeRevision || null,
+    quantization: settings?.quantization || null,
+    templateId: settings?.templateId || null,
+    publicationGateId: settings?.publicationGateId || null,
+    asrHintsMode: settings?.asrHintsMode || 'off',
+  });
+}
+
+function recordEvaluationEvent(type, fields = {}) {
+  if (!state.evaluationRunId) return null;
+  return evaluationTelemetry.record(type, {
+    sessionId: state.sessionId,
+    observedConfigId: state.evaluationObservedConfigId,
+    configCoverage: 'partial',
+    ...fields,
+  });
+}
+
+function loadControlStatus() {
+  const status = state.loadControlController?.snapshot() || {
+    experimentsStopped: false,
+    translationsPaused: state.translationPaused,
+    inferenceBlocked: state.inferenceAdmissionStopped,
+    stopAsr: state.asrAdmissionStopped,
+    resumeEligible: false,
+    requeueOldTranslations: false,
+  };
+  return {
+    ...status,
+    memoryPressure: state.memoryStatus.pressure,
+    processGroupMemoryGiB: state.memoryStatus.processGroupMemoryGiB,
+    memorySourceAvailable: state.memoryStatus.sourceAvailable,
+    queueSource: 'extension_audio_admission',
+  };
+}
+
+function broadcastLoadControlStatus() {
+  const message = { type: 'CAPTION_LOAD_CONTROL_STATUS', status: loadControlStatus() };
+  for (const port of state.captionPrivateClients) {
+    if (!postPortMessage(port, message)) state.captionPrivateClients.delete(port);
+  }
+}
+
+function stopLoadControlSampling() {
+  if (!state.loadControlTimer) return;
+  clearInterval(state.loadControlTimer);
+  state.loadControlTimer = null;
+}
+
+function reportTranslationHeld(job, reason) {
+  const status = state.translationQueueStatus;
+  status.code = 'TRANSLATION_PAUSED';
+  status.heldCount = (status.heldCount || 0) + 1;
+  status.updatedAtMs = Date.now();
+  recordEvaluationEvent('translation_held', {
+    caseId: job.segmentId,
+    sessionId: job.sessionId,
+    streamId: job.streamId,
+    streamGeneration: job.streamGeneration,
+    observedConfigId: job.observedConfigId,
+    configCoverage: 'partial',
+    queueName: 'translation',
+    queueLength: state.translationQueue.length,
+    reason,
+    outcome: 'held',
+  });
+  const message = { type: 'CAPTION_TRANSLATION_QUEUE_STATUS', status: { ...status } };
+  for (const port of state.captionPrivateClients) {
+    if (!postPortMessage(port, message)) state.captionPrivateClients.delete(port);
+  }
+}
+
+function reportTranslationAdmissionRejected(job, reason) {
+  const status = state.translationQueueStatus;
+  status.code = 'TRANSLATION_PAUSED';
+  status.rejectedCount = (status.rejectedCount || 0) + 1;
+  status.updatedAtMs = Date.now();
+  recordEvaluationEvent('translation_admission_rejected', {
+    caseId: job.segmentId,
+    sessionId: job.sessionId,
+    streamId: job.streamId,
+    streamGeneration: job.streamGeneration,
+    observedConfigId: job.observedConfigId,
+    configCoverage: 'partial',
+    queueName: 'translation',
+    queueLength: state.translationQueue.length,
+    reason,
+    outcome: 'rejected',
+  });
+  const message = { type: 'CAPTION_TRANSLATION_QUEUE_STATUS', status: { ...status } };
+  for (const port of state.captionPrivateClients) {
+    if (!postPortMessage(port, message)) state.captionPrivateClients.delete(port);
+  }
+}
+
+function pausePendingTranslations(reason) {
+  const pending = state.translationQueue.slice();
+  state.translationQueue = [];
+  for (const job of pending) {
+    reportTranslationHeld(job, reason);
+    failTranslationJob(job, translationQueueError('TRANSLATION_PAUSED', 'load-control'), { report: false });
+  }
+}
+
+function applyLoadControlResult(result) {
+  if (!result) return;
+  const transition = result.transition || null;
+  const memoryLimited = ['critical_memory_pressure', 'process_group_memory_limit'].includes(transition);
+
+  if (result.inferenceBlocked) state.inferenceAdmissionStopped = true;
+  if (result.stopAsr) state.asrAdmissionStopped = true;
+
+  if (result.resumed && transition === 'user_resume') {
+    state.translationPaused = false;
+    state.inferenceAdmissionStopped = false;
+    state.asrAdmissionStopped = false;
+    recordEvaluationEvent('translation_resumed', { reason: 'USER_RESUME', outcome: 'resumed' });
+  } else if (result.translationsPaused || memoryLimited) {
+    const reason = memoryLimited || result.inferenceBlocked ? 'MEMORY_PRESSURE' : 'QUEUE_WAIT';
+    if (!state.translationPaused) {
+      state.translationPaused = true;
+      pausePendingTranslations(reason);
+      recordEvaluationEvent('translation_paused', { reason, outcome: 'paused' });
+    }
+  }
+
+  if (transition) {
+    recordEvaluationEvent('load_control_transition', {
+      reason: transition.toUpperCase(),
+      outcome: transition,
+    });
+  }
+  if (transition === 'stop_experiments_and_diagnostics') {
+    recordEvaluationEvent('adaptive_work_stopped', { reason: 'QUEUE_WAIT', outcome: 'stopped' });
+    if (state.isActive && !state.loadControlTimer) state.loadControlTimer = setInterval(runLoadControlSample, 1_000);
+  }
+  if (result.releaseTranslationModel) {
+    // Neither process-group memory sensing nor a safe native model-release API
+    // is available to this extension. Record that the requested effect is blocked.
+    recordEvaluationEvent('inference_rejected', { reason: 'MODEL_RELEASE_API_UNAVAILABLE' });
+  }
+  if (transition === 'memory_recovery_ready') {
+    recordEvaluationEvent('memory_recovery_ready', { reason: 'RECOVERY_CONDITIONS_MET' });
+  }
+  broadcastLoadControlStatus();
+}
+
+function runLoadControlSample() {
+  const nowMs = Date.now();
+  const oldest = state.audioQueueEntries.find((entry) => entry.queueKind === 'asr');
+  const oldestAudio = state.audioQueueEntries[0];
+  const queueWaitMs = oldestAudio ? Math.max(0, nowMs - oldestAudio.queuedAtMs) : 0;
+  const asrQueueWaitMs = oldest ? Math.max(0, nowMs - oldest.queuedAtMs) : 0;
+  const result = state.loadControlController?.sample({
+    nowMs,
+    queueWaitMs,
+    asrQueueWaitMs,
+    memoryPressure: state.memoryStatus.pressure,
+    processGroupMemoryGiB: state.memoryStatus.processGroupMemoryGiB,
+  });
+  if (result?.transition) applyLoadControlResult(result);
+  else if (result?.inferenceBlocked || result?.stopAsr) applyLoadControlResult(result);
+  else broadcastLoadControlStatus();
+}
 
 function createSessionId() {
   return globalThis.crypto?.randomUUID?.()
@@ -155,12 +356,21 @@ function sendPrivateCaptionUpdate(record) {
   }
 }
 
-function reportAudioQueueDrop(code, audioMs) {
+function reportAudioQueueDrop(code, audioMs, metadata = {}) {
   const status = state.audioQueueStatus;
   status.code = code;
   status.droppedCount += 1;
   status.droppedAudioMs += Math.round(audioMs);
   status.updatedAtMs = Date.now();
+  recordEvaluationEvent('audio_dropped', {
+    ...metadata,
+    queueName: 'audio',
+    queueLength: state.audioQueuePendingTasks,
+    audioDurationMs: Math.round(audioMs),
+    droppedCount: status.droppedCount,
+    droppedAudioMs: status.droppedAudioMs,
+    reason: code,
+  });
   const message = { type: 'CAPTION_QUEUE_STATUS', status: { ...status } };
   for (const port of state.captionPrivateClients) {
     if (!postPortMessage(port, message)) state.captionPrivateClients.delete(port);
@@ -173,11 +383,18 @@ function reportAudioQueueDrop(code, audioMs) {
   };
 }
 
-function reportTranslationQueueDrop(code) {
+function reportTranslationQueueDrop(code, metadata = {}) {
   const status = state.translationQueueStatus;
   status.code = code;
   status.droppedCount += 1;
   status.updatedAtMs = Date.now();
+    recordEvaluationEvent('translation_dropped', {
+    ...metadata,
+    queueName: 'translation',
+    queueLength: state.translationQueue.length,
+    droppedCount: status.droppedCount,
+    reason: metadata.reason || code,
+  });
   const message = { type: 'CAPTION_TRANSLATION_QUEUE_STATUS', status: { ...status } };
   for (const port of state.captionPrivateClients) {
     if (!postPortMessage(port, message)) state.captionPrivateClients.delete(port);
@@ -264,6 +481,50 @@ function scheduleHealthCheckTimer() {
   }, HEALTH_CHECK_INTERVAL_MS);
 }
 
+function audioSessionDiscardReason(metadata) {
+  if (!state.isActive) return 'SESSION_INACTIVE';
+  if (metadata.streamId !== 'mic' && metadata.streamId !== 'tab') return 'INVALID_STREAM';
+  if (metadata.sessionId !== state.sessionId) return 'STALE_SESSION';
+  if (!Number.isSafeInteger(metadata.streamGeneration) ||
+      metadata.streamGeneration !== state.streamGenerations[metadata.streamId]) return 'STALE_GENERATION';
+  return null;
+}
+
+function audioDiscardReason(message) {
+  const metadata = message && typeof message === 'object' ? message : {};
+  const sessionReason = audioSessionDiscardReason(metadata);
+  if (sessionReason) return sessionReason;
+  if (state.asrAdmissionStopped) return 'ASR_STOPPED_MEMORY_PRESSURE';
+  const evidence = metadata.evidence;
+  if (!evidence || evidence.vadKind !== 'energy' ||
+      !Number.isFinite(evidence.voicedDurationMs) || !Number.isFinite(evidence.utteranceDurationMs) ||
+      !Number.isFinite(evidence.clippingRatio) || evidence.clippingRatio < 0 || evidence.clippingRatio > 1) {
+    return 'INVALID_VAD_EVIDENCE';
+  }
+  if (evidence.speechDetected !== true || evidence.voicedDurationMs <= 0 ||
+      !Number.isFinite(metadata.speechMs) || metadata.speechMs <= 0) return 'NO_VOICED_SPEECH';
+  if (evidence.utteranceDurationMs < evidence.voicedDurationMs) return 'INVALID_VAD_EVIDENCE';
+  return null;
+}
+
+function recordAudioDiscard(audio, reason) {
+  const evidence = audio?.evidence;
+  recordEvaluationEvent('audio_discarded', {
+    caseId: audio?.caseId,
+    sessionId: audio?.sessionId,
+    streamId: audio?.streamId,
+    streamGeneration: audio?.streamGeneration,
+    audioEndedAtMs: Number.isFinite(audio?.audioEndedAtMs) ? audio.audioEndedAtMs : undefined,
+    audioDurationMs: Number.isFinite(evidence?.utteranceDurationMs)
+      ? Math.round(evidence.utteranceDurationMs)
+      : undefined,
+    queueName: 'audio',
+    queueLength: state.audioQueuePendingTasks,
+    reason,
+    outcome: 'discarded',
+  });
+}
+
 function handleOffscreenPortMessage(port, message) {
   if (message?.type === 'OFFSCREEN_HELLO') {
     initializeOffscreenPort(port, message);
@@ -317,6 +578,20 @@ function handleOffscreenPortMessage(port, message) {
   }
 
   if (message?.type === 'CAPTION_PUBLIC_EVENT') {
+    if (message.event?.type === 'upsert') {
+      const record = message.event.record;
+      recordEvaluationEvent('caption_publication_event', {
+        caseId: record.segmentId,
+        sessionId: message.event.sessionId,
+        streamId: record.streamId,
+        streamGeneration: state.streamGenerations[record.streamId],
+      });
+    } else if (message.event?.type === 'retract') {
+      recordEvaluationEvent('caption_retracted', {
+        caseId: message.event.segmentId,
+        sessionId: message.event.sessionId,
+      });
+    }
     sendPublicCaptionEvent(message.event);
     if (message.event?.type === 'upsert' && state.isActive && state.tabId) {
       const record = message.event.record;
@@ -340,123 +615,214 @@ function handleOffscreenPortMessage(port, message) {
   }
 
   if (message?.type === 'AUDIO_DATA') {
+    message.caseId = typeof message.caseId === 'string' && message.caseId ? message.caseId : createSessionId();
     const audioMetadata = {
       sessionId: message.sessionId,
       streamId: message.streamId,
       streamGeneration: message.streamGeneration,
       audioEndedAtMs: Number.isFinite(message.audioEndedAtMs) ? message.audioEndedAtMs : null,
     };
-    if (!state.isActive || !isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations) ||
-        !shouldRequestTranscription(message.speechMs, message.evidence)) return;
+    const discardReason = audioDiscardReason(message);
+    if (discardReason) {
+      recordAudioDiscard({ ...message, ...audioMetadata }, discardReason);
+      return;
+    }
     const audioMs = Number.isFinite(message.evidence?.utteranceDurationMs)
       ? message.evidence.utteranceDurationMs
       : message.speechMs;
     enqueueAudioTask((reservation) => handleAudioData(message, reservation), {
       audioMs,
       queuedAtMs: Date.now(),
+      caseId: message.caseId,
+      sessionId: message.sessionId,
+      streamId: message.streamId,
+      streamGeneration: message.streamGeneration,
+      audioEndedAtMs: audioMetadata.audioEndedAtMs,
+      queueKind: 'asr',
     });
   }
 }
 
 async function handleCaptionClientMessage(port, kind, message) {
-  if (kind !== 'private' || message?.type !== 'CAPTION_ACTION') return;
+  if (kind !== 'private') return;
+  if (message?.type === 'CAPTION_LOAD_CONTROL_RESUME') {
+    await evaluationTelemetryReady;
+    const result = state.loadControlController?.resumeByUserAction();
+    if (result?.resumed) applyLoadControlResult(result);
+    else broadcastLoadControlStatus();
+    postPortMessage(port, { type: 'CAPTION_LOAD_CONTROL_RESUME_RESULT', resumed: result?.resumed === true });
+    return;
+  }
+  if (message?.type === 'EVALUATION_TELEMETRY_EXPORT_REQUEST') {
+    await evaluationTelemetryReady;
+    await evaluationTelemetry.flush();
+    postPortMessage(port, {
+      type: 'EVALUATION_TELEMETRY_EXPORT',
+      requestId: message.requestId,
+      snapshot: evaluationTelemetry.snapshot(),
+      caseTimings: evaluationTelemetry.caseTimings(),
+    });
+    return;
+  }
+  if (message?.type !== 'CAPTION_ACTION') return;
   const action = message.action;
   const correctionQueuedAtMs = action === 'correct' ? Date.now() : null;
   const payload = message.payload || {};
+  if (action === 'approve') {
+    recordEvaluationEvent('approval_requested', {
+      caseId: payload.segmentId,
+      sessionId: state.sessionId,
+    });
+  }
   let result;
   try {
     if (!['approve', 'correct', 'undo'].includes(action) || typeof payload.segmentId !== 'string') {
       throw new Error('invalid caption action');
     }
     result = await captionStoreRequest(action, payload);
+    if (result?.ok && action === 'correct') {
+      recordEvaluationEvent('correction_saved', {
+        caseId: result.record?.segmentId || payload.segmentId,
+        sessionId: result.record?.sessionId || state.sessionId,
+        streamId: result.record?.streamId,
+        streamGeneration: result.record?.streamGeneration,
+      });
+    } else if (result?.ok && action === 'undo') {
+      recordEvaluationEvent('correction_undone', {
+        caseId: result.record?.segmentId || payload.segmentId,
+        sessionId: result.record?.sessionId || state.sessionId,
+        streamId: result.record?.streamId,
+        streamGeneration: result.record?.streamGeneration,
+      });
+    }
     if (action === 'correct' && result?.ok && result.record?.translations?.length) {
       const translation = result.record.translations[0];
       let correctionFailureRecorded = false;
       const markCorrectionTranslationFailed = async (error) => {
         if (correctionFailureRecorded) return;
         correctionFailureRecorded = true;
+        const paused = error?.code === 'TRANSLATION_PAUSED';
         const translationResult = await captionStoreRequest('set-translation', {
           segmentId: result.record.segmentId,
           sourceRevision: result.record.sourceRevision,
           targetLanguage: translation.targetLanguage,
           text: null,
-          state: 'failed',
+          state: paused ? 'paused' : 'failed',
           allowHistorical: true,
         }).catch(() => {});
         if (translationResult?.ok && translationResult.record) result.record = translationResult.record;
         result.translationStale = error?.reason === 'source-revision';
-        result.translationFailed = true;
+        result.translationPaused = paused;
+        result.translationFailed = !paused;
       };
       try {
         const cfg = await getSettings();
-        await enqueueTranslationTask(() => translateOnly(
-          result.record.sourceText,
-          result.record.sourceLanguage,
-          translation.targetLanguage,
-          cfg,
-          {
+        if (state.translationPaused || state.inferenceAdmissionStopped) {
+          const rejection = translationQueueError('TRANSLATION_PAUSED', 'load-control');
+          reportTranslationAdmissionRejected({
+            segmentId: result.record.segmentId,
             sessionId: result.record.sessionId,
             streamId: result.record.streamId,
             streamGeneration: result.record.streamGeneration,
+            observedConfigId: evaluationObservedConfigId(cfg),
+          }, state.inferenceAdmissionStopped ? 'MEMORY_PRESSURE' : 'QUEUE_WAIT');
+          await markCorrectionTranslationFailed(rejection);
+        } else {
+          await enqueueTranslationTask(() => translateOnly(
+            result.record.sourceText,
+            result.record.sourceLanguage,
+            translation.targetLanguage,
+            cfg,
+            {
+              sessionId: result.record.sessionId,
+              streamId: result.record.streamId,
+              streamGeneration: result.record.streamGeneration,
+              segmentId: result.record.segmentId,
+              sourceRevision: result.record.sourceRevision,
+              sourceText: result.record.sourceText,
+            }
+          ), {
+            sessionId: result.record.sessionId,
+            streamId: result.record.streamId,
+            streamGeneration: result.record.streamGeneration,
+            observedConfigId: evaluationObservedConfigId(cfg),
             segmentId: result.record.segmentId,
             sourceRevision: result.record.sourceRevision,
             sourceText: result.record.sourceText,
-          }
-        ), {
-          sessionId: result.record.sessionId,
-          streamId: result.record.streamId,
-          streamGeneration: result.record.streamGeneration,
-          segmentId: result.record.segmentId,
-          sourceRevision: result.record.sourceRevision,
-          sourceText: result.record.sourceText,
-          sourceLang: result.record.sourceLanguage,
-          targetLang: translation.targetLanguage,
-          serverUrl: cfg.serverUrl,
-          queuedAtMs: correctionQueuedAtMs,
-          ready: false,
-          onAdmitted: (job) => {
-            if (state.correctionLanePendingCallbacks >= MAX_PENDING_CORRECTION_LANE_CALLBACKS) {
-              const error = translationQueueError('TRANSLATION_OVERLOAD');
-              state.translationQueue = state.translationQueue.filter((pending) => pending !== job);
-              reportTranslationQueueDrop(error.code);
-              failTranslationJob(job, error, { report: false });
-              return;
-            }
+            sourceLang: result.record.sourceLanguage,
+            targetLang: translation.targetLanguage,
+            serverUrl: cfg.serverUrl,
+            queuedAtMs: correctionQueuedAtMs,
+            ready: false,
+            onAdmitted: (job) => {
+              if (state.correctionLanePendingCallbacks >= MAX_PENDING_CORRECTION_LANE_CALLBACKS) {
+                const error = translationQueueError('TRANSLATION_OVERLOAD');
+                state.translationQueue = state.translationQueue.filter((pending) => pending !== job);
+                reportTranslationQueueDrop(error.code, {
+                  caseId: job.segmentId,
+                  sessionId: job.sessionId,
+                  streamId: job.streamId,
+                  streamGeneration: job.streamGeneration,
+                  observedConfigId: job.observedConfigId,
+                  reason: translationDropReason(error),
+                });
+                failTranslationJob(job, error, { report: false });
+                return;
+              }
 
-            state.correctionLanePendingCallbacks += 1;
-            enqueueAudioTask(async () => {
-              if (!state.translationQueue.includes(job)) return;
-              job.ready = true;
-              runNextTranslationTask();
-              await job.promise.catch(() => {});
-            }, { queuedAtMs: correctionQueuedAtMs }).then(
-              () => { state.correctionLanePendingCallbacks -= 1; },
-              () => { state.correctionLanePendingCallbacks -= 1; }
-            );
-          },
-          allowHistorical: true,
-          onResult: async (translated) => {
-            const translationResult = await captionStoreRequest('set-translation', {
-              segmentId: result.record.segmentId,
-              sourceRevision: result.record.sourceRevision,
-              targetLanguage: translation.targetLanguage,
-              text: translated,
-              state: translated ? 'ready' : 'failed',
-              allowHistorical: true,
-            });
-            if (translationResult?.ok && translationResult.record) result.record = translationResult.record;
-            else result.translationStale = true;
-          },
-          onFailure: async (error) => {
-            await markCorrectionTranslationFailed(error);
-          },
-        });
+              state.correctionLanePendingCallbacks += 1;
+              enqueueAudioTask(async () => {
+                if (!state.translationQueue.includes(job)) return;
+                job.ready = true;
+                runNextTranslationTask();
+                await job.promise.catch(() => {});
+              }, { queuedAtMs: correctionQueuedAtMs, queueKind: 'translation' }).then(
+                () => { state.correctionLanePendingCallbacks -= 1; },
+                () => { state.correctionLanePendingCallbacks -= 1; }
+              );
+            },
+            allowHistorical: true,
+            onResult: async (translated) => {
+              const translationResult = await captionStoreRequest('set-translation', {
+                segmentId: result.record.segmentId,
+                sourceRevision: result.record.sourceRevision,
+                targetLanguage: translation.targetLanguage,
+                text: translated,
+                state: translated ? 'ready' : 'failed',
+                allowHistorical: true,
+              });
+              if (translationResult?.ok && translationResult.record) result.record = translationResult.record;
+              else result.translationStale = true;
+              if (!translated) result.translationFailed = true;
+            },
+            onFailure: async (error) => {
+              await markCorrectionTranslationFailed(error);
+            },
+          });
+        }
       } catch (error) {
         await markCorrectionTranslationFailed(error);
       }
     }
+    if (action === 'approve') {
+      recordEvaluationEvent('approval_finished', {
+        caseId: result.record?.segmentId || payload.segmentId,
+        sessionId: result.record?.sessionId || state.sessionId,
+        streamId: result.record?.streamId,
+        streamGeneration: result.record?.streamGeneration,
+        outcome: result?.ok && result.record?.userApproved === true ? 'success' : 'error',
+        reason: result?.ok && result.record?.userApproved === true ? null : 'APPROVAL_REQUEST_FAILED',
+      });
+    }
     postPortMessage(port, { type: 'CAPTION_ACTION_RESULT', requestId: message.requestId, action, result });
   } catch (err) {
+    if (action === 'approve') {
+      recordEvaluationEvent('approval_finished', {
+        caseId: payload.segmentId,
+        outcome: 'error',
+        errorClass: err?.name || 'Error',
+      });
+    }
     postPortMessage(port, {
       type: 'CAPTION_ACTION_RESULT',
       requestId: message.requestId,
@@ -514,6 +880,7 @@ chrome.runtime.onConnect?.addListener?.((port) => {
           snapshot,
           queueStatus: { ...state.audioQueueStatus },
           translationQueueStatus: { ...state.translationQueueStatus },
+          loadControlStatus: loadControlStatus(),
         });
       }
     })
@@ -864,6 +1231,11 @@ function releaseAudioQueueReservation(reservation) {
   state.audioQueuePendingMs = Math.max(0, state.audioQueuePendingMs - reservation.audioMs);
 }
 
+function removeAudioQueueEntry(entry) {
+  const index = state.audioQueueEntries.indexOf(entry);
+  if (index >= 0) state.audioQueueEntries.splice(index, 1);
+}
+
 function clearPendingSpeakerBatches() {
   for (const batch of state.pendingSpeakerBatches.values()) {
     for (const chunk of batch.chunks) releaseAudioQueueReservation(chunk.audioReservation);
@@ -872,9 +1244,10 @@ function clearPendingSpeakerBatches() {
   cancelSpeakerBatchFlush();
 }
 
-function appendSpeakerBatchChunk(batch, wavB64, speechMs, audioReservation) {
+function appendSpeakerBatchChunk(batch, wavB64, speechMs, audioReservation, caseId = null) {
   retainAudioQueueReservation(audioReservation);
-  batch.chunks.push({ wavB64, speechMs, audioReservation });
+  batch.chunks.push({ wavB64, speechMs, audioReservation, caseId });
+  if (caseId && !batch.caseIds.includes(caseId)) batch.caseIds.push(caseId);
   batch.totalSpeechMs += speechMs;
   batch.totalReservedAudioMs += audioReservation?.audioMs || 0;
   batch.oldestQueuedAtMs = Math.min(batch.oldestQueuedAtMs, audioReservation?.queuedAtMs ?? Date.now());
@@ -889,13 +1262,14 @@ function startSpeakerBatch(wavB64, speakerName, durationMs, speechMs, audioMetad
   const batch = {
     speakerName,
     audioMetadata,
+    caseIds: [],
     chunks: [],
     totalDurationMs: durationMs,
     totalSpeechMs: 0,
     totalReservedAudioMs: 0,
     oldestQueuedAtMs: audioReservation?.queuedAtMs ?? Date.now(),
   };
-  appendSpeakerBatchChunk(batch, wavB64, speechMs, audioReservation);
+  appendSpeakerBatchChunk(batch, wavB64, speechMs, audioReservation, audioMetadata.caseId);
   state.pendingSpeakerBatches.set(key, batch);
   scheduleSpeakerBatchFlush();
 }
@@ -904,28 +1278,89 @@ function enqueueAudioTask(task, options = {}) {
   const audioMs = Number.isFinite(options.audioMs) ? Math.max(0, options.audioMs) : 0;
   const queuedAtMs = Number.isFinite(options.queuedAtMs) ? options.queuedAtMs : Date.now();
   const reservesAudio = audioMs > 0;
+  const telemetry = {
+    caseId: options.caseId,
+    sessionId: options.sessionId,
+    streamId: options.streamId,
+    streamGeneration: options.streamGeneration,
+    audioEndedAtMs: options.audioEndedAtMs,
+    queueName: 'audio',
+    audioDurationMs: Math.round(audioMs),
+  };
   if (reservesAudio) {
     if (Date.now() - queuedAtMs > MAX_AUDIO_QUEUE_STALE_MS) {
-      return Promise.resolve(reportAudioQueueDrop('STALE', audioMs));
+      return Promise.resolve(reportAudioQueueDrop('STALE', audioMs, telemetry));
     }
     if (state.audioQueuePendingItems + 1 > MAX_AUDIO_QUEUE_PENDING_ITEMS ||
         state.audioQueuePendingMs + audioMs > MAX_AUDIO_QUEUE_PENDING_MS) {
-      return Promise.resolve(reportAudioQueueDrop('OVERLOAD', audioMs));
+      return Promise.resolve(reportAudioQueueDrop('OVERLOAD', audioMs, telemetry));
     }
     state.audioQueuePendingItems += 1;
     state.audioQueuePendingMs += audioMs;
+  }
+
+  const queueLength = state.audioQueuePendingTasks;
+  state.audioQueuePendingTasks += 1;
+  const queueEntry = {
+    queuedAtMs,
+    caseId: telemetry.caseId || null,
+    queueKind: options.queueKind || (telemetry.caseId ? 'asr' : 'control'),
+  };
+  state.audioQueueEntries.push(queueEntry);
+  if (telemetry.caseId) {
+    recordEvaluationEvent('audio_enqueued', { ...telemetry, queueLength: queueLength + 1 });
   }
 
   const reservation = reservesAudio
     ? { audioMs, queuedAtMs, retained: false, released: false }
     : null;
 
+  let started = false;
   const next = state.audioQueue.then(async () => {
+    started = true;
+    const queueLengthAtStart = state.audioQueuePendingTasks;
+    state.audioQueuePendingTasks = Math.max(0, state.audioQueuePendingTasks - 1);
+    removeAudioQueueEntry(queueEntry);
+    const queueWaitMs = Math.max(0, Date.now() - queuedAtMs);
+    const loadControlResult = state.loadControlController?.observeQueueWait(queueWaitMs, Date.now());
+    if (loadControlResult?.transition) applyLoadControlResult(loadControlResult);
     if (reservesAudio && Date.now() - queuedAtMs > MAX_AUDIO_QUEUE_STALE_MS) {
-      return reportAudioQueueDrop('STALE', audioMs);
+      return reportAudioQueueDrop('STALE', audioMs, telemetry);
     }
-    return await task(reservation);
+    if (telemetry.caseId) {
+      recordEvaluationEvent('audio_started', {
+        ...telemetry,
+        queueLength: queueLengthAtStart,
+        queueWaitMs,
+      });
+    }
+    const taskStartedAtMs = Date.now();
+    try {
+      const result = await task(reservation);
+      if (telemetry.caseId) {
+        recordEvaluationEvent('audio_finished', {
+          ...telemetry,
+          durationMs: Math.max(0, Date.now() - taskStartedAtMs),
+          outcome: 'success',
+        });
+      }
+      return result;
+    } catch (error) {
+      if (telemetry.caseId) {
+        recordEvaluationEvent('audio_finished', {
+          ...telemetry,
+          durationMs: Math.max(0, Date.now() - taskStartedAtMs),
+          outcome: 'failed',
+          errorClass: error?.name || 'Error',
+        });
+      }
+      throw error;
+    }
   }).finally(() => {
+    if (!started) {
+      state.audioQueuePendingTasks = Math.max(0, state.audioQueuePendingTasks - 1);
+      removeAudioQueueEntry(queueEntry);
+    }
     if (!reservation?.retained) releaseAudioQueueReservation(reservation);
   });
   state.audioQueue = next.catch((err) => {
@@ -939,7 +1374,9 @@ function translationQueueError(code, reason = null) {
     ? 'translation queue is full'
     : code === 'TRANSLATION_CONFLICT'
       ? 'conflicting translation request for the same source revision'
-      : 'translation request became stale');
+      : code === 'TRANSLATION_PAUSED'
+        ? 'translation admission is paused by load control'
+        : 'translation request became stale');
   error.code = code;
   error.reason = reason;
   return error;
@@ -970,41 +1407,124 @@ function translationRequestKey(options) {
   ]);
 }
 
+function translationDropReason(error) {
+  if (error?.code === 'TRANSLATION_STALE') {
+    return ({
+      'queue-expired': 'QUEUE_EXPIRED',
+      'audio-age': 'AUDIO_AGE_EXPIRED',
+      'source-revision': 'SOURCE_REVISION_SUPERSEDED',
+      'session-ended': 'SESSION_ENDED',
+      'audio-session-changed': 'AUDIO_SESSION_CHANGED',
+    })[error.reason] || 'TRANSLATION_STALE';
+  }
+  if (error?.code === 'TRANSLATION_OVERLOAD') return 'QUEUE_OVERFLOW';
+  if (error?.code === 'TRANSLATION_PAUSED') return 'TRANSLATION_PAUSED';
+  if (error?.code === 'TRANSLATION_CONFLICT') return 'SAME_REVISION_CONFLICT';
+  return 'TRANSLATION_FAILED';
+}
+
 function failTranslationJob(job, error, { report = true } = {}) {
-  if (report && error?.code === 'TRANSLATION_STALE') reportTranslationQueueDrop(error.code);
+  if (report) {
+    reportTranslationQueueDrop(error?.code || 'TRANSLATION_FAILED', {
+      caseId: job.segmentId,
+      sessionId: job.sessionId,
+      streamId: job.streamId,
+      streamGeneration: job.streamGeneration,
+      observedConfigId: job.observedConfigId,
+      configCoverage: 'partial',
+      reason: translationDropReason(error),
+    });
+  }
   Promise.resolve()
     .then(() => job.onFailure?.(error))
     .catch(() => {})
     .finally(() => job.reject(error));
 }
 
-function translationJobIsStale(job, nowMs = Date.now()) {
-  return nowMs - job.queuedAtMs > MAX_TRANSLATION_WAIT_MS ||
-    (Number.isFinite(job.audioEndedAtMs) && nowMs - job.audioEndedAtMs > MAX_TRANSLATION_AUDIO_AGE_MS);
+function translationJobStaleReason(job, nowMs = Date.now()) {
+  if (nowMs - job.queuedAtMs > MAX_TRANSLATION_WAIT_MS) return 'queue-expired';
+  if (Number.isFinite(job.audioEndedAtMs) && nowMs - job.audioEndedAtMs > MAX_TRANSLATION_AUDIO_AGE_MS) {
+    return 'audio-age';
+  }
+  return null;
 }
 
 function expireStaleTranslationTasks(nowMs = Date.now()) {
-  const staleJobs = state.translationQueue.filter((job) => translationJobIsStale(job, nowMs));
+  const staleJobs = state.translationQueue
+    .map((job) => ({ job, reason: translationJobStaleReason(job, nowMs) }))
+    .filter((entry) => entry.reason);
   if (staleJobs.length === 0) return;
-  state.translationQueue = state.translationQueue.filter((job) => !staleJobs.includes(job));
-  for (const stale of staleJobs) {
-    failTranslationJob(stale, translationQueueError('TRANSLATION_STALE', 'queue-expired'));
+  const staleSet = new Set(staleJobs.map((entry) => entry.job));
+  state.translationQueue = state.translationQueue.filter((job) => !staleSet.has(job));
+  for (const { job, reason } of staleJobs) {
+    failTranslationJob(job, translationQueueError('TRANSLATION_STALE', reason));
   }
 }
 
 async function runNextTranslationTask() {
-  if (state.translationQueueActive) return;
+  if (state.translationQueueActive || state.translationPaused || state.inferenceAdmissionStopped) return;
   expireStaleTranslationTasks();
   const runnableIndex = state.translationQueue.findIndex((job) => job.ready);
   if (runnableIndex < 0) return;
   const [job] = state.translationQueue.splice(runnableIndex, 1);
   if (!job) return;
   state.translationQueueActive = job;
+  const startedAtMs = Date.now();
+  recordEvaluationEvent('translation_started', {
+    caseId: job.segmentId,
+    sessionId: job.sessionId,
+    streamId: job.streamId,
+    streamGeneration: job.streamGeneration,
+    observedConfigId: job.observedConfigId,
+    configCoverage: 'partial',
+    queueName: 'translation',
+    queueLength: state.translationQueue.length + 1,
+    queueWaitMs: Math.max(0, startedAtMs - job.queuedAtMs),
+    attempt: job.attempt,
+  });
   try {
     const result = await job.task();
     await job.onResult?.(result);
+    recordEvaluationEvent('translation_finished', {
+      caseId: job.segmentId,
+      sessionId: job.sessionId,
+      streamId: job.streamId,
+      streamGeneration: job.streamGeneration,
+      observedConfigId: job.observedConfigId,
+      configCoverage: 'partial',
+      durationMs: Math.max(0, Date.now() - startedAtMs),
+      attempt: job.attempt,
+      outcome: 'success',
+    });
     job.resolve(result);
   } catch (error) {
+    const reason = error?.code || null;
+    recordEvaluationEvent('translation_finished', {
+      caseId: job.segmentId,
+      sessionId: job.sessionId,
+      streamId: job.streamId,
+      streamGeneration: job.streamGeneration,
+      observedConfigId: job.observedConfigId,
+      configCoverage: 'partial',
+      durationMs: Math.max(0, Date.now() - startedAtMs),
+      attempt: job.attempt,
+      outcome: 'failed',
+      reason,
+      errorClass: error?.name || 'Error',
+    });
+    if (!['TRANSLATION_STALE', 'TRANSLATION_OVERLOAD', 'TRANSLATION_PAUSED'].includes(reason)) {
+      recordEvaluationEvent('backend_error', {
+        caseId: job.segmentId,
+        sessionId: job.sessionId,
+        streamId: job.streamId,
+        streamGeneration: job.streamGeneration,
+        observedConfigId: job.observedConfigId,
+        configCoverage: 'partial',
+        reason: 'TRANSLATION',
+        errorClass: error?.name || 'Error',
+        attempt: job.attempt,
+      });
+    }
     failTranslationJob(job, error, { report: false });
   } finally {
     state.translationQueueActive = null;
@@ -1016,6 +1536,20 @@ function enqueueTranslationTask(task, options = {}) {
   if (typeof task !== 'function') return Promise.reject(new TypeError('translation task must be a function'));
   const queuedAtMs = Number.isFinite(options.queuedAtMs) ? options.queuedAtMs : Date.now();
   const audioEndedAtMs = Number.isFinite(options.audioEndedAtMs) ? options.audioEndedAtMs : null;
+  if (state.translationPaused || state.inferenceAdmissionStopped) {
+    const error = translationQueueError('TRANSLATION_PAUSED', 'load-control');
+    reportTranslationAdmissionRejected({
+      segmentId: options.segmentId,
+      sessionId: options.sessionId,
+      streamId: options.streamId,
+      streamGeneration: options.streamGeneration,
+      observedConfigId: options.observedConfigId || state.evaluationObservedConfigId,
+    }, state.inferenceAdmissionStopped ? 'MEMORY_PRESSURE' : 'QUEUE_WAIT');
+    return Promise.resolve()
+      .then(() => options.onFailure?.(error))
+      .catch(() => {})
+      .then(() => { throw error; });
+  }
   expireStaleTranslationTasks();
   const scopeKey = translationScopeKey(options);
   const requestKey = translationRequestKey(options);
@@ -1028,13 +1562,44 @@ function enqueueTranslationTask(task, options = {}) {
     const latestRevision = Math.max(...scopedJobs.map((job) => job.sourceRevision));
     if (sourceRevision < latestRevision) {
       const error = translationQueueError('TRANSLATION_STALE', 'source-revision');
-      reportTranslationQueueDrop(error.code);
+      reportTranslationQueueDrop(error.code, {
+        caseId: options.segmentId,
+        sessionId: options.sessionId,
+        streamId: options.streamId,
+        streamGeneration: options.streamGeneration,
+        observedConfigId: options.observedConfigId || state.evaluationObservedConfigId,
+        configCoverage: 'partial',
+        reason: translationDropReason(error),
+      });
       return Promise.reject(error);
     }
     if (sourceRevision === latestRevision) {
       const sameRevision = scopedJobs.find((job) => job.sourceRevision === sourceRevision);
-      if (requestKey === sameRevision.requestKey) return sameRevision.promise;
-      return Promise.reject(translationQueueError('TRANSLATION_CONFLICT'));
+      if (requestKey === sameRevision.requestKey) {
+        recordEvaluationEvent('translation_deduplicated', {
+          caseId: options.segmentId,
+          sessionId: options.sessionId,
+          streamId: options.streamId,
+          streamGeneration: options.streamGeneration,
+          observedConfigId: options.observedConfigId || state.evaluationObservedConfigId,
+          configCoverage: 'partial',
+          queueName: 'translation',
+          queueLength: state.translationQueue.length + (state.translationQueueActive ? 1 : 0),
+          reason: 'IDENTICAL_REQUEST',
+        });
+        return sameRevision.promise;
+      }
+      const error = translationQueueError('TRANSLATION_CONFLICT');
+      reportTranslationQueueDrop(error.code, {
+        caseId: options.segmentId,
+        sessionId: options.sessionId,
+        streamId: options.streamId,
+        streamGeneration: options.streamGeneration,
+        observedConfigId: options.observedConfigId || state.evaluationObservedConfigId,
+        configCoverage: 'partial',
+        reason: translationDropReason(error),
+      });
+      return Promise.reject(error);
     }
     const obsolete = state.translationQueue.filter((job) =>
       job.scopeKey === scopeKey && job.sourceRevision !== null && job.sourceRevision < sourceRevision
@@ -1047,7 +1612,15 @@ function enqueueTranslationTask(task, options = {}) {
 
   if (state.translationQueue.length >= MAX_PENDING_TRANSLATION_ITEMS) {
     const error = translationQueueError('TRANSLATION_OVERLOAD');
-    reportTranslationQueueDrop(error.code);
+    reportTranslationQueueDrop(error.code, {
+      caseId: options.segmentId,
+      sessionId: options.sessionId,
+      streamId: options.streamId,
+      streamGeneration: options.streamGeneration,
+      observedConfigId: options.observedConfigId || state.evaluationObservedConfigId,
+      configCoverage: 'partial',
+      reason: translationDropReason(error),
+    });
     const rejected = Promise.resolve()
       .then(() => options.onFailure?.(error))
       .catch(() => {})
@@ -1063,14 +1636,19 @@ function enqueueTranslationTask(task, options = {}) {
   });
   const job = {
     task,
+    segmentId: options.segmentId ?? null,
     onResult: options.onResult,
     onFailure: options.onFailure,
     sessionId: options.sessionId ?? null,
+    streamId: options.streamId === 'mic' || options.streamId === 'tab' ? options.streamId : null,
+    observedConfigId: options.observedConfigId || state.evaluationObservedConfigId,
+    streamGeneration: Number.isSafeInteger(options.streamGeneration) ? options.streamGeneration : null,
     sourceRevision,
     scopeKey,
     requestKey,
     queuedAtMs,
     audioEndedAtMs,
+    attempt: Number.isSafeInteger(options.attempt) && options.attempt > 0 ? options.attempt : 1,
     isLiveAudio: options.isLiveAudio === true,
     ready: options.ready !== false,
     promise,
@@ -1078,6 +1656,31 @@ function enqueueTranslationTask(task, options = {}) {
     reject,
   };
   state.translationQueue.push(job);
+  recordEvaluationEvent('translation_enqueued', {
+    caseId: job.segmentId,
+    sessionId: job.sessionId,
+    streamId: job.streamId,
+    streamGeneration: job.streamGeneration,
+    observedConfigId: job.observedConfigId,
+    configCoverage: 'partial',
+    queueName: 'translation',
+    queueLength: state.translationQueue.length,
+    audioEndedAtMs,
+    attempt: job.attempt,
+  });
+  if (job.attempt > 1) {
+    recordEvaluationEvent('retry', {
+      caseId: job.segmentId,
+      sessionId: job.sessionId,
+      streamId: job.streamId,
+      streamGeneration: job.streamGeneration,
+      observedConfigId: job.observedConfigId,
+      configCoverage: 'partial',
+      reason: 'RETRY_REQUESTED',
+      outcome: 'queued',
+      attempt: job.attempt,
+    });
+  }
   options.onAdmitted?.(job);
   runNextTranslationTask();
   return promise;
@@ -1096,7 +1699,12 @@ async function processAudioChunk(wavB64, speakerName, tabId, speechMs = null, au
   // Live audio is accepted only with the active session and stream generation.
   // This also prevents legacy callers from publishing an untracked result.
   if (!audioMetadata) return;
-  if (audioMetadata && !isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations)) return;
+  const initialDiscardReason = audioSessionDiscardReason(audioMetadata) ||
+    (state.asrAdmissionStopped ? 'ASR_STOPPED_MEMORY_PRESSURE' : null);
+  if (initialDiscardReason) {
+    recordAudioDiscard(audioMetadata, initialDiscardReason);
+    return;
+  }
   const effectiveSpeechMs = Number.isFinite(speechMs) ? speechMs : getWavDurationMs(wavB64);
   const canRequestTranscription = audioMetadata
     ? shouldRequestTranscription(effectiveSpeechMs, audioMetadata.evidence)
@@ -1110,11 +1718,41 @@ async function processAudioChunk(wavB64, speakerName, tabId, speechMs = null, au
   }
 
   const cfg = await getSettings();
+  const caseId = audioMetadata.caseId || createSessionId();
+  const caseContext = {
+    caseId,
+    sessionId: audioMetadata.sessionId,
+    streamId: audioMetadata.streamId,
+    streamGeneration: audioMetadata.streamGeneration,
+    relatedCaseIds: audioMetadata.relatedCaseIds,
+    audioEndedAtMs: audioMetadata.audioEndedAtMs,
+    observedConfigId: evaluationObservedConfigId(cfg),
+    configCoverage: 'partial',
+  };
 
   // Step 1: ASR. Keep all candidate text private until host approval, including
   // text marked by model-specific or text-only diagnostics.
-  const asr = await transcribeOnly(wavB64, cfg, effectiveSpeechMs, audioMetadata.evidence);
-  if (audioMetadata && !isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations)) return;
+  const asrStartedAtMs = Date.now();
+  recordEvaluationEvent('asr_started', caseContext);
+  let asr;
+  try {
+    asr = await transcribeOnly(wavB64, cfg, effectiveSpeechMs, audioMetadata.evidence);
+  } catch (error) {
+    const durationMs = Math.max(0, Date.now() - asrStartedAtMs);
+    recordEvaluationEvent('asr_finished', { ...caseContext, durationMs, outcome: 'failed', errorClass: error?.name || 'Error' });
+    recordEvaluationEvent('backend_error', { ...caseContext, reason: 'ASR', attempt: 1, errorClass: error?.name || 'Error' });
+    throw error;
+  }
+  recordEvaluationEvent('asr_finished', {
+    ...caseContext,
+    durationMs: Math.max(0, Date.now() - asrStartedAtMs),
+    outcome: 'success',
+  });
+  const afterAsrDiscardReason = audioSessionDiscardReason(audioMetadata);
+  if (afterAsrDiscardReason) {
+    recordAudioDiscard(audioMetadata, afterAsrDiscardReason);
+    return;
+  }
   const transcription = asr.transcription;
   const rawText = asr.rawText;
   const reasonCodes = [...new Set(['INSUFFICIENT_EVIDENCE', ...asr.qualityFlags])];
@@ -1166,12 +1804,18 @@ async function processAudioChunk(wavB64, speakerName, tabId, speechMs = null, au
     translation: null,
     speakerName,
   }, audioMetadata);
-  if (audioMetadata && !isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations)) return;
+  const beforeCandidateDiscardReason = audioSessionDiscardReason(audioMetadata);
+  if (beforeCandidateDiscardReason) {
+    recordAudioDiscard(audioMetadata, beforeCandidateDiscardReason);
+    return;
+  }
 
   const needTranslation = Boolean(languageResolution.accepted && textToTranslate && cfg.overlayFormat !== 'transcription');
-  const segmentId = createSessionId();
+  const translationAdmissionPaused = state.translationPaused || state.inferenceAdmissionStopped;
+  const segmentId = caseId;
   const translationEntry = needTranslation
-    ? [{ targetLanguage: translTargetLang, sourceRevision: 1, state: 'pending', text: null }]
+    ? [{ targetLanguage: translTargetLang, sourceRevision: 1,
+      state: translationAdmissionPaused ? 'paused' : 'pending', text: null }]
     : [];
   const candidate = {
     sessionId: audioMetadata.sessionId,
@@ -1193,9 +1837,25 @@ async function processAudioChunk(wavB64, speakerName, tabId, speechMs = null, au
     },
   };
   const stored = await captionStoreRequest('upsert-candidate', { candidate });
-  if (!stored?.ok || !isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations)) return;
+  if (!stored?.ok) return;
+  const afterCandidateDiscardReason = audioSessionDiscardReason(audioMetadata);
+  if (afterCandidateDiscardReason) {
+    recordAudioDiscard(audioMetadata, afterCandidateDiscardReason);
+    return;
+  }
+  recordEvaluationEvent('candidate_generated', caseContext);
 
   if (!needTranslation) return;
+  if (translationAdmissionPaused) {
+    reportTranslationAdmissionRejected({
+      segmentId,
+      sessionId: audioMetadata.sessionId,
+      streamId: audioMetadata.streamId,
+      streamGeneration: audioMetadata.streamGeneration,
+      observedConfigId: caseContext.observedConfigId,
+    }, state.inferenceAdmissionStopped ? 'MEMORY_PRESSURE' : 'QUEUE_WAIT');
+    return;
+  }
   try {
     await enqueueTranslationTask(() => {
       if (!isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations)) {
@@ -1220,6 +1880,7 @@ async function processAudioChunk(wavB64, speakerName, tabId, speechMs = null, au
       targetLang: translTargetLang,
       serverUrl: cfg.serverUrl,
       audioEndedAtMs: audioMetadata.audioEndedAtMs,
+      observedConfigId: caseContext.observedConfigId,
       isLiveAudio: true,
       onResult: async (translation) => {
         if (!isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations)) return;
@@ -1231,13 +1892,13 @@ async function processAudioChunk(wavB64, speakerName, tabId, speechMs = null, au
           state: translation ? 'ready' : 'failed',
         });
       },
-      onFailure: async () => {
+      onFailure: async (error) => {
         await captionStoreRequest('set-translation', {
           segmentId,
           sourceRevision: 1,
           targetLanguage: translTargetLang,
           text: null,
-          state: 'failed',
+          state: error?.code === 'TRANSLATION_PAUSED' ? 'paused' : 'failed',
           allowHistorical: true,
         }).catch(() => {});
       },
@@ -1257,10 +1918,20 @@ async function flushPendingSpeakerBatch(reason, tabId = state.tabId, streamId = 
   if (state.pendingSpeakerBatches.size === 0) cancelSpeakerBatchFlush();
 
   for (const [, batch] of batches) {
-    const { audioMetadata } = batch;
+    const audioMetadata = {
+      ...batch.audioMetadata,
+      caseId: batch.caseIds[0] || batch.audioMetadata.caseId || createSessionId(),
+      relatedCaseIds: batch.caseIds,
+    };
     try {
       if (Date.now() - batch.oldestQueuedAtMs > MAX_AUDIO_QUEUE_STALE_MS) {
-        reportAudioQueueDrop('STALE', batch.totalReservedAudioMs || batch.totalDurationMs);
+        reportAudioQueueDrop('STALE', batch.totalReservedAudioMs || batch.totalDurationMs, {
+          caseId: audioMetadata.caseId,
+          sessionId: audioMetadata.sessionId,
+          streamId: audioMetadata.streamId,
+          streamGeneration: audioMetadata.streamGeneration,
+          relatedCaseIds: audioMetadata.relatedCaseIds,
+        });
         continue;
       }
 
@@ -1275,7 +1946,11 @@ async function flushPendingSpeakerBatch(reason, tabId = state.tabId, streamId = 
       } catch (err) {
         console.warn('[background] speaker batch merge failed, replaying individual chunks:', err.message);
         for (const chunk of batch.chunks) {
-          await processAudioChunk(chunk.wavB64, batch.speakerName, tabId, chunk.speechMs, audioMetadata);
+          await processAudioChunk(chunk.wavB64, batch.speakerName, tabId, chunk.speechMs, {
+            ...audioMetadata,
+            caseId: chunk.caseId || createSessionId(),
+            relatedCaseIds: [chunk.caseId].filter(Boolean),
+          });
         }
       }
     } catch (err) {
@@ -1289,24 +1964,37 @@ async function flushPendingSpeakerBatch(reason, tabId = state.tabId, streamId = 
 
 async function handleAudioData(audioChunk, audioReservation = null) {
   const wavB64 = typeof audioChunk === 'string' ? audioChunk : audioChunk?.wavB64;
-  if (!wavB64) return;
-
   const audioMetadata = {
+    caseId: audioChunk?.caseId || createSessionId(),
     sessionId: audioChunk?.sessionId,
     streamId: audioChunk?.streamId,
     streamGeneration: audioChunk?.streamGeneration,
     audioEndedAtMs: Number.isFinite(audioChunk?.audioEndedAtMs) ? audioChunk.audioEndedAtMs : null,
     evidence: audioChunk?.evidence,
   };
-  if (!isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations)) return;
+  const initialDiscardReason = !wavB64 ? 'INVALID_AUDIO_PAYLOAD'
+    : audioSessionDiscardReason(audioMetadata) ||
+      (state.asrAdmissionStopped ? 'ASR_STOPPED_MEMORY_PRESSURE' : null);
+  if (initialDiscardReason) {
+    recordAudioDiscard(audioMetadata, initialDiscardReason);
+    return;
+  }
 
   const tabId = state.tabId;
   const speakerName = audioMetadata.streamId === 'tab' ? await getActiveSpeaker(tabId) : null;
-  if (!isCurrentAudioMetadata(audioMetadata, state.sessionId, state.streamGenerations)) return;
+  const afterSpeakerDiscardReason = audioSessionDiscardReason(audioMetadata) ||
+    (state.asrAdmissionStopped ? 'ASR_STOPPED_MEMORY_PRESSURE' : null);
+  if (afterSpeakerDiscardReason) {
+    recordAudioDiscard(audioMetadata, afterSpeakerDiscardReason);
+    return;
+  }
   const normalizedSpeaker = normalizeSpeakerName(speakerName);
   const durationMs = getWavDurationMs(wavB64);
   const speechMs = Number.isFinite(audioChunk?.speechMs) ? audioChunk.speechMs : durationMs;
-  if (!shouldRequestTranscription(speechMs, audioMetadata.evidence)) return;
+  if (!shouldRequestTranscription(speechMs, audioMetadata.evidence)) {
+    recordAudioDiscard({ ...audioMetadata, speechMs }, 'INVALID_VAD_EVIDENCE');
+    return;
+  }
 
   if (!normalizedSpeaker) {
     await flushPendingSpeakerBatch('speaker-unavailable', tabId, audioMetadata.streamId);
@@ -1343,7 +2031,7 @@ async function handleAudioData(audioChunk, audioReservation = null) {
     return;
   }
 
-  appendSpeakerBatchChunk(pending, wavB64, speechMs, audioReservation);
+  appendSpeakerBatchChunk(pending, wavB64, speechMs, audioReservation, audioMetadata.caseId);
   pending.totalDurationMs += durationMs;
   pending.audioMetadata.audioEndedAtMs = audioMetadata.audioEndedAtMs;
   scheduleSpeakerBatchFlush();
@@ -1488,6 +2176,7 @@ async function startCapture(tabId) {
     }
 
     const cfg = await getSettings();
+    await evaluationTelemetryReady;
     activeStreamIds = cfg.audioSource === 'mic-only'
       ? ['mic']
       : cfg.audioSource === 'tab-only'
@@ -1505,9 +2194,29 @@ async function startCapture(tabId) {
     state.healthCheckFailures = 0;
     state.healthCheckInFlight = false;
     state.serverInfo = { whisperModel: health.whisperModel, llamaModel: health.llamaModel };
+    state.evaluationRunId = createSessionId();
+    state.evaluationObservedConfigId = evaluationObservedConfigId(cfg, state.serverInfo);
+    state.loadControlController = globalThis.MeetTranslatorLoadControl.createAdaptiveLoadController();
+    state.translationPaused = false;
+    state.inferenceAdmissionStopped = false;
+    state.asrAdmissionStopped = false;
+    state.memoryStatus = { pressure: 'unknown', processGroupMemoryGiB: null, sourceAvailable: false };
+    stopLoadControlSampling();
+    state.audioQueueEntries = [];
+    evaluationTelemetry.beginRun({
+      runId: state.evaluationRunId,
+      sessionId,
+      observedConfigId: state.evaluationObservedConfigId,
+      configCoverage: 'partial',
+    });
+    recordEvaluationEvent('load_control_transition', {
+      sessionId,
+      outcome: 'normal',
+      reason: 'CAPTURE_STARTED',
+    });
     clearPendingSpeakerBatches();
     state.audioQueueStatus = { code: null, droppedCount: 0, droppedAudioMs: 0, updatedAtMs: null };
-    state.translationQueueStatus = { code: null, droppedCount: 0, updatedAtMs: null };
+    state.translationQueueStatus = { code: null, droppedCount: 0, heldCount: 0, rejectedCount: 0, updatedAtMs: null };
 
     // Make sure the offscreen document is ready for audio processing
     await ensureOffscreenDocument();
@@ -1549,6 +2258,20 @@ async function startCapture(tabId) {
     console.info('[background] startCapture: audio capture started, tabId=', tabId);
   } catch (err) {
     console.error('[background] startCapture failed:', err);
+    if (state.evaluationRunId) {
+      evaluationTelemetry.endRun({
+        sessionId,
+        observedConfigId: state.evaluationObservedConfigId,
+        configCoverage: 'partial',
+        outcome: 'failed',
+        reason: 'START_FAILED',
+        errorClass: err?.name || 'Error',
+      });
+      await evaluationTelemetry.flush();
+      state.evaluationRunId = null;
+      state.evaluationObservedConfigId = null;
+    }
+    stopLoadControlSampling();
     if (sessionId && state.sessionId === sessionId) {
       state.isActive = false;
       for (const streamId of activeStreamIds) state.streamGenerations[streamId] += 1;
@@ -1575,6 +2298,7 @@ async function stopCapture() {
   for (const streamId of state.activeStreamIds) state.streamGenerations[streamId] += 1;
   state.activeStreamIds = [];
   state.sessionId = null;
+  stopLoadControlSampling();
   clearPendingSpeakerBatches();
   clearPendingTranslationTasksForSession(sessionId);
 
@@ -1589,6 +2313,28 @@ async function stopCapture() {
   } catch (_) {}
 
   await state.audioQueue;
+
+  if (state.evaluationRunId) {
+    evaluationTelemetry.endRun({
+      sessionId,
+      observedConfigId: state.evaluationObservedConfigId,
+      configCoverage: 'partial',
+      outcome: 'stopped',
+      reason: 'USER_STOPPED',
+      pendingCount: state.audioQueuePendingTasks + state.translationQueue.length,
+      droppedCount: state.audioQueueStatus.droppedCount + state.translationQueueStatus.droppedCount,
+    });
+    await evaluationTelemetry.flush();
+    state.evaluationRunId = null;
+    state.evaluationObservedConfigId = null;
+  }
+
+  state.loadControlController = null;
+  state.translationPaused = false;
+  state.inferenceAdmissionStopped = false;
+  state.asrAdmissionStopped = false;
+  state.memoryStatus = { pressure: 'unknown', processGroupMemoryGiB: null, sourceAvailable: false };
+  broadcastLoadControlStatus();
 
   state.tabId = null;
   state.healthCheckFailures = 0;

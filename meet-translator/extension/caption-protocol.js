@@ -35,7 +35,7 @@
     if (!record || record.decision !== 'accepted' || record.publishEligible !== true || record.published !== true) return null;
     if (record.streamId === 'mic' && !publishMicrophoneCaptions) return null;
     const translations = (Array.isArray(record.translations) ? record.translations : [])
-      .filter((translation) => translation?.sourceRevision === record.sourceRevision)
+      .filter((translation) => translation?.sourceRevision === record.sourceRevision && translation.state !== 'paused')
       .map((translation) => ({
         targetLanguage: translation.targetLanguage,
         state: translation.state,

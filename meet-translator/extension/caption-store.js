@@ -126,7 +126,7 @@
           !Array.isArray(input.translations || []) || (input.translations || []).length > 4 ||
           (input.translations || []).some((translation) => !translation ||
             typeof translation.targetLanguage !== 'string' || translation.targetLanguage.length > 32 ||
-            !['pending', 'ready', 'failed'].includes(translation.state) ||
+            !['pending', 'ready', 'failed', 'paused'].includes(translation.state) ||
             !Number.isSafeInteger(translation.sourceRevision) ||
             (translation.text !== null && (typeof translation.text !== 'string' || byteLength(translation.text) > protocol.MAX_TEXT_BYTES)))) {
         return { ok: false, reason: 'invalid-or-stale-candidate' };
@@ -239,7 +239,7 @@
     function setTranslation(segmentId, sourceRevision, targetLanguage, text, state = 'ready', { allowHistorical = false } = {}) {
       const record = records.get(segmentId);
       if (!record || (!allowHistorical && !currentGeneration(record)) || record.sourceRevision !== sourceRevision ||
-          !['ready', 'failed'].includes(state) || typeof targetLanguage !== 'string' || !targetLanguage ||
+          !['ready', 'failed', 'paused'].includes(state) || typeof targetLanguage !== 'string' || !targetLanguage ||
           targetLanguage.length > 32 || (state === 'ready' &&
             (typeof text !== 'string' || byteLength(text) > protocol.MAX_TEXT_BYTES))) {
         return { ok: false, reason: 'stale-or-invalid-translation' };
@@ -252,6 +252,8 @@
       record.revision += 1;
       record.updatedAt = now();
       if (record.published && record.publishEligible) {
+        // Refresh the public projection so a private pause clears an old pending status.
+        // projectPublicRecord omits the paused state and publishes only the original caption.
         emitPublic('upsert', { record: protocol.projectPublicRecord(record, { publishMicrophoneCaptions }) });
       }
       emitPrivate(record);

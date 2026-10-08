@@ -77,6 +77,25 @@ test('a corrected source invalidates the old translation and stale translation r
   assert.equal(store.publicSnapshot().records[0].translations[0].text, null);
 });
 
+test('a paused translation stays in private state and is omitted from public records', () => {
+  const publicEvents = [];
+  const store = createCaptionStore({ onPublicEvent: (event) => publicEvents.push(event) });
+  store.beginSession('session-a', { mic: 0, tab: 2 });
+  assert.equal(store.upsertCandidate(candidate()).ok, true);
+
+  assert.equal(store.approve('segment-a').ok, true);
+  const eventCountAfterApproval = publicEvents.length;
+  assert.equal(publicEvents.at(-1).record.translations[0].state, 'pending');
+  const paused = store.setTranslation('segment-a', 1, 'ja', null, 'paused');
+  assert.equal(paused.ok, true);
+  assert.equal(store.privateSnapshot().records[0].translations[0].state, 'paused');
+  assert.equal(publicEvents.length, eventCountAfterApproval + 1, 'pause replaces the public pending projection');
+  assert.equal(publicEvents.at(-1).type, 'upsert');
+  assert.deepEqual(publicEvents.at(-1).record.translations, [], 'public projection clears the stale pending state');
+  assert.equal(JSON.stringify(publicEvents.at(-1)).includes('paused'), false, 'private pause state never crosses the public boundary');
+  assert.deepEqual(store.publicSnapshot().records[0].translations, []);
+});
+
 test('undo restores the prior approved text without reusing a stale revision', () => {
   const store = createCaptionStore();
   store.beginSession('session-a', { mic: 0, tab: 2 });

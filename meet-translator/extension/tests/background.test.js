@@ -112,6 +112,316 @@ test('audio queue bounds pending audio and reports stale or overloaded drops', a
   assert.equal(context.__testState.audioQueueStatus.code, 'STALE');
 });
 
+test('evaluation telemetry correlates audio and translation queues without recording payload text', async () => {
+  const { context } = loadBackgroundScript();
+  const state = context.__testState;
+  const clock = setFakeClock(context, 20_000);
+  await state.evaluationTelemetryReady;
+  state.sessionId = 'session-eval';
+  state.evaluationRunId = 'run-eval';
+  state.evaluationObservedConfigId = 'cfg-observed-fnv1a32-v1-00000001';
+  state.evaluationTelemetry.beginRun({
+    runId: state.evaluationRunId,
+    sessionId: state.sessionId,
+    observedConfigId: state.evaluationObservedConfigId,
+    configCoverage: 'partial',
+  });
+
+  await context.enqueueAudioTask(async () => 'handled', {
+    audioMs: 250,
+    queuedAtMs: clock.now() - 25,
+    caseId: 'case-eval',
+    sessionId: state.sessionId,
+    streamId: 'tab',
+    streamGeneration: 3,
+    audioEndedAtMs: clock.now() - 100,
+  });
+  clock.advance(10);
+  await context.enqueueTranslationTask(async () => 'translation-result-not-recorded', {
+    segmentId: 'case-eval',
+    sessionId: state.sessionId,
+    streamGeneration: 3,
+    sourceRevision: 1,
+    sourceText: 'private source must not enter telemetry',
+    queuedAtMs: clock.now() - 30,
+    audioEndedAtMs: clock.now() - 110,
+  });
+  clock.advance(40);
+  context.recordEvaluationEvent('candidate_generated', {
+    caseId: 'case-eval', sessionId: state.sessionId, streamGeneration: 3, audioEndedAtMs: clock.now() - 150,
+  });
+  context.recordEvaluationEvent('approval_requested', { caseId: 'case-eval', sessionId: state.sessionId });
+  clock.advance(20);
+  context.recordEvaluationEvent('caption_publication_event', { caseId: 'case-eval', sessionId: state.sessionId });
+
+  const snapshot = state.evaluationTelemetry.snapshot();
+  const events = Array.from(snapshot.events, (event) => event.type);
+  assert.ok(events.includes('audio_enqueued'));
+  assert.ok(events.includes('audio_started'));
+  assert.ok(events.includes('audio_finished'));
+  assert.ok(events.includes('translation_enqueued'));
+  assert.ok(events.includes('translation_started'));
+  assert.ok(events.includes('translation_finished'));
+  assert.equal(snapshot.events.find((event) => event.type === 'audio_started').queueWaitMs, 25);
+  assert.equal(snapshot.events.find((event) => event.type === 'translation_started').queueWaitMs, 30);
+  assert.equal(JSON.stringify(snapshot).includes('private source'), false);
+  assert.equal(JSON.stringify(snapshot).includes('translation-result-not-recorded'), false);
+  const timings = JSON.parse(JSON.stringify(state.evaluationTelemetry.caseTimings()));
+  assert.equal(timings[0].humanApprovalWaitMs, 0);
+  assert.equal(timings[0].approvalToPublicationEventMs, 20);
+});
+
+test('audio_started records pending depth at dispatch, including the task that is starting', async () => {
+  const { context } = loadBackgroundScript();
+  const state = context.__testState;
+  const clock = setFakeClock(context, 30_000);
+  await state.evaluationTelemetryReady;
+  state.sessionId = 'session-queue-depth';
+  state.evaluationRunId = 'run-queue-depth';
+  state.evaluationTelemetry.beginRun({ runId: state.evaluationRunId, sessionId: state.sessionId });
+
+  let releaseFirst;
+  const first = context.enqueueAudioTask(() => new Promise((resolve) => { releaseFirst = resolve; }));
+  await Promise.resolve();
+  const second = context.enqueueAudioTask(() => true, {
+    caseId: 'case-second', sessionId: state.sessionId, streamId: 'tab', streamGeneration: 1,
+  });
+  const third = context.enqueueAudioTask(() => true, {
+    caseId: 'case-third', sessionId: state.sessionId, streamId: 'tab', streamGeneration: 1,
+  });
+  releaseFirst();
+  await Promise.all([first, second, third]);
+
+  const events = state.evaluationTelemetry.snapshot().events.filter((event) => event.type === 'audio_started');
+  assert.equal(events.find((event) => event.caseId === 'case-second').queueLength, 2);
+  assert.equal(events.find((event) => event.caseId === 'case-third').queueLength, 1);
+  assert.equal(clock.now(), 30_000);
+});
+
+test('audio discarded before queue admission receives a content-free outcome reason', async () => {
+  const { context } = loadBackgroundScript();
+  const state = context.__testState;
+  await state.evaluationTelemetryReady;
+  state.isActive = true;
+  state.sessionId = 'session-discard';
+  state.streamGenerations = { mic: 0, tab: 2 };
+  state.evaluationRunId = 'run-discard';
+  state.evaluationTelemetry.beginRun({ runId: state.evaluationRunId, sessionId: state.sessionId });
+
+  context.handleOffscreenPortMessage({}, {
+    type: 'AUDIO_DATA', sessionId: 'session-discard', streamId: 'tab', streamGeneration: 2,
+    speechMs: 0, evidence: {
+      vadKind: 'energy', speechDetected: false, voicedDurationMs: 0,
+      utteranceDurationMs: 1_000, clippingRatio: 0,
+    },
+  });
+
+  const discarded = state.evaluationTelemetry.snapshot().events.find((event) => event.type === 'audio_discarded');
+  assert.equal(discarded.reason, 'NO_VOICED_SPEECH');
+  assert.equal(discarded.sessionId, 'session-discard');
+  assert.equal(JSON.stringify(discarded).includes('speechMs'), false);
+});
+
+test('slow queue transition holds pending translations, reports private state, and rejects new admission', async () => {
+  const { context } = loadBackgroundScript();
+  const state = context.__testState;
+  await state.evaluationTelemetryReady;
+  state.sessionId = 'session-load-control';
+  state.evaluationRunId = 'run-load-control';
+  state.evaluationTelemetry.beginRun({ runId: state.evaluationRunId, sessionId: state.sessionId });
+  state.loadControlController = context.MeetTranslatorLoadControl.createAdaptiveLoadController();
+
+  let releaseActive;
+  let markActiveStarted;
+  const activeStarted = new Promise((resolve) => { markActiveStarted = resolve; });
+  const active = context.enqueueTranslationTask(() => new Promise((resolve) => {
+    releaseActive = resolve;
+    markActiveStarted();
+  }), { segmentId: 'active-translation', sessionId: state.sessionId, sourceRevision: 1 });
+  await activeStarted;
+
+  let heldFailureCode = null;
+  const heldOutcome = context.enqueueTranslationTask(() => {
+    assert.fail('held translation must not start');
+  }, {
+    segmentId: 'held-case', sessionId: state.sessionId, sourceRevision: 1,
+    onFailure(error) { heldFailureCode = error.code; },
+  }).then(() => null, (error) => error);
+
+  for (let second = 1; second <= 3; second += 1) {
+    const result = state.loadControlController.observeQueueWait(2_001, second * 1_000);
+    if (result.transition) context.applyLoadControlResult(result);
+  }
+  for (const nowMs of [13_000, 14_000, 15_000]) {
+    const result = state.loadControlController.sample({
+      nowMs, queueWaitMs: 2_100, asrQueueWaitMs: 2_100,
+      memoryPressure: 'unknown', processGroupMemoryGiB: null,
+    });
+    if (result.transition) context.applyLoadControlResult(result);
+  }
+
+  const heldError = await heldOutcome;
+  assert.equal(state.translationPaused, true);
+  assert.equal(state.translationQueue.length, 0);
+  assert.equal(state.translationQueueStatus.code, 'TRANSLATION_PAUSED');
+  assert.equal(heldFailureCode, 'TRANSLATION_PAUSED');
+  assert.equal(heldError?.code, 'TRANSLATION_PAUSED');
+  let events = state.evaluationTelemetry.snapshot().events;
+  assert.ok(events.some((event) => event.type === 'translation_held' && event.caseId === 'held-case'));
+
+  let newTaskRan = false;
+  const admissionError = await context.enqueueTranslationTask(() => { newTaskRan = true; }, {
+    segmentId: 'new-case', sessionId: state.sessionId, sourceRevision: 1,
+  }).then(() => null, (error) => error);
+  assert.equal(admissionError?.code, 'TRANSLATION_PAUSED');
+  assert.equal(newTaskRan, false);
+  events = state.evaluationTelemetry.snapshot().events;
+  assert.ok(events.some((event) => event.type === 'translation_paused'));
+
+  releaseActive('active result');
+  await active;
+});
+
+test('load-control resume is accepted only through an explicit private user action', async () => {
+  const { context } = loadBackgroundScript();
+  const state = context.__testState;
+  await state.evaluationTelemetryReady;
+  state.sessionId = 'session-explicit-resume';
+  state.evaluationRunId = 'run-explicit-resume';
+  state.evaluationTelemetry.beginRun({ runId: state.evaluationRunId, sessionId: state.sessionId });
+  state.loadControlController = context.MeetTranslatorLoadControl.createAdaptiveLoadController();
+
+  context.applyLoadControlResult(state.loadControlController.sample({
+    nowMs: 1_000, memoryPressure: 'critical', asrQueueWaitMs: 0,
+  }));
+  for (let nowMs = 2_000; nowMs <= 6_000; nowMs += 1_000) {
+    context.applyLoadControlResult(state.loadControlController.sample({
+      nowMs, memoryPressure: 'critical', asrQueueWaitMs: 0,
+    }));
+  }
+  for (let nowMs = 7_000; nowMs <= 37_000; nowMs += 1_000) {
+    context.applyLoadControlResult(state.loadControlController.sample({
+      nowMs, memoryPressure: 'normal', asrQueueWaitMs: 499,
+    }));
+  }
+  assert.equal(state.translationPaused, true);
+  assert.equal(state.asrAdmissionStopped, true);
+  assert.equal(context.loadControlStatus().resumeEligible, true);
+
+  await context.handleCaptionClientMessage({ postMessage() {} }, 'public', {
+    type: 'CAPTION_LOAD_CONTROL_RESUME',
+  });
+  assert.equal(state.translationPaused, true, 'public caption clients cannot resume inference');
+
+  await context.handleCaptionClientMessage({ postMessage() {} }, 'private', {
+    type: 'CAPTION_LOAD_CONTROL_RESUME',
+  });
+  assert.equal(state.translationPaused, false);
+  assert.equal(state.inferenceAdmissionStopped, false);
+  assert.equal(state.asrAdmissionStopped, false);
+  assert.equal(state.translationQueue.length, 0, 'resume does not requeue held work');
+  assert.ok(state.evaluationTelemetry.snapshot().events.some((event) => event.type === 'translation_resumed'));
+});
+
+test('correction and undo telemetry follows successful caption-store results; failed approval is not a human rejection', async () => {
+  const { context } = loadBackgroundScript();
+  const state = context.__testState;
+  await state.evaluationTelemetryReady;
+  state.sessionId = 'session-actions';
+  state.evaluationRunId = 'run-actions';
+  state.evaluationTelemetry.beginRun({ runId: state.evaluationRunId, sessionId: state.sessionId });
+  const port = {
+    postMessage(message) {
+      if (message.type !== 'CAPTION_RPC') return;
+      const results = {
+        correct: { ok: true, record: { segmentId: 'action-case', sourceRevision: 2, sessionId: 'session-actions' } },
+        undo: { ok: true, record: { segmentId: 'action-case', sourceRevision: 3, sessionId: 'session-actions' } },
+        approve: { ok: false, reason: 'stale-or-missing-record' },
+      };
+      context.handleOffscreenPortMessage(port, {
+        type: 'CAPTION_RPC_RESULT', requestId: message.requestId, result: results[message.action],
+      });
+    },
+  };
+  state.offscreenPort = port;
+
+  for (const action of ['correct', 'undo', 'approve']) {
+    await context.handleCaptionClientMessage(port, 'private', {
+      type: 'CAPTION_ACTION', action, requestId: `request-${action}`,
+      payload: { segmentId: 'action-case', sourceText: 'corrected source' },
+    });
+  }
+  const events = state.evaluationTelemetry.snapshot().events;
+  assert.ok(events.some((event) => event.type === 'correction_saved' && event.caseId === 'action-case'));
+  assert.ok(events.some((event) => event.type === 'correction_undone' && event.caseId === 'action-case'));
+  const approval = events.find((event) => event.type === 'approval_finished');
+  assert.equal(approval.outcome, 'error');
+  assert.equal(approval.reason, 'APPROVAL_REQUEST_FAILED');
+});
+
+test('evaluation telemetry export is private and excludes unknown request content', async () => {
+  const { context } = loadBackgroundScript();
+  const state = context.__testState;
+  const messages = [];
+  const port = { postMessage(message) { messages.push(message); } };
+  await state.evaluationTelemetryReady;
+  state.sessionId = 'session-private';
+  state.evaluationObservedConfigId = 'cfg-private';
+  state.evaluationTelemetry.beginRun({ runId: 'run-private', sessionId: 'session-private' });
+  context.recordEvaluationEvent('backend_error', {
+    caseId: 'case-private', sourceText: 'private transcript', wavB64: 'private audio', apiToken: 'private token',
+  });
+
+  await context.handleCaptionClientMessage(port, 'public', {
+    type: 'EVALUATION_TELEMETRY_EXPORT_REQUEST', requestId: 'public-request',
+  });
+  assert.equal(messages.length, 0, 'public caption pages cannot request private evaluation telemetry');
+  await context.handleCaptionClientMessage(port, 'private', {
+    type: 'EVALUATION_TELEMETRY_EXPORT_REQUEST', requestId: 'private-request',
+  });
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, 'EVALUATION_TELEMETRY_EXPORT');
+  assert.equal(messages[0].requestId, 'private-request');
+  const exported = JSON.stringify(messages[0]);
+  assert.doesNotMatch(exported, /private transcript|private audio|private token/);
+});
+
+test('translation telemetry separates identical-request dedupe from queue expiry reasons', async () => {
+  const { context } = loadBackgroundScript();
+  const state = context.__testState;
+  const clock = setFakeClock(context, 40_000);
+  await state.evaluationTelemetryReady;
+  state.sessionId = 'session-translation-events';
+  state.evaluationRunId = 'run-translation-events';
+  state.evaluationTelemetry.beginRun({ runId: state.evaluationRunId, sessionId: state.sessionId });
+
+  let releaseActive;
+  const active = context.enqueueTranslationTask(() => new Promise((resolve) => {
+    releaseActive = resolve;
+  }), { segmentId: 'active-case', sessionId: state.sessionId, sourceRevision: 1 });
+  await Promise.resolve();
+  const request = {
+    segmentId: 'queued-case', sessionId: state.sessionId, streamId: 'tab', streamGeneration: 2,
+    sourceRevision: 1, sourceText: 'private source', sourceLang: 'ja', targetLang: 'en',
+    queuedAtMs: clock.now(),
+  };
+  const first = context.enqueueTranslationTask(() => 'result', request);
+  const duplicate = context.enqueueTranslationTask(() => 'must not run', request);
+  assert.equal(first, duplicate);
+
+  context.expireStaleTranslationTasks(clock.now() + 3_001);
+  await assert.rejects(first, (error) => error.code === 'TRANSLATION_STALE');
+  releaseActive('active result');
+  await active;
+
+  const events = state.evaluationTelemetry.snapshot().events;
+  assert.ok(events.some((event) => event.type === 'translation_deduplicated' &&
+    event.caseId === 'queued-case' && event.reason === 'IDENTICAL_REQUEST'));
+  assert.ok(events.some((event) => event.type === 'translation_dropped' &&
+    event.caseId === 'queued-case' && event.reason === 'QUEUE_EXPIRED'));
+  assert.doesNotMatch(JSON.stringify(events), /private source/);
+});
+
 test('audio queue rejects aggregate duration overflow', async () => {
   const { context } = loadBackgroundScript();
   let releaseBlocker;
@@ -761,6 +1071,7 @@ function loadBackgroundScript({ fetchImpl, storageSettings = {}, setTimeoutImpl,
   };
   let storageAccessLevel = null;
   const tabMessages = [];
+  const sessionStorage = {};
 
   const chrome = {
     offscreen: {
@@ -799,6 +1110,19 @@ function loadBackgroundScript({ fetchImpl, storageSettings = {}, setTimeoutImpl,
           return Promise.resolve();
         },
       },
+      session: {
+        async get(keys) {
+          return keys === null
+            ? { ...sessionStorage }
+            : Object.fromEntries((Array.isArray(keys) ? keys : [keys])
+              .filter((key) => Object.prototype.hasOwnProperty.call(sessionStorage, key))
+              .map((key) => [key, sessionStorage[key]]));
+        },
+        async set(values) { Object.assign(sessionStorage, values); },
+        async remove(keys) {
+          for (const key of Array.isArray(keys) ? keys : [keys]) delete sessionStorage[key];
+        },
+      },
     },
     tabCapture: {
       getMediaStreamId(_opts, callback) {
@@ -827,7 +1151,13 @@ function loadBackgroundScript({ fetchImpl, storageSettings = {}, setTimeoutImpl,
     },
     fetch: fetchImpl || (async () => ({ ok: true, json: async () => ({ status: 'ok' }) })),
     globalThis: null,
-    importScripts() {},
+    importScripts(...files) {
+      for (const file of files) {
+        if (file === 'shared.js') continue;
+        const scriptPath = path.join(__dirname, '..', file);
+        vm.runInNewContext(fs.readFileSync(scriptPath, 'utf8'), context, { filename: file });
+      }
+    },
     clearInterval() {},
     clearTimeout: clearTimeoutImpl || clearTimeout,
     setInterval() {

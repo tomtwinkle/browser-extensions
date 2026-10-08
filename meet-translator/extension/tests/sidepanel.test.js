@@ -38,6 +38,7 @@ class FakeElement {
 function loadSidepanel() {
   const elements = new Map();
   const sentMessages = [];
+  const createdBlobs = [];
   let onMessage;
   const document = {
     activeElement: null,
@@ -56,8 +57,13 @@ function loadSidepanel() {
     },
   };
   const context = {
+    Blob,
     crypto: { randomUUID: () => 'test-request-id' },
     document,
+    URL: {
+      createObjectURL(blob) { createdBlobs.push(blob); return `blob:test-${createdBlobs.length}`; },
+      revokeObjectURL() {},
+    },
     chrome: {
       runtime: {
         connect() {
@@ -72,7 +78,7 @@ function loadSidepanel() {
   };
   context.globalThis = context;
   vm.runInNewContext(sidepanelSource, context, { filename: 'sidepanel.js' });
-  return { elements, document, sentMessages, emit: (message) => onMessage(message) };
+  return { elements, document, sentMessages, createdBlobs, emit: (message) => onMessage(message) };
 }
 
 test('late action response cannot replace a newer translated private record', () => {
@@ -130,6 +136,51 @@ test('private panel reports dropped audio count and duration', () => {
 
   assert.match(elements.get('status').textContent, /破棄した件数は累計2件・合計2\.8秒/);
   assert.match(elements.get('status').textContent, /最新の区分は「音声処理の混雑」/);
+});
+
+test('private panel requires an explicit click to prepare and download content-free telemetry', async () => {
+  const { elements, sentMessages, createdBlobs, emit } = loadSidepanel();
+  elements.get('prepare-telemetry-export').click();
+  assert.equal(sentMessages[0].type, 'EVALUATION_TELEMETRY_EXPORT_REQUEST');
+  assert.equal(elements.get('download-telemetry-export').hidden, true);
+
+  emit({
+    type: 'EVALUATION_TELEMETRY_EXPORT',
+    requestId: sentMessages[0].requestId,
+    snapshot: {
+      schemaVersion: 1,
+      events: [{ type: 'candidate_generated', caseId: 'case-1', atMs: 10 }],
+    },
+    caseTimings: [{ caseId: 'case-1', humanApprovalWaitMs: 20 }],
+  });
+
+  const link = elements.get('download-telemetry-export');
+  assert.equal(link.hidden, false);
+  assert.match(link.download, /^meet-translator-telemetry-\d+\.json$/);
+  const exported = await createdBlobs[0].text();
+  assert.match(exported, /"humanApprovalWaitMs": 20/);
+  assert.match(exported, /"transcriptText": false/);
+  assert.doesNotMatch(exported, /sourceText|wavB64|apiToken/);
+});
+
+test('private load-control status enables explicit resume only after recovery is eligible', () => {
+  const { elements, sentMessages, emit } = loadSidepanel();
+  const resume = elements.get('resume-translations');
+  emit({
+    type: 'CAPTION_LOAD_CONTROL_STATUS',
+    status: { translationsPaused: true, resumeEligible: false, memorySourceAvailable: false },
+  });
+  assert.equal(resume.disabled, true);
+  assert.match(elements.get('load-control-status').textContent, /メモリ状態を取得できない/);
+
+  emit({
+    type: 'CAPTION_LOAD_CONTROL_STATUS',
+    status: { translationsPaused: true, resumeEligible: true, memorySourceAvailable: true },
+  });
+  assert.equal(resume.disabled, false);
+  assert.match(elements.get('load-control-status').textContent, /操作で翻訳を再開できます/);
+  resume.click();
+  assert.equal(sentMessages.at(-1).type, 'CAPTION_LOAD_CONTROL_RESUME');
 });
 
 test('private panel separates cumulative audio drops from the latest drop category', () => {

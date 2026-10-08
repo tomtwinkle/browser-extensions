@@ -45,6 +45,16 @@ test('unapproved records and microphone records without permission have no publi
   assert.equal(projectPublicRecord({ ...base, streamId: 'mic', decision: 'accepted', publishEligible: true, published: true }), null);
 });
 
+test('public projection never exposes the private translation-paused state', () => {
+  const projected = projectPublicRecord({
+    segmentId: 'segment-private-state', revision: 2, sourceRevision: 1, streamId: 'tab',
+    sourceText: 'Public source', decision: 'accepted', publishEligible: true, published: true,
+    translations: [{ targetLanguage: 'ja', sourceRevision: 1, state: 'paused', text: null }],
+  });
+  assert.deepEqual(projected.translations, []);
+  assert.doesNotMatch(JSON.stringify(projected), /paused/i);
+});
+
 test('public event reducer ignores duplicate or old sequence numbers and other sessions', () => {
   const state = { sessionId: 'session-a', lastSeq: 0, records: new Map(), ended: false };
   const first = createPublicEvent('upsert', 'session-a', 1, { record: {
