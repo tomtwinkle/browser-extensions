@@ -3,6 +3,45 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createPublicEvent, projectPublicRecord, applyPublicEvent } = require('../caption-protocol.js');
+const { createCaptionStore } = require('../caption-store.js');
+
+test('public reducer retains recent accepted updates rather than unrelated revision counts', () => {
+  const state = { sessionId: 'session-a', lastSeq: 0, records: new Map(), ended: false };
+  const record = (segmentId, revision) => ({ segmentId, revision, sourceRevision: 1,
+    streamId: 'tab', sourceText: segmentId, translations: [], decision: 'accepted' });
+  const upsert = (seq, value) => applyPublicEvent(state, createPublicEvent('upsert', 'session-a', seq, { record: value }));
+  upsert(1, record('old', 20));
+  upsert(2, record('new-a', 2));
+  upsert(3, record('new-b', 2));
+  assert.deepEqual([...state.records.keys()], ['new-b', 'new-a']);
+  upsert(4, record('new-a', 1));
+  assert.deepEqual([...state.records.keys()], ['new-b', 'new-a']);
+  assert.equal(state.records.get('new-a').revision, 2);
+});
+
+test('live updates and replay match the producer snapshot after a delayed translation', () => {
+  let tick = 0;
+  const events = [];
+  const state = { sessionId: 'session-a', lastSeq: 0, records: new Map(), ended: false };
+  const store = createCaptionStore({ now: () => ++tick, onPublicEvent: (event) => {
+    events.push(event);
+    applyPublicEvent(state, event);
+  } });
+  store.beginSession('session-a', { tab: 1, mic: 0 });
+  for (const segmentId of ['old', 'new-a', 'new-b']) {
+    store.upsertCandidate({ sessionId: 'session-a', streamId: 'tab', streamGeneration: 1,
+      segmentId, startMs: 100, endMs: 700, rawText: segmentId, sourceText: segmentId,
+      sourceLanguage: 'en', decision: 'uncertain', reasonCodes: [], translations: [] });
+    assert.equal(store.approve(segmentId).ok, true);
+  }
+  assert.equal(store.setTranslation('old', 1, 'ja', 'synthetic translation').ok, true);
+  const snapshot = store.publicSnapshot();
+  assert.deepEqual([...state.records.values()], snapshot.records);
+  assert.deepEqual([...state.records.keys()], ['old', 'new-b']);
+  const replay = { sessionId: 'session-a', lastSeq: 0, records: new Map(), ended: false };
+  for (const event of events) applyPublicEvent(replay, event);
+  assert.deepEqual([...replay.records.values()], snapshot.records);
+});
 
 test('public projection contains only approved caption fields and excludes private data', () => {
   const projected = projectPublicRecord({

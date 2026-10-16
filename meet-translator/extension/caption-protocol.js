@@ -89,10 +89,10 @@
     } else if (event.type === 'upsert') {
       if (!isPublicRecord(event.record)) return false;
       const current = state.records.get(event.record.segmentId);
-      if (!current || event.record.revision > current.revision) state.records.set(event.record.segmentId, event.record);
-      if (state.records.size > 2) {
-        const newest = [...state.records.values()].sort((a, b) => b.revision - a.revision).slice(0, 2);
-        state.records = new Map(newest.map((record) => [record.segmentId, record]));
+      if (!current || event.record.revision > current.revision) {
+        // Revisions are local to each segment; accepted event order defines recency.
+        const previous = [...state.records].filter(([id]) => id !== event.record.segmentId);
+        state.records = new Map([[event.record.segmentId, event.record], ...previous].slice(0, 2));
       }
     } else if (event.type === 'retract') {
       if (typeof event.segmentId !== 'string') return false;
