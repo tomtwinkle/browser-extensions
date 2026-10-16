@@ -165,7 +165,6 @@ func (imp *GlossaryImprover) analyze(batch []TranslationRecord) {
 		log.Printf("[glossary-improver] LLM call failed: %v", err)
 		return
 	}
-	logV("glossary-improver: raw LLM output: %s", out)
 
 	result, err := parseAnalysisResult(out)
 	if err != nil {
@@ -183,7 +182,7 @@ func (imp *GlossaryImprover) analyze(batch []TranslationRecord) {
 		if err := imp.glossary.UpsertCorrection(src, tgt, "auto-improved"); err != nil {
 			log.Printf("[glossary-improver] upsert correction failed: %v", err)
 		} else {
-			log.Printf("[glossary-improver] correction added: %q -> %q", src, tgt)
+			log.Printf("[glossary-improver] correction added")
 			added++
 		}
 	}
@@ -196,7 +195,7 @@ func (imp *GlossaryImprover) analyze(batch []TranslationRecord) {
 		if err := imp.glossary.UpsertTerm(src, tgt, "auto-improved"); err != nil {
 			log.Printf("[glossary-improver] upsert term failed: %v", err)
 		} else {
-			log.Printf("[glossary-improver] term added: %q -> %q", src, tgt)
+			log.Printf("[glossary-improver] term added")
 			added++
 		}
 	}

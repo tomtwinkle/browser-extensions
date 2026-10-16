@@ -344,6 +344,15 @@ func TestResolveWhisperModel_WhisperXUppercasePrefix(t *testing.T) {
 
 // ─── resolveLlamaModel ───────────────────────────────────────────────────────
 
+func TestCanonicalLlamaSpecLeavesUnspecifiedModelEmpty(t *testing.T) {
+	if got := canonicalLlamaSpec(""); got != "" {
+		t.Fatalf("canonical empty model = %q, want empty", got)
+	}
+	if got := templateFor(""); got != "qwen" {
+		t.Fatalf("template for an unspecified model = %q, want stable default qwen", got)
+	}
+}
+
 func TestResolveLlamaModel_ExistingFile(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "model-*.gguf")
 	if err != nil {
@@ -523,6 +532,51 @@ func TestResolveLlamaModel_QwenMLXPreferredOnAppleSilicon(t *testing.T) {
 	}
 }
 
+func TestRuntimeIdentityForModelSpecUsesExistingLocalFileBeforeMLXAlias(t *testing.T) {
+	patchPlatform(t, "darwin", "arm64")
+	const alias = "mlx-community/Qwen3-0.6B-4bit"
+
+	previousDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporaryDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(temporaryDir, filepath.Dir(alias)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(temporaryDir, alias), []byte("local model"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(temporaryDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previousDir); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
+
+	resolved, err := resolveLlamaModel(alias)
+	if err != nil {
+		t.Fatalf("resolve local model file: %v", err)
+	}
+	if resolved.Backend != llmBackendLlamaCPP {
+		t.Fatalf("resolved backend = %q, want existing-file backend %q", resolved.Backend, llmBackendLlamaCPP)
+	}
+	if got, want := runtimeIdentityForModelSpec(alias), runtimeIdentityForResolvedModel(resolved); got != want {
+		t.Fatalf("runtime identity = %q, want resolved backend identity %q", got, want)
+	}
+
+	s := newServer(config{}, nil, nil, "", resolved, nil)
+	model, runtime := s.loadedLlamaIdentity()
+	if model != alias {
+		t.Fatalf("server model identity = %q, want startup alias %q", model, alias)
+	}
+	if want := runtimeIdentityForResolvedModel(resolved); runtime != want {
+		t.Fatalf("server runtime identity = %q, want resolved backend identity %q", runtime, want)
+	}
+}
+
 func TestResolveLlamaModel_MLXAliasFallsBackOnNonApple(t *testing.T) {
 	patchPlatform(t, "linux", "amd64")
 	cacheDir := setTestModelCacheDir(t)
@@ -592,5 +646,88 @@ func TestModelCacheDir_Default_ContainsMeetTranslator(t *testing.T) {
 	got := modelCacheDir()
 	if !strings.Contains(got, "meet-translator") {
 		t.Errorf("expected 'meet-translator' in path, got %q", got)
+	}
+}
+
+func TestVisibleModelCatalogOmitsLegacyAndDuplicateAliases(t *testing.T) {
+	whisper := strings.Split(sortedWhisperKeys(), ", ")
+	for _, hidden := range []string{"tiny", "base", "small", "medium", "large-v1", "large-v2", "kotoba-whisper", "kotoba-whisper-v2.2-faster"} {
+		for _, visible := range whisper {
+			if visible == hidden {
+				t.Errorf("legacy Whisper alias %q is visible", hidden)
+			}
+		}
+	}
+	for _, current := range []string{"large-v3-turbo", "kotoba-whisper-v2.2", "sensevoice", "whisperx:<model-name>"} {
+		found := false
+		for _, visible := range whisper {
+			if visible == current {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("current Whisper comparison option %q is missing", current)
+		}
+	}
+
+	llama := strings.Split(sortedLlamaKeys(), ", ")
+	for _, hidden := range []string{
+		"qwen2.5:7b-instruct-q4_k_m", "qwen2.5:14b-instruct-q4_k_m", "qwen3:0.6b-q4_k_m", "qwen3:1.7b-q4_k_m",
+		"qwen3:4b-q4_k_m", "qwen3:8b-q4_k_m", "qwen3.5:0.8b-q4_k_m", "qwen3.5:2b-q4_k_m",
+		"qwen3.5:4b-q4_k_m", "qwen3.5:9b-q4_k_m", "tencent/Hy-MT2-7B", "Hy-MT2-1.8B",
+		"Hy-MT2-1.8B-GGUF", "tencent/Hy-MT2-1.8B-GGUF", "Hy-MT2-7B-GGUF", "calm3:22b-q4_k_m",
+		"bonsai-8b", "bonsai-4b", "bonsai-1.7b", "gemma4:e2b-q4_k_m", "gemma4:e4b-q4_k_m", "gemma4:26b-q4_k_m",
+	} {
+		for _, visible := range llama {
+			if visible == hidden {
+				t.Errorf("legacy, oversized, or duplicate translation alias %q is visible", hidden)
+			}
+		}
+	}
+	for _, current := range []string{"tencent/Hy-MT2-1.8B"} {
+		found := false
+		for _, visible := range llama {
+			if visible == current {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("current translation comparison option %q is missing", current)
+		}
+	}
+}
+
+func TestLegacyModelSettingsStillResolveFromCache(t *testing.T) {
+	patchPlatform(t, "linux", "amd64")
+	cacheDir := setTestModelCacheDir(t)
+	t.Setenv("OLLAMA_MODELS", t.TempDir())
+
+	whisperPath := setupWhisperCache(t, cacheDir, "small")
+	gotWhisper, err := resolveWhisperModel("small")
+	if err != nil {
+		t.Fatalf("saved Whisper setting should remain resolvable: %v", err)
+	}
+	if gotWhisper.ResolvedSpec != whisperPath {
+		t.Errorf("Whisper resolved spec = %q, want %q", gotWhisper.ResolvedSpec, whisperPath)
+	}
+
+	llamaPath := setupLlamaCache(t, cacheDir, "Qwen3-8B-Q4_K_M.gguf")
+	gotLlama, err := resolveLlamaModel("qwen3:8b-q4_k_m")
+	if err != nil {
+		t.Fatalf("saved translation setting should remain resolvable: %v", err)
+	}
+	if gotLlama.ResolvedSpec != llamaPath {
+		t.Errorf("translation resolved spec = %q, want %q", gotLlama.ResolvedSpec, llamaPath)
+	}
+
+	baselinePath := setupLlamaCache(t, cacheDir, "Qwen3.5-0.8B-Q4_K_M.gguf")
+	gotBaseline, err := resolveLlamaModel("qwen3.5:0.8b-q4_k_m")
+	if err != nil {
+		t.Fatalf("configured reproduction baseline should remain resolvable: %v", err)
+	}
+	if gotBaseline.ResolvedSpec != baselinePath {
+		t.Errorf("baseline translation resolved spec = %q, want %q", gotBaseline.ResolvedSpec, baselinePath)
 	}
 }

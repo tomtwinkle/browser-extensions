@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,18 +31,19 @@ var embeddedASRRequirementsWhisperX string
 var embeddedASRRequirementsTransformers string
 
 type pythonWorkerRequest struct {
-	Action    string `json:"action,omitempty"`
-	AudioPath string `json:"audio_path,omitempty"`
-	Language  string `json:"language,omitempty"`
-	Prompt    string `json:"prompt,omitempty"`
+	Action      string `json:"action,omitempty"`
+	AudioBase64 string `json:"audio_base64,omitempty"`
+	Language    string `json:"language,omitempty"`
+	Prompt      string `json:"prompt,omitempty"`
 }
 
 type pythonWorkerResponse struct {
-	Status           string `json:"status,omitempty"`
-	Text             string `json:"text,omitempty"`
-	DetectedLanguage string `json:"detected_language,omitempty"`
-	Error            string `json:"error,omitempty"`
-	RequirementsPath string `json:"requirements_path,omitempty"`
+	Status           string       `json:"status,omitempty"`
+	Text             string       `json:"text,omitempty"`
+	DetectedLanguage string       `json:"detected_language,omitempty"`
+	Segments         []ASRSegment `json:"segments,omitempty"`
+	Error            string       `json:"error,omitempty"`
+	RequirementsPath string       `json:"requirements_path,omitempty"`
 }
 
 type pythonWorkerTranscriber struct {
@@ -170,42 +172,40 @@ func startPythonWorkerTranscriber(
 }
 
 func (w *pythonWorkerTranscriber) Transcribe(audioData []byte, lang, prompt string, _ func(string, ...any)) (string, string, error) {
-	tmp, err := os.CreateTemp("", "meet-translator-asr-*.wav")
-	if err != nil {
-		return "", "", fmt.Errorf("failed to create temporary audio file: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
+	result, err := w.TranscribeDetailed(audioData, lang, prompt, nil)
+	return result.RawText, result.DetectedLanguage, err
+}
 
-	if _, err := tmp.Write(audioData); err != nil {
-		tmp.Close()
-		return "", "", fmt.Errorf("failed to write temporary audio file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return "", "", fmt.Errorf("failed to finalize temporary audio file: %w", err)
-	}
-
+func (w *pythonWorkerTranscriber) TranscribeDetailed(audioData []byte, lang, prompt string, _ func(string, ...any)) (ASRBackendResult, error) {
 	req := pythonWorkerRequest{
-		AudioPath: tmpPath,
-		Language:  strings.TrimSpace(lang),
-		Prompt:    strings.TrimSpace(prompt),
+		AudioBase64: base64.StdEncoding.EncodeToString(audioData),
+		Language:    strings.TrimSpace(lang),
+		Prompt:      strings.TrimSpace(prompt),
 	}
 
 	w.requestMutex.Lock()
 	defer w.requestMutex.Unlock()
 
 	if err := w.enc.Encode(req); err != nil {
-		return "", "", fmt.Errorf("failed to send request to %s worker: %w%s", w.backend, err, w.stderrSuffix())
+		return ASRBackendResult{}, fmt.Errorf("failed to send request to %s worker: %w%s", w.backend, err, w.stderrSuffix())
 	}
 
 	var resp pythonWorkerResponse
 	if err := w.dec.Decode(&resp); err != nil {
-		return "", "", fmt.Errorf("failed to read response from %s worker: %w%s", w.backend, err, w.stderrSuffix())
+		return ASRBackendResult{}, fmt.Errorf("failed to read response from %s worker: %w%s", w.backend, err, w.stderrSuffix())
 	}
 	if resp.Status != "ok" {
-		return "", "", fmt.Errorf("%s transcription failed: %s%s", w.backend, resp.Error, pythonInstallHint(resp.RequirementsPath))
+		return ASRBackendResult{}, fmt.Errorf("%s transcription failed: %s%s", w.backend, resp.Error, pythonInstallHint(resp.RequirementsPath))
 	}
-	return resp.Text, resp.DetectedLanguage, nil
+	if resp.Segments == nil {
+		resp.Segments = []ASRSegment{}
+	}
+	return ASRBackendResult{
+		Backend:          string(w.backend),
+		RawText:          resp.Text,
+		DetectedLanguage: resp.DetectedLanguage,
+		Segments:         resp.Segments,
+	}, nil
 }
 
 func (w *pythonWorkerTranscriber) Close() error {

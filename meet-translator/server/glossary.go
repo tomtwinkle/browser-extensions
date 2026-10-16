@@ -286,7 +286,7 @@ func (g *Glossary) recompileLocked() {
 		pattern := `(?i)\b` + regexp.QuoteMeta(src) + `\b`
 		re, err := regexp.Compile(pattern)
 		if err != nil {
-			log.Printf("[glossary] invalid correction pattern %q: %v", src, err)
+			log.Printf("[glossary] invalid correction pattern: %v", err)
 			continue
 		}
 		g.compiled = append(g.compiled, compiledCorrection{re: re, target: entry.Target})
@@ -389,7 +389,7 @@ func (g *Glossary) UpsertCorrection(source, target, description string) error {
 	g.data.Corrections[source] = GlossaryEntry{Source: source, Target: target, Description: description}
 	g.recompileLocked()
 	g.mu.Unlock()
-	logV("glossary: upsert correction %q -> %q", source, target)
+	logV("glossary: upsert correction")
 	return g.save()
 }
 
@@ -398,7 +398,7 @@ func (g *Glossary) UpsertTerm(source, target, description string) error {
 	g.mu.Lock()
 	g.data.Terms[source] = GlossaryEntry{Source: source, Target: target, Description: description}
 	g.mu.Unlock()
-	logV("glossary: upsert term %q -> %q", source, target)
+	logV("glossary: upsert term")
 	return g.save()
 }
 
@@ -575,6 +575,6 @@ func (s *server) handleGlossaryLearn(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	log.Printf("[glossary] learned: kind=%s %q -> %q", req.Kind, req.Source, req.Target)
+	log.Printf("[glossary] learned: kind=%s", req.Kind)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

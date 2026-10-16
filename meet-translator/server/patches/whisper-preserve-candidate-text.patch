@@ -1,0 +1,12 @@
+diff --git a/src/whisper.cpp b/src/whisper.cpp
+index 86bfafe..7ca9822 100644
+--- a/src/whisper.cpp
++++ b/src/whisper.cpp
+@@ -7576,2 +7576,5 @@ int whisper_full_with_state(
+-            const bool is_no_speech = (state->no_speech_prob > params.no_speech_thold &&
+-                best_decoder.sequence.avg_logprobs < params.logprob_thold);
++            // Preserve decoded text so the host can review it with these scores.
++            // The application applies Whisper-specific diagnostics and never
++            // auto-publishes this candidate; dropping it here would hide a
++            // potentially valid short or quiet utterance from correction.
++            const bool is_no_speech = false;

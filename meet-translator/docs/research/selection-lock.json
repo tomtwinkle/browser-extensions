@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "profileId": "m1-max-balanced",
+  "status": "PROFILE_NOT_QUALIFIED",
+  "selected": null,
+  "baseline": {
+    "asrCandidateId": "baseline-whisper-large-v3-turbo",
+    "translationCandidateId": "baseline-qwen3.5-0.8b-q4km",
+    "modelAndArtifactHashes": null,
+    "runtimePins": {
+      "whisper.cpp": "9386f239401074690479731c1e41683fbbeac557",
+      "llama.cpp": "4eb19514dd2984662f13aacbb052c559c8fde3b1"
+    },
+    "templateHashes": {
+      "qwen35-0.8b-prompt-contract": {
+        "sha256": "0227ebeb8b6c5542a26da32cd192ba9a8dceb26d722485461a6daf4f2e84bbb2",
+        "scope": "server/testdata/templates/qwen35-0.8b.json synthetic prompt contract only; tokenizer metadata and EOG remain unverified"
+      }
+    },
+    "decodeOptions": {
+      "translationSource": "max_tokens=512; temperature=0.1; greedy sampler; n_ctx=2048",
+      "translationPromptMode": "Qwen3.5 documented non-thinking default; API chat-template option is not exposed by the raw C API",
+      "asr": "native Whisper defaults and gate values are not calibrated or model-artifact pinned"
+    },
+    "gatePolicy": "current source behavior is not calibrated; no promotion lock",
+    "datasetHashes": [],
+    "evaluationRunIds": [],
+    "m1Measurement": null
+  },
+  "rollback": {
+    "sourceRevision": "6ac37a149a0314ba1b989a1c1f66d5dedf35ff47",
+    "description": "Repository HEAD observed at task start; source-code recovery point only. Model files and configuration hashes are not available.",
+    "qualified": false
+  },
+  "reasonCodes": [
+    "PROFILE_NOT_QUALIFIED",
+    "WEIGHTS_NOT_AUTHORIZED",
+    "INSUFFICIENT_EVAL_DATA",
+    "M1_INTEGRATION_NOT_RUN",
+    "NO_CANDIDATE_HAS_QUALIFICATION_EVIDENCE"
+  ]
+}

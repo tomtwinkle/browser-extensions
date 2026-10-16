@@ -10,9 +10,8 @@ import "encoding/json"
 
 // ModelOptions はリクエスト毎に指定できるモデル固有の設定。
 type ModelOptions struct {
-	// Thinking は Qwen3 の思考モードを有効にするか。
-	// true (デフォルト): モデルが <think>...</think> で推論を展開してから翻訳する。
-	// false: /no-think を挿入して直接翻訳させる。
+	// Thinking は /no_think を正式サポートするQwen3モデルの設定。
+	// Qwen3.5ではAPI側のenable_thinkingを渡せないため、このオプションを使わない。
 	Thinking bool `json:"thinking"`
 }
 

@@ -15,6 +15,7 @@ import "C"
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"unsafe"
@@ -53,14 +54,19 @@ func (t *nativeWhisperTranscriber) Close() error {
 }
 
 func (t *nativeWhisperTranscriber) Transcribe(audioData []byte, lang, prompt string, logf func(string, ...any)) (string, string, error) {
+	result, err := t.TranscribeDetailed(audioData, lang, prompt, logf)
+	return result.RawText, result.DetectedLanguage, err
+}
+
+func (t *nativeWhisperTranscriber) TranscribeDetailed(audioData []byte, lang, prompt string, logf func(string, ...any)) (ASRBackendResult, error) {
 	if t.ctx == nil {
-		return "", "", fmt.Errorf("whisper context not initialized")
+		return ASRBackendResult{}, fmt.Errorf("whisper context not initialized")
 	}
 
 	// WAV をパース → 16kHz float32 に変換
 	wav, err := parseWAV(bytes.NewReader(audioData))
 	if err != nil {
-		return "", "", fmt.Errorf("failed to parse WAV: %w", err)
+		return ASRBackendResult{}, fmt.Errorf("failed to parse WAV: %w", err)
 	}
 	if logf != nil {
 		logf("WAV: sampleRate=%d, channels=%d, samples=%d, duration=%.2fs",
@@ -69,7 +75,7 @@ func (t *nativeWhisperTranscriber) Transcribe(audioData []byte, lang, prompt str
 	}
 	samples := resampleTo16k(wav.samples, wav.sampleRate)
 	if len(samples) == 0 {
-		return "", "", nil
+		return ASRBackendResult{Backend: string(asrBackendWhisperCPP), Segments: []ASRSegment{}}, nil
 	}
 
 	// C に渡す
@@ -86,13 +92,17 @@ func (t *nativeWhisperTranscriber) Transcribe(audioData []byte, lang, prompt str
 	cPrompt := C.CString(prompt)
 	defer C.free(unsafe.Pointer(cPrompt))
 
-	const outSize = 8192
+	const outSize = 1 << 16
 	outBuf := (*C.char)(C.malloc(outSize))
 	defer C.free(unsafe.Pointer(outBuf))
 
 	const langBufSize = 16
 	langBuf := (*C.char)(C.malloc(langBufSize))
 	defer C.free(unsafe.Pointer(langBuf))
+
+	const segmentsBufSize = 1 << 20
+	segmentsBuf := (*C.char)(C.malloc(segmentsBufSize))
+	defer C.free(unsafe.Pointer(segmentsBuf))
 
 	const errSize = 512
 	errBuf := (*C.char)(C.malloc(errSize))
@@ -105,46 +115,79 @@ func (t *nativeWhisperTranscriber) Transcribe(audioData []byte, lang, prompt str
 		cPrompt,
 		outBuf, C.int(outSize),
 		langBuf, C.int(langBufSize),
+		segmentsBuf, C.int(segmentsBufSize),
 		errBuf, C.int(errSize),
 	)
 	if ret != 0 {
-		return "", "", fmt.Errorf("whisper_bridge_transcribe failed: %s", C.GoString(errBuf))
+		return ASRBackendResult{}, fmt.Errorf("whisper_bridge_transcribe failed: %s", C.GoString(errBuf))
 	}
 
 	result := strings.TrimSpace(C.GoString(outBuf))
 	detectedLang := strings.TrimSpace(C.GoString(langBuf))
-	if logf != nil {
-		logf("whisper raw output: %q, detected_lang: %q", result, detectedLang)
+	var segments []ASRSegment
+	if err := json.Unmarshal([]byte(C.GoString(segmentsBuf)), &segments); err != nil {
+		return ASRBackendResult{}, fmt.Errorf("failed to decode Whisper segment metadata: %w", err)
 	}
-	return result, detectedLang, nil
+	if segments == nil {
+		segments = []ASRSegment{}
+	}
+	if logf != nil {
+		logf("whisper output: %d characters across %d segments, detected_lang: %q", len([]rune(result)), len(segments), detectedLang)
+	}
+	return ASRBackendResult{
+		Backend:          string(asrBackendWhisperCPP),
+		RawText:          result,
+		DetectedLanguage: detectedLang,
+		Segments:         segments,
+	}, nil
 }
 
 // transcribeInternal は選択された ASR バックエンドで文字起こしして返す。
 // Whisper 系の initial_prompt にはグロッサリーヒントのみを渡す。
 func (s *server) transcribeInternal(audioData []byte, lang string) (string, string, error) {
-	if s.transcriber == nil {
-		return "", "", fmt.Errorf("transcriber not initialized")
-	}
-
-	prompt := strings.TrimSpace(s.glossary.WhisperHints())
-	result, detectedLang, err := s.transcriber.Transcribe(audioData, lang, prompt, s.logVerbose)
+	result, transcription, err := s.transcribeWithDetails(audioData, lang)
 	if err != nil {
 		return "", "", err
 	}
-
-	result = strings.TrimSpace(result)
-	result = s.glossary.ApplyCorrections(result)
-	return result, detectedLang, nil
+	return transcription, result.DetectedLanguage, nil
 }
 
-func whisperBridgeShouldKeepSegment(text string, tokenCount int, avgLogprob, noSpeechProb float32) bool {
+func (s *server) transcribeWithDetails(audioData []byte, lang string) (ASRBackendResult, string, error) {
+	prompt := ""
+	if s.glossary != nil {
+		prompt = strings.TrimSpace(s.glossary.WhisperHints())
+	}
+	var result ASRBackendResult
+	var err error
+	if s.transcriber != nil {
+		if detailed, ok := s.transcriber.(detailedTranscriber); ok {
+			result, err = detailed.TranscribeDetailed(audioData, lang, prompt, s.logVerbose)
+		} else {
+			result.RawText, result.DetectedLanguage, err = s.transcriber.Transcribe(audioData, lang, prompt, s.logVerbose)
+		}
+	} else if s.transcribeFn != nil {
+		result.RawText, result.DetectedLanguage, err = s.transcribeFn(audioData, lang)
+	} else {
+		err = fmt.Errorf("transcriber not initialized")
+	}
+	if err != nil {
+		return ASRBackendResult{}, "", err
+	}
+	result.RawText = strings.TrimSpace(result.RawText)
+	transcription := result.RawText
+	if s.glossary != nil {
+		transcription = s.glossary.ApplyCorrections(transcription)
+	}
+	transcription = strings.TrimSpace(transcription)
+	return result, transcription, nil
+}
+
+func whisperBridgeHasCandidateText(text string, tokenCount int) bool {
 	cText := C.CString(text)
 	defer C.free(unsafe.Pointer(cText))
 
-	return C.whisper_bridge_should_keep_segment(
+	return C.whisper_bridge_has_candidate_text(
 		cText,
 		C.int(tokenCount),
-		C.float(avgLogprob),
-		C.float(noSpeechProb),
 	) != 0
 }
