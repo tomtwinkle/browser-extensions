@@ -7,6 +7,7 @@
   const emptyState = document.getElementById('empty-state');
   const rows = new Map();
   const state = { sessionId: null, lastSeq: 0, records: new Map(), ended: false };
+  const retiredSessions = new Set();
   let lastHeartbeatAt = 0;
   let lastCaptionUpdateAt = 0;
   let renderTimer = null;
@@ -17,16 +18,19 @@
   }
 
   function applyEvent(event) {
-    if (!event) return;
-    if (event.type === 'snapshot') {
-      state.sessionId = event.sessionId;
-      state.lastSeq = 0;
-      state.records = new Map();
-      state.ended = false;
-    }
-    if (event.sessionId !== state.sessionId && state.sessionId !== null) return;
-    if (state.sessionId === null) state.sessionId = event.sessionId;
-    if (applyPublicEvent(state, event)) {
+    if (!event || typeof event.sessionId !== 'string' || !event.sessionId) return;
+    if (retiredSessions.has(event.sessionId)) return;
+    const changingSession = event.sessionId !== state.sessionId;
+    if (changingSession && state.sessionId !== null && !state.ended) return;
+    if (!changingSession && state.ended) return;
+    const target = changingSession
+      ? { sessionId: event.sessionId, lastSeq: 0, records: new Map(), ended: false }
+      : state;
+    if (applyPublicEvent(target, event)) {
+      if (changingSession) {
+        if (state.sessionId !== null) retiredSessions.add(state.sessionId);
+        Object.assign(state, target);
+      }
       lastCaptionUpdateAt = Date.now();
       scheduleRender();
     }

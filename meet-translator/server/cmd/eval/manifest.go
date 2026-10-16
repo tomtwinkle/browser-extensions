@@ -155,8 +155,8 @@ func validateCase(item EvalCase, expectedTrack Track) error {
 		if item.TargetLanguage != "" || len(item.ReferenceTranslations) != 0 || item.SourceText != "" {
 			return fmt.Errorf("asr-only cases use referenceText and must not contain translation inputs")
 		}
-		if item.ReferenceText == "" && item.FixtureKind != "synthetic" {
-			return fmt.Errorf("empty referenceText is allowed only for synthetic no-speech fixtures")
+		if strings.TrimSpace(item.ReferenceText) == "" && item.FixtureKind != "synthetic" && item.ExpectedDecision != "no_speech" {
+			return fmt.Errorf("empty referenceText requires an explicit no_speech annotation")
 		}
 	case TrackMTOnly:
 		if !supportedLanguage(item.TargetLanguage) || item.SourceLanguage == item.TargetLanguage {
@@ -169,7 +169,8 @@ func validateCase(item EvalCase, expectedTrack Track) error {
 		if !supportedLanguage(item.TargetLanguage) || item.SourceLanguage == item.TargetLanguage {
 			return fmt.Errorf("end-to-end cases require distinct en/ja source and target languages")
 		}
-		if (item.ReferenceText == "" || len(item.ReferenceTranslations) == 0) && item.FixtureKind != "synthetic" {
+		noSpeech := item.ExpectedDecision == "no_speech" && strings.TrimSpace(item.ReferenceText) == ""
+		if (strings.TrimSpace(item.ReferenceText) == "" || len(item.ReferenceTranslations) == 0) && item.FixtureKind != "synthetic" && !noSpeech {
 			return fmt.Errorf("end-to-end quality cases require source and translation references")
 		}
 	}

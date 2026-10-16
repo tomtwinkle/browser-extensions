@@ -51,6 +51,48 @@ func TestLoadCasesRejectsUnsafeAudioPath(t *testing.T) {
 	}
 }
 
+func TestLoadCasesRequiresExplicitNoSpeechAnnotationForRealEmptyReferences(t *testing.T) {
+	for _, track := range []Track{TrackASROnly, TrackEndToEnd} {
+		for _, split := range []string{"development", "holdout"} {
+			item := EvalCase{SchemaVersion: 1, CaseID: "real.silence", Track: track, Split: split,
+				SourceLanguage: "en", AudioRef: "private/silence.wav", AudioSHA256: strings.Repeat("a", 64),
+				MeetingID: "meeting-" + split, SpeakerGroup: "speaker-" + split,
+				AnnotationVersion: "human-v1", AnnotationStatus: "verified", ExpectedDecision: "no_speech"}
+			if track == TrackEndToEnd {
+				item.TargetLanguage = "ja"
+			}
+			for _, decision := range []string{"no_speech", "", "accepted", "uncertain", "failed"} {
+				item.ExpectedDecision = decision
+				data, err := json.Marshal(item)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = LoadCases(bytes.NewReader(data), track)
+				if decision == "no_speech" && err != nil {
+					t.Fatalf("%s/%s no-speech rejected: %v", track, split, err)
+				}
+				if decision != "no_speech" && err == nil {
+					t.Fatalf("%s/%s empty speech reference accepted with decision %q", track, split, decision)
+				}
+			}
+			if track == TrackEndToEnd {
+				item.ExpectedDecision = ""
+				item.ReferenceText = " \t "
+				data, _ := json.Marshal(item)
+				if _, err := LoadCases(bytes.NewReader(data), track); err == nil {
+					t.Fatal("blank reference must not bypass explicit no-speech annotation")
+				}
+				item.ExpectedDecision = "no_speech"
+				item.ReferenceText = "actual speech"
+				data, _ = json.Marshal(item)
+				if _, err := LoadCases(bytes.NewReader(data), track); err == nil {
+					t.Fatal("speech without translation references must remain invalid")
+				}
+			}
+		}
+	}
+}
+
 func TestPromotionEligibleRequiresVerifiedHoldout(t *testing.T) {
 	caseData := EvalCase{Split: "holdout", AnnotationStatus: "verified"}
 	if !PromotionEligible(caseData) {

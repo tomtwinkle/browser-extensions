@@ -1,12 +1,23 @@
 # 実装状況
 
-更新日: 2026-10-08
+更新日: 2026-10-16
 
 対象: `meet-translator/`
 
 作業開始時HEAD: `6ac37a149a0314ba1b989a1c1f66d5dedf35ff47` (`main`)
 
 作業開始時作業ツリー: 既存の未コミット変更があった。内容を維持し、開始時HEADとともに追跡した。
+
+### PR #74 独立レビュー修正 (2026-10-16)
+
+- 修正開始HEADは`cf4868fa93fd36e8cba35c8313cfce029e2d7319`。モデル不要の既存publication/bridge 11件とGo `cmd/eval`をGreenで確認し、以下の不具合を回帰テストでRedにしてから修正した。
+- 初期public snapshotを待つ間のlive eventは、snapshot配信後に順序どおり配信する。初期接続用backlogだけを64 eventに制限し、超過・snapshot失敗・切断時は部分的に再生せず破棄する。64は運用上の初期buffer上限であり、字幕件数の製品制限ではない。
+- Presenterは同じsessionのsequence watermarkをsnapshotで戻さない。終了後の新sessionへ移行し、終了済みsession・active中の別session・不正session IDを受理しない。遅延snapshotによる訂正前字幕・撤回済み字幕の再表示を防ぐ。
+- 無音caseで原文だけが公開された場合も誤公開に計上する。訳文が空の場合の翻訳公開率・欠落判定は変更しない。
+- 実音声のdevelopment/holdoutでは、`expectedDecision=no_speech`と明示された無音caseに限り空の正解原文を許可する。未注記・failed等の空正解、発話ありで参照訳なし、synthetic holdoutは引き続き拒否する。
+- MT-onlyでもmanifestと一致するcritical assertion結果を採点する。欠落・重複・別assertion名・ASR-onlyへの結果混入は引き続き拒否する。
+- 修正後のmodel-free検証: extension 119/119、eval/device 21/21、Go `cmd/eval`通常・race、offline contracts/research integrityがPASS。研究記録は123 sources / 10 DEFERRED / 3公開数値screen / 0 SELECTED、`PROFILE_NOT_QUALIFIED`のまま。実モデル、実Meet、M1品質・性能・60分試験は実行していない。
+- 今回のGo変更はpure-Go `cmd/eval`のみ。native vendorのない独立checkoutでnative server全packageの再build/testは行わず、最新push後のCIを別途確認する。過去headのCI成功を新headの成功と扱わない。
 
 ### 継続作業チェックポイント (R29 review fixes, 2026-10-08)
 
@@ -182,7 +193,7 @@
 - `extension/`: mic/tab別energy-VAD、session/generation検査、host-only訂正UI、字幕用public/private channel、承認・訂正・undo・translation revision管理、字幕ページを追加。
 - `server/`: loopback API認証と上限、FIRリサンプル、構造化ASR結果、Whisper固有診断、Whisper候補文を保持する固定source patch、Python音声入力のin-memory処理を追加。
 - `eval/` と `server/cmd/eval/`: ASR-only、正しい原文MT-only、E2Eを分離し、synthetic fixture・local WAV hash・track/split検査を追加。モデル推論は実行しない。
-- `docs/research/`: 一次情報・候補・調査log・圧縮benchmark screen・PROFILE_NOT_QUALIFIED lockを保存。現在106 sources / 10 candidates、全候補DEFERRED。公開screen PASSは3件だが、実機適格モデルは0件。R20でARK-ASRの蒸留版とQwen3-ASR MLX量子化版の公開数値を確認したが、該当する日本語スコアがないため候補枠へ登録せずDEFERREDにした。R21では外部資料の数値・テンプレート・実行経路・適用限界をhandoff本文にも要約し、R22では実験段階のANEForge経路とMLX共有メモリの限界を追記し、R23ではCAT-Translate 3.3Bの両方向スコア (37.51/34.80 BLEU) がTranslateGemma 4B参照値 (29.41/26.76) を超えることを記録した。翻訳候補枠は既に3件使っているため追加候補として登録せず、次ラウンド待ちのDEFERRED leadにした。R26はSacreBLEU v2.6.0互換score-only実装の一次情報とGo Unicode APIを記録し、候補・publication policyは変更しない。
+- `docs/research/`: 一次情報・候補・調査log・圧縮benchmark screen・PROFILE_NOT_QUALIFIED lockを保存。現在123 sources / 10 candidates、全候補DEFERRED。公開screen PASSは3件だが、実機適格モデルは0件。R20でARK-ASRの蒸留版とQwen3-ASR MLX量子化版の公開数値を確認したが、該当する日本語スコアがないため候補枠へ登録せずDEFERREDにした。R21では外部資料の数値・テンプレート・実行経路・適用限界をhandoff本文にも要約し、R22では実験段階のANEForge経路とMLX共有メモリの限界を追記し、R23ではCAT-Translate 3.3Bの両方向スコア (37.51/34.80 BLEU) がTranslateGemma 4B参照値 (29.41/26.76) を超えることを記録した。翻訳候補枠は既に3件使っているため追加候補として登録せず、次ラウンド待ちのDEFERRED leadにした。R26はSacreBLEU v2.6.0互換score-only実装の一次情報とGo Unicode APIを記録し、候補・publication policyは変更しない。
 - Qualification assessor: trusted provenanceなしでJSON自己申告だけでは昇格できない。`testDouble`/`synthetic`の欠落をBLOCKEDにし、ASR-onlyは日本語/英語別、MT-onlyは翻訳方向別、公開字幕はE2E方向別に全caseの採点数を照合する。保留字幕を削除として計上し、全件/大量保留、baselineより少ない公開件数・方向別公開率・浮動runtime aliasを拒否する。違反を含むreportは`REJECTED`、他の要件を満たしてもprovenance verifierがないreportは`BLOCKED`で、現在のreport-only経路から`QUALIFIED`にはならない。
 - `docs/decisions/`: hardware-only昇格禁止、モデル別prompt、ASR候補保持/host review、開始排他、audio queue、holdout適格性判断を記録。
 

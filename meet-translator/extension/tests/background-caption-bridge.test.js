@@ -9,11 +9,12 @@ const shared = require('../shared.js');
 
 const backgroundSource = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
 
-function loadBackground({ persisted = null, publishMicrophoneCaptions = false } = {}) {
+function loadBackground({ persisted = null, publishMicrophoneCaptions = false, deferPublicSnapshot = false } = {}) {
   const workerConnections = [];
   const portMessages = [];
   const stored = { captionStoreState: persisted };
   const storageWrites = [];
+  const publicSnapshotRequests = [];
   const chrome = {
     offscreen: { async createDocument() {}, async closeDocument() {} },
     runtime: {
@@ -70,14 +71,20 @@ function loadBackground({ persisted = null, publishMicrophoneCaptions = false } 
 
   function connect(name, url) {
     const incoming = [];
+    const disconnectListeners = [];
     const port = {
       name,
       sender: { url },
       onMessage: { addListener(listener) { incoming.push(listener); } },
-      onDisconnect: { addListener() {} },
+      onDisconnect: { addListener(listener) { disconnectListeners.push(listener); } },
+      disconnect() { for (const listener of disconnectListeners) listener(); },
       postMessage(message) {
         portMessages.push({ port, message });
         if (name === 'meet-translator-offscreen' && message.type === 'CAPTION_RPC') {
+          if (message.action === 'snapshot-public' && deferPublicSnapshot) {
+            publicSnapshotRequests.push({ port, requestId: message.requestId });
+            return;
+          }
           const result = message.action === 'snapshot-public'
             ? { event: null, sessionId: null }
             : { records: [], activeSessionId: null };
@@ -90,11 +97,70 @@ function loadBackground({ persisted = null, publishMicrophoneCaptions = false } 
     return port;
   }
 
-  return { chrome, connect, context, portMessages, state, storageWrites, stored };
+  return { chrome, connect, context, portMessages, state, storageWrites, stored, publicSnapshotRequests };
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const plain = (value) => JSON.parse(JSON.stringify(value));
+
+async function pendingPublicSubscription() {
+  const harness = loadBackground({ deferPublicSnapshot: true });
+  const offscreen = harness.connect('meet-translator-offscreen', 'chrome-extension://test/offscreen.html');
+  offscreen.emit({ type: 'OFFSCREEN_HELLO', bootId: 'boot-order' });
+  await flush();
+  const publicPage = harness.connect('caption-public', 'chrome-extension://test/caption-presenter.html');
+  await flush();
+  const messages = () => harness.portMessages.filter((item) => item.port === publicPage).map((item) => plain(item.message));
+  const reply = (result, error = null) => {
+    const request = harness.publicSnapshotRequests[0];
+    offscreen.emit({ type: 'CAPTION_RPC_RESULT', requestId: request.requestId, result, error });
+  };
+  return { ...harness, offscreen, publicPage, messages, reply };
+}
+
+test('public subscription delivers its snapshot before buffered live retract/end/handoff events', async () => {
+  const h = await pendingPublicSubscription();
+  const events = [
+    { type: 'retract', sessionId: 'session-a', sessionSeq: 2, segmentId: 'segment-a' },
+    { type: 'session-ended', sessionId: 'session-a', sessionSeq: 3 },
+    { type: 'upsert', sessionId: 'session-b', sessionSeq: 1, record: { segmentId: 'segment-b' } },
+  ].map((value) => ({ protocolVersion: 1, ...value }));
+  for (const event of events) h.offscreen.emit({ type: 'CAPTION_PUBLIC_EVENT', event });
+  assert.deepEqual(h.messages(), []);
+  const snapshot = { protocolVersion: 1, type: 'snapshot', sessionId: 'session-a', sessionSeq: 1, records: [] };
+  h.reply({ event: snapshot });
+  await flush();
+  assert.deepEqual(h.messages(), [
+    { type: 'CAPTION_PUBLIC_SNAPSHOT', event: snapshot },
+    ...events.map((event) => ({ type: 'CAPTION_PUBLIC_EVENT', event })),
+  ]);
+});
+
+test('public subscription discards pending live events when disconnected or snapshot fails', async () => {
+  for (const mode of ['disconnect', 'failure']) {
+    const h = await pendingPublicSubscription();
+    h.offscreen.emit({ type: 'CAPTION_PUBLIC_EVENT', event: { type: 'session-ended', sessionId: 'session-a', sessionSeq: 1 } });
+    if (mode === 'disconnect') h.publicPage.disconnect();
+    if (mode === 'failure') h.offscreen.disconnect();
+    else h.reply({ event: null });
+    await flush();
+    assert.equal(h.messages().some((message) => message.type === 'CAPTION_PUBLIC_EVENT'), false);
+    assert.equal(h.state.captionPublicClients.has(h.publicPage), false);
+    if (mode === 'disconnect') assert.deepEqual(h.messages(), []);
+    else assert.equal(h.messages().at(-1).type, 'CAPTION_CONNECTION_ERROR');
+  }
+});
+
+test('public initial subscription buffer is bounded and never replays a partial overflow', async () => {
+  const h = await pendingPublicSubscription();
+  for (let seq = 1; seq <= 65; seq += 1) {
+    h.offscreen.emit({ type: 'CAPTION_PUBLIC_EVENT', event: { type: 'retract', sessionId: 'session-a', sessionSeq: seq, segmentId: 'segment-a' } });
+  }
+  h.reply({ event: null });
+  await flush();
+  assert.equal(h.state.captionPublicClients.has(h.publicPage), false);
+  assert.deepEqual(h.messages().map((message) => message.type), ['CAPTION_CONNECTION_ERROR']);
+});
 
 test('offscreen handshake restores session state only for the matching document and persists through service worker', async () => {
   const priorState = { activeSessionId: 'session-old', records: [{ segmentId: 'private-1' }] };

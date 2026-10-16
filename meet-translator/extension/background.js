@@ -39,6 +39,8 @@ const MAX_AUDIO_QUEUE_PENDING_ITEMS = 4;
 const MAX_AUDIO_QUEUE_PENDING_MS = 10_000;
 const MAX_AUDIO_QUEUE_STALE_MS = 5_000;
 const MAX_PENDING_TRANSLATION_ITEMS = 8;
+// Bound only the short initial-subscription backlog, not caption history.
+const MAX_INITIAL_PUBLIC_EVENTS = 64;
 const MAX_PENDING_CORRECTION_LANE_CALLBACKS = MAX_PENDING_TRANSLATION_ITEMS;
 const MAX_TRANSLATION_WAIT_MS = 3_000;
 const MAX_TRANSLATION_AUDIO_AGE_MS = 8_000;
@@ -88,6 +90,7 @@ const state = {
   offscreenReadyWaiters: [],
   pendingCaptionRpcs: new Map(),
   captionPublicClients: new Set(),
+  captionPublicPendingEvents: new Map(),
   captionPrivateClients: new Set(),
   captionHeartbeatTimer: null,
 };
@@ -403,7 +406,23 @@ function reportTranslationQueueDrop(code, metadata = {}) {
 
 function sendPublicCaptionEvent(event) {
   for (const port of state.captionPublicClients) {
-    if (!postPortMessage(port, { type: 'CAPTION_PUBLIC_EVENT', event })) state.captionPublicClients.delete(port);
+    const pending = state.captionPublicPendingEvents.get(port);
+    if (pending) {
+      if (pending.length >= MAX_INITIAL_PUBLIC_EVENTS) dropPublicCaptionClient(port, true);
+      else pending.push(event);
+    } else if (!postPortMessage(port, { type: 'CAPTION_PUBLIC_EVENT', event })) {
+      dropPublicCaptionClient(port);
+    }
+  }
+}
+
+function dropPublicCaptionClient(port, notify = false) {
+  state.captionPublicPendingEvents.delete(port);
+  state.captionPublicClients.delete(port);
+  stopCaptionHeartbeatIfUnused();
+  if (notify) {
+    postPortMessage(port, { type: 'CAPTION_CONNECTION_ERROR' });
+    try { port.disconnect(); } catch (_) {}
   }
 }
 
@@ -411,7 +430,7 @@ function startCaptionHeartbeat() {
   if (state.captionHeartbeatTimer) return;
   state.captionHeartbeatTimer = setInterval(() => {
     for (const port of state.captionPublicClients) {
-      if (!postPortMessage(port, { type: 'CAPTION_HEARTBEAT', at: Date.now() })) state.captionPublicClients.delete(port);
+      if (!postPortMessage(port, { type: 'CAPTION_HEARTBEAT', at: Date.now() })) dropPublicCaptionClient(port);
     }
   }, 1000);
 }
@@ -861,10 +880,13 @@ chrome.runtime.onConnect?.addListener?.((port) => {
 
   const clients = kind === 'public' ? state.captionPublicClients : state.captionPrivateClients;
   clients.add(port);
-  if (kind === 'public') startCaptionHeartbeat();
+  if (kind === 'public') {
+    state.captionPublicPendingEvents.set(port, []);
+    startCaptionHeartbeat();
+  }
   port.onDisconnect.addListener(() => {
     clients.delete(port);
-    if (kind === 'public') stopCaptionHeartbeatIfUnused();
+    if (kind === 'public') dropPublicCaptionClient(port);
   });
   port.onMessage.addListener((message) => {
     if (kind === 'private') handleCaptionClientMessage(port, kind, message);
@@ -872,8 +894,20 @@ chrome.runtime.onConnect?.addListener?.((port) => {
 
   captionStoreRequest(kind === 'public' ? 'snapshot-public' : 'snapshot-private')
     .then((snapshot) => {
+      if (!clients.has(port)) return;
       if (kind === 'public') {
-        postPortMessage(port, { type: 'CAPTION_PUBLIC_SNAPSHOT', event: snapshot?.event || null });
+        const pending = state.captionPublicPendingEvents.get(port) || [];
+        state.captionPublicPendingEvents.delete(port);
+        if (!postPortMessage(port, { type: 'CAPTION_PUBLIC_SNAPSHOT', event: snapshot?.event || null })) {
+          dropPublicCaptionClient(port);
+          return;
+        }
+        for (const event of pending) {
+          if (!postPortMessage(port, { type: 'CAPTION_PUBLIC_EVENT', event })) {
+            dropPublicCaptionClient(port);
+            break;
+          }
+        }
       } else {
         postPortMessage(port, {
           type: 'CAPTION_PRIVATE_SNAPSHOT',
@@ -884,7 +918,11 @@ chrome.runtime.onConnect?.addListener?.((port) => {
         });
       }
     })
-    .catch(() => postPortMessage(port, { type: 'CAPTION_CONNECTION_ERROR' }));
+    .catch(() => {
+      if (!clients.has(port)) return;
+      if (kind === 'public') dropPublicCaptionClient(port, true);
+      else postPortMessage(port, { type: 'CAPTION_CONNECTION_ERROR' });
+    });
 });
 
 chrome.storage.onChanged?.addListener?.((changes, areaName) => {

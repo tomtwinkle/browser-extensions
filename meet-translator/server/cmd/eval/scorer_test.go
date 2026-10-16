@@ -356,6 +356,63 @@ func TestScoreReportNeverClaimsProductQualityEvidence(t *testing.T) {
 	}
 }
 
+func TestSourceOnlyNonSpeechPublicationIsCountedWithoutTranslationCoverage(t *testing.T) {
+	for _, published := range []bool{true, false} {
+		item := scoreTestE2ECase("silence.source-only", "en", "ja", "", nil)
+		report, err := ScoreEvaluationTrack(TrackEndToEnd, "contract", []EvalCase{item},
+			[]EvaluationOutput{scoreTestE2EOutput(item.CaseID, "unspoken source", "", published)}, "manifest", "outputs")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 0
+		if published {
+			want = 1
+		}
+		if report.NonSpeechFalsePublications != want || report.NonSpeechFalseOutputs != 1 {
+			t.Fatalf("published=%v false publications/outputs = %d/%d", published, report.NonSpeechFalsePublications, report.NonSpeechFalseOutputs)
+		}
+		metric := report.E2EByDirection["en->ja"]
+		if metric.Published != 0 || metric.Omitted != 1 {
+			t.Fatalf("source-only output must not satisfy translation coverage: %#v", metric)
+		}
+	}
+}
+
+func TestMTOnlyScoresExactCriticalAssertionsAndRejectsMalformedResults(t *testing.T) {
+	item := scoreTestMTCase("mt.critical", "en", "ja", "公開しない")
+	item.CriticalAssertions = []string{"negation preserved"}
+	for _, passed := range []bool{true, false} {
+		output := scoreTestTranslationOutput(item.CaseID, "公開しない")
+		output.CriticalAssertions = []EvaluationAssertionResult{{Assertion: "negation preserved", Passed: passed}}
+		report, err := ScoreEvaluationTrack(TrackMTOnly, "contract", []EvalCase{item}, []EvaluationOutput{output}, "manifest", "outputs")
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantFailures := 0
+		if !passed {
+			wantFailures = 1
+		}
+		if report.CriticalAssertionCount != 1 || report.CriticalAssertionFailures != wantFailures {
+			t.Fatalf("passed=%v assertion report = %#v", passed, report)
+		}
+	}
+	for _, results := range [][]EvaluationAssertionResult{nil,
+		{{Assertion: "different", Passed: true}},
+		{{Assertion: "negation preserved", Passed: true}, {Assertion: "negation preserved", Passed: true}},
+	} {
+		output := scoreTestTranslationOutput(item.CaseID, "公開しない")
+		output.CriticalAssertions = results
+		if _, err := ScoreEvaluationTrack(TrackMTOnly, "contract", []EvalCase{item}, []EvaluationOutput{output}, "manifest", "outputs"); err == nil {
+			t.Fatalf("malformed assertion results accepted: %#v", results)
+		}
+	}
+	output := scoreTestASROutput("asr.assertion", "hello")
+	output.CriticalAssertions = []EvaluationAssertionResult{{Assertion: "unexpected", Passed: true}}
+	if _, err := ScoreEvaluationTrack(TrackASROnly, "contract", []EvalCase{scoreTestASRCase(output.CaseID, "en", "hello")}, []EvaluationOutput{output}, "manifest", "outputs"); err == nil {
+		t.Fatal("ASR-only assertion result must remain forbidden")
+	}
+}
+
 func containsString(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {

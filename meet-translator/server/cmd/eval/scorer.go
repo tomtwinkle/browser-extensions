@@ -239,7 +239,7 @@ func ScoreEvaluationTrack(track Track, split string, cases []EvalCase, outputs [
 			}
 			report.E2EASRByLanguage[item.SourceLanguage] = asrMetric
 			report.PublishedASRByLanguage[item.SourceLanguage] = publicMetric
-			if !hasReference(item.ReferenceText) && published && (hasOutput(*output.ASRText) || hasOutput(*output.TranslationText)) {
+			if !hasReference(item.ReferenceText) && *output.Published && (hasOutput(*output.ASRText) || hasOutput(*output.TranslationText)) {
 				report.NonSpeechFalsePublications++
 			}
 			if len(item.ReferenceTranslations) > 0 {
@@ -288,8 +288,8 @@ func validateOutputFields(track Track, item EvalCase, output EvaluationOutput) e
 			return fmt.Errorf("asr-only output must contain only asrText")
 		}
 	case TrackMTOnly:
-		if output.ASRText != nil || output.TranslationText == nil || output.Published != nil || len(output.CriticalAssertions) != 0 {
-			return fmt.Errorf("mt-only output must contain only translationText")
+		if output.ASRText != nil || output.TranslationText == nil || output.Published != nil {
+			return fmt.Errorf("mt-only output requires translationText and optional critical assertion results only")
 		}
 	case TrackEndToEnd:
 		if output.ASRText == nil || output.TranslationText == nil || output.Published == nil {
