@@ -245,22 +245,24 @@ type server struct {
 }
 
 type asrResponse struct {
-	Transcription    string       `json:"transcription"`
-	RawText          string       `json:"raw_text"`
-	DetectedLanguage string       `json:"detected_language"`
-	Backend          string       `json:"backend,omitempty"`
-	Segments         []ASRSegment `json:"segments,omitempty"`
-	QualityFlags     []string     `json:"quality_flags,omitempty"`
+	Transcription    string                   `json:"transcription"`
+	RawText          string                   `json:"raw_text"`
+	DetectedLanguage string                   `json:"detected_language"`
+	Backend          string                   `json:"backend,omitempty"`
+	Segments         []ASRSegment             `json:"segments,omitempty"`
+	QualityFlags     []string                 `json:"quality_flags,omitempty"`
+	InferenceTiming  *inferenceResponseTiming `json:"inference_timing,omitempty"`
 }
 
 type transcribeAndTranslateResponse struct {
-	Transcription string       `json:"transcription"`
-	Translation   string       `json:"translation"`
-	RawText       string       `json:"raw_text"`
-	DetectedLang  string       `json:"detected_language"`
-	Backend       string       `json:"backend,omitempty"`
-	Segments      []ASRSegment `json:"segments,omitempty"`
-	QualityFlags  []string     `json:"quality_flags,omitempty"`
+	Transcription   string                   `json:"transcription"`
+	Translation     string                   `json:"translation"`
+	RawText         string                   `json:"raw_text"`
+	DetectedLang    string                   `json:"detected_language"`
+	Backend         string                   `json:"backend,omitempty"`
+	Segments        []ASRSegment             `json:"segments,omitempty"`
+	QualityFlags    []string                 `json:"quality_flags,omitempty"`
+	InferenceTiming *inferenceResponseTiming `json:"inference_timing,omitempty"`
 }
 
 func (s *server) loadedLlamaIdentity() (string, string) {
@@ -437,21 +439,26 @@ func (s *server) releaseLlamaModel() {
 // runInference measures queue wait independently from the synchronous native
 // call. It logs only stage and durations in verbose mode; request text is never included.
 func (s *server) runInference(ctx context.Context, stage string, operation func() error) error {
+	_, err := s.runInferenceWithTiming(ctx, stage, operation)
+	return err
+}
+
+func (s *server) runInferenceWithTiming(ctx context.Context, stage string, operation func() error) (inferenceTiming, error) {
 	if s.inferenceGate == nil {
-		return errors.New("shared inference gate is not initialized")
+		return inferenceTiming{}, errors.New("shared inference gate is not initialized")
 	}
 	timing, err := s.inferenceGate.run(ctx, operation)
 	if !timing.StartedAt.IsZero() {
 		s.logVerbose("inference timing: stage=%s queue_wait_ms=%d execution_ms=%d",
 			stage, timing.QueueWait.Milliseconds(), timing.Execution.Milliseconds())
 	}
-	return err
+	return timing, err
 }
 
-func (s *server) transcribeWithInference(ctx context.Context, audioData []byte, sourceLang string) (ASRBackendResult, string, error) {
+func (s *server) transcribeWithInference(ctx context.Context, audioData []byte, sourceLang string) (ASRBackendResult, string, inferenceTiming, error) {
 	var result ASRBackendResult
 	var transcription string
-	err := s.runInference(ctx, "asr", func() error {
+	timing, err := s.runInferenceWithTiming(ctx, "asr", func() error {
 		// Keep the backend-specific mutex as a defense against future callers
 		// that may need to protect the Whisper context independently.
 		s.whisperMu.Lock()
@@ -460,7 +467,7 @@ func (s *server) transcribeWithInference(ctx context.Context, audioData []byte, 
 		result, transcription, err = s.transcribeWithDetails(audioData, sourceLang)
 		return err
 	})
-	return result, transcription, err
+	return result, transcription, timing, err
 }
 
 // ---------------------------------------------------------------------------
@@ -517,7 +524,7 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 	rawOpts := r.FormValue("llama_options")
 
 	// ASR uses the same accelerator lane as translation.
-	asrResult, transcription, transcribeErr := s.transcribeWithInference(r.Context(), audioData, sourceLang)
+	asrResult, transcription, asrTiming, transcribeErr := s.transcribeWithInference(r.Context(), audioData, sourceLang)
 
 	if transcribeErr != nil {
 		if r.Context().Err() != nil {
@@ -535,13 +542,14 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 	qualityFlags := asrQualityFlags(asrResult, transcription, speechMs, history, requestEvidence)
 	if transcription == "" || len(qualityFlags) > 0 {
 		writeJSON(w, http.StatusOK, transcribeAndTranslateResponse{
-			Transcription: transcription,
-			Translation:   "",
-			RawText:       asrResult.RawText,
-			DetectedLang:  asrResult.DetectedLanguage,
-			Backend:       asrResult.Backend,
-			Segments:      asrResult.Segments,
-			QualityFlags:  qualityFlags,
+			Transcription:   transcription,
+			Translation:     "",
+			RawText:         asrResult.RawText,
+			DetectedLang:    asrResult.DetectedLanguage,
+			Backend:         asrResult.Backend,
+			Segments:        asrResult.Segments,
+			QualityFlags:    qualityFlags,
+			InferenceTiming: newInferenceResponseTiming(newInferenceOperationTiming(asrTiming, nil), nil),
 		})
 		return
 	}
@@ -550,6 +558,7 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 
 	// モデルのホットスワップと翻訳は排他制御 (llama のみ)。
 	// シャットダウン開始後の新規 llama 処理は 503 で明示的に拒否する。
+	ownershipQueuedAt := time.Now()
 	if err := s.startLlamaOp(r.Context()); err != nil {
 		if r.Context().Err() != nil {
 			return
@@ -557,10 +566,11 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	ownershipWait := time.Since(ownershipQueuedAt)
 	defer s.endLlamaOp()
 	var modelSwapErr error
 	var translation string
-	translateErr := s.runInference(r.Context(), "translation", func() error {
+	translationTiming, translateErr := s.runInferenceWithTiming(r.Context(), "translation", func() error {
 		if requestedModel != "" && requestedModel != s.loadedModelSpec {
 			if err := s.swapModelFn(requestedModel); err != nil {
 				modelSwapErr = err
@@ -601,6 +611,8 @@ func (s *server) handleTranscribeAndTranslate(w http.ResponseWriter, r *http.Req
 		DetectedLang:  asrResult.DetectedLanguage,
 		Backend:       asrResult.Backend,
 		Segments:      asrResult.Segments,
+		InferenceTiming: newInferenceResponseTiming(
+			newInferenceOperationTiming(asrTiming, nil), newInferenceOperationTiming(translationTiming, &ownershipWait)),
 	})
 }
 
@@ -633,7 +645,7 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 	speechMs, _ := strconv.Atoi(strings.TrimSpace(r.FormValue("speech_ms")))
 	// contextBuf reads happen outside the inference gate; its implementation is
 	// internally synchronized. The native ASR call shares the accelerator lane.
-	asrResult, transcription, err := s.transcribeWithInference(r.Context(), audioData, sourceLang)
+	asrResult, transcription, timing, err := s.transcribeWithInference(r.Context(), audioData, sourceLang)
 	if err != nil {
 		if r.Context().Err() != nil {
 			return
@@ -654,6 +666,7 @@ func (s *server) handleTranscribe(w http.ResponseWriter, r *http.Request) {
 		Backend:          asrResult.Backend,
 		Segments:         asrResult.Segments,
 		QualityFlags:     qualityFlags,
+		InferenceTiming:  newInferenceResponseTiming(newInferenceOperationTiming(timing, nil), nil),
 	})
 }
 
@@ -710,13 +723,15 @@ func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 			identity.RequestNonce = strconv.FormatUint(s.translationRequestSequence.Add(1), 10)
 		}
 		key := fingerprintTranslationRequest(identity)
-		translation, err := s.translationFlights.do(r.Context(), key, func(operationCtx context.Context) (string, error) {
+		translation, err := s.translationFlights.doWithTiming(r.Context(), key, func(operationCtx context.Context) (translationFlightResult, error) {
+			ownershipQueuedAt := time.Now()
 			if err := s.startLlamaOp(operationCtx); err != nil {
-				return "", err
+				return translationFlightResult{}, err
 			}
+			ownershipWait := time.Since(ownershipQueuedAt)
 			defer s.endLlamaOp()
 			var result string
-			err := s.runInference(operationCtx, "translation", func() error {
+			timing, err := s.runInferenceWithTiming(operationCtx, "translation", func() error {
 				actualModel, _ := s.loadedLlamaIdentity()
 				if requestedModel == "" && actualModel != loadedModel {
 					return errTranslationModelChanged
@@ -737,14 +752,17 @@ func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 				return err
 			})
 			if err != nil {
-				return "", err
+				return translationFlightResult{}, err
 			}
 			result = strings.TrimSpace(result)
 			// Only the inference owner mutates history; joined requests are read-only.
 			if operationCtx.Err() == nil {
 				s.contextBuf.Add(contextEntry{Transcription: text, Translation: result})
 			}
-			return result, nil
+			return translationFlightResult{
+				Translation: result,
+				Timing:      newInferenceOperationTiming(timing, &ownershipWait),
+			}, nil
 		})
 
 		if errors.Is(err, errTranslationModelChanged) {
@@ -761,7 +779,10 @@ func (s *server) handleTranslate(w http.ResponseWriter, r *http.Request) {
 		if r.Context().Err() != nil {
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"translation": translation})
+		writeJSON(w, http.StatusOK, translationResponse{
+			Translation:     translation.Translation,
+			InferenceTiming: newInferenceResponseTiming(nil, translation.Timing),
+		})
 		return
 	}
 	http.Error(w, "model configuration changed repeatedly; retry translation", http.StatusServiceUnavailable)

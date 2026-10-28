@@ -422,6 +422,170 @@ test('translation telemetry separates identical-request dedupe from queue expiry
   assert.doesNotMatch(JSON.stringify(events), /private source/);
 });
 
+test('live server timings stay separate from HTTP latency and reach only the private export', async () => {
+  const rpcMessages = [];
+  let clock;
+  const { context } = loadBackgroundScript({
+    storageSettings: { sourceLang: 'en', targetLang: 'ja', overlayFormat: 'both' },
+    fetchImpl: async (url) => ({
+      ok: true,
+      async json() {
+        if (String(url).endsWith('/transcribe')) {
+          clock.advance(1_200);
+          return {
+            transcription: 'The meeting starts now', detected_language: 'en',
+            inference_timing: { schema_version: 1, asr: {
+              operation_id: 'a'.repeat(32), queue_wait_ms: 42, execution_ms: 83,
+              prompt: 'secret diagnostic prompt',
+            } },
+          };
+        }
+        clock.advance(800);
+        return {
+          translation: '会議を始めます',
+          inference_timing: { schema_version: 1, translation: {
+            operation_id: 'b'.repeat(32), queue_wait_ms: 20, execution_ms: 300, model_ownership_wait_ms: 17,
+            source_text: 'secret diagnostic source',
+          } },
+        };
+      },
+    }),
+  });
+  clock = setFakeClock(context, 10_000);
+  const state = context.__testState;
+  await state.evaluationTelemetryReady;
+  Object.assign(state, { isActive: true, tabId: 7, sessionId: 'session-a', evaluationRunId: 'run-server' });
+  state.streamGenerations = { mic: 0, tab: 2 };
+  state.evaluationTelemetry.beginRun({ runId: state.evaluationRunId, sessionId: state.sessionId });
+  const port = {
+    postMessage(message) {
+      if (message.type !== 'CAPTION_RPC') return;
+      rpcMessages.push(message);
+      const record = message.action === 'upsert-candidate'
+        ? { ...message.payload.candidate, revision: 1, sourceRevision: 1 }
+        : { segmentId: message.payload.segmentId };
+      context.handleOffscreenPortMessage(port, {
+        type: 'CAPTION_RPC_RESULT', requestId: message.requestId, result: { ok: true, record },
+      });
+    },
+  };
+  state.offscreenPort = port;
+
+  await context.processAudioChunk('UklGRg==', null, 7, 900, {
+    caseId: 'case-server', sessionId: state.sessionId, streamId: 'tab', streamGeneration: 2,
+    evidence: { vadKind: 'energy', speechDetected: true, voicedDurationMs: 900, utteranceDurationMs: 1100, clippingRatio: 0 },
+  });
+  const events = state.evaluationTelemetry.snapshot().events;
+  const timings = events.filter((event) => event.type === 'server_inference_finished');
+  assert.equal(timings.length, 2);
+  assert.deepEqual(Array.from(timings, (event) => [event.inferenceStage, event.queueWaitMs, event.executionMs]), [
+    ['asr', 42, 83], ['translation', 20, 300],
+  ]);
+  assert.ok(timings.every((event) => event.caseId === 'case-server' && event.runId === 'run-server' &&
+    event.queueName === 'server_inference' && event.timingSource === 'server_monotonic'));
+  assert.equal(timings[1].modelOwnershipWaitMs, 17);
+  assert.equal(timings[1].sourceRevision, 1);
+  assert.equal(events.find((event) => event.type === 'asr_finished').durationMs, 1_200);
+  assert.equal(events.find((event) => event.type === 'translation_finished').durationMs, 800);
+  assert.doesNotMatch(JSON.stringify(rpcMessages), /inference_timing|operation_id|server_monotonic|secret diagnostic/);
+  assert.doesNotMatch(JSON.stringify(events), /The meeting starts now|会議を始めます|secret diagnostic/);
+
+  const exports = [];
+  const exportPort = { postMessage(message) { exports.push(message); } };
+  await context.handleCaptionClientMessage(exportPort, 'public', { type: 'EVALUATION_TELEMETRY_EXPORT_REQUEST' });
+  assert.equal(exports.length, 0);
+  await context.handleCaptionClientMessage(exportPort, 'private', { type: 'EVALUATION_TELEMETRY_EXPORT_REQUEST' });
+  assert.equal(exports[0].snapshot.events.filter((event) => event.type === 'server_inference_finished').length, 2);
+});
+
+test('correction translations retain their source revision in private server timing', async () => {
+  const { context } = loadBackgroundScript({
+    fetchImpl: async () => ({ ok: true, async json() { return {
+      translation: 'corrected translation',
+      inference_timing: { schema_version: 1, translation: {
+        operation_id: 'c'.repeat(32), queue_wait_ms: 5, execution_ms: 80, model_ownership_wait_ms: 3,
+      } },
+    }; } }),
+  });
+  const state = context.__testState;
+  await state.evaluationTelemetryReady;
+  state.sessionId = 'session-correction';
+  state.evaluationRunId = 'run-correction';
+  state.evaluationTelemetry.beginRun({ runId: state.evaluationRunId, sessionId: state.sessionId });
+  const port = {
+    postMessage(message) {
+      if (message.type !== 'CAPTION_RPC') return;
+      const record = {
+        sessionId: state.sessionId, streamId: 'tab', streamGeneration: 1,
+        segmentId: 'case-correction', sourceRevision: 2, sourceLanguage: 'en', sourceText: 'corrected source',
+        translations: [{ targetLanguage: 'ja' }],
+      };
+      context.handleOffscreenPortMessage(port, {
+        type: 'CAPTION_RPC_RESULT', requestId: message.requestId, result: { ok: true, record },
+      });
+    },
+  };
+  state.offscreenPort = port;
+  await context.handleCaptionClientMessage(port, 'private', {
+    type: 'CAPTION_ACTION', action: 'correct', payload: { segmentId: 'case-correction', sourceText: 'corrected source' },
+  });
+  const timing = state.evaluationTelemetry.snapshot().events.find((event) => event.type === 'server_inference_finished');
+  assert.ok(timing);
+  assert.equal(timing.caseId, 'case-correction');
+  assert.equal(timing.sourceRevision, 2);
+  assert.equal(timing.operationId, 'c'.repeat(32));
+  assert.doesNotMatch(JSON.stringify(timing), /corrected source|corrected translation/);
+});
+
+test('legacy and malformed timing responses preserve translations without adding inference measurements', async () => {
+  let inferenceTiming;
+  const { context } = loadBackgroundScript({
+    fetchImpl: async () => ({ ok: true, async json() {
+      return { translation: 'translated text', transcription: 'recognized text', inference_timing: inferenceTiming };
+    } }),
+  });
+  const state = context.__testState;
+  await state.evaluationTelemetryReady;
+  state.sessionId = 'session-legacy';
+  state.evaluationRunId = 'run-legacy';
+  state.evaluationTelemetry.beginRun({ runId: state.evaluationRunId, sessionId: state.sessionId });
+  const cfg = { serverUrl: 'http://localhost:17070' };
+  const caseContext = { caseId: 'case-legacy', sessionId: state.sessionId };
+  for (const value of [undefined, {}, { schema_version: 2 }, { schema_version: 1, asr: {}, translation: {} }]) {
+    inferenceTiming = value;
+    assert.equal(await context.translateOnly('source', 'en', 'ja', cfg, null, caseContext), 'translated text');
+    assert.equal((await context.transcribeOnly('UklGRg==', cfg, null, null, caseContext)).transcription, 'recognized text');
+  }
+  assert.equal(state.evaluationTelemetry.snapshot().events.some((event) => event.type === 'server_inference_finished'), false);
+});
+
+test('late server timing cannot be attributed to a replacement evaluation run', async () => {
+  let releaseResponse;
+  const { context } = loadBackgroundScript({
+    fetchImpl: () => new Promise((resolve) => { releaseResponse = resolve; }),
+  });
+  const state = context.__testState;
+  await state.evaluationTelemetryReady;
+  state.sessionId = 'session-old';
+  state.evaluationRunId = 'run-old';
+  state.evaluationTelemetry.beginRun({ runId: state.evaluationRunId, sessionId: state.sessionId });
+  const request = context.translateOnly('source', 'en', 'ja', { serverUrl: 'http://localhost:17070' }, null, {
+    caseId: 'case-old', sessionId: state.sessionId, sourceRevision: 1,
+  });
+  state.evaluationTelemetry.endRun();
+  state.sessionId = 'session-new';
+  state.evaluationRunId = 'run-new';
+  state.evaluationTelemetry.beginRun({ runId: state.evaluationRunId, sessionId: state.sessionId });
+  releaseResponse({ ok: true, async json() { return {
+    translation: 'late result',
+    inference_timing: { schema_version: 1, translation: {
+      operation_id: 'd'.repeat(32), queue_wait_ms: 1, execution_ms: 20, model_ownership_wait_ms: 0,
+    } },
+  }; } });
+  await request;
+  assert.equal(state.evaluationTelemetry.snapshot().events.some((event) => event.type === 'server_inference_finished'), false);
+});
+
 test('audio queue rejects aggregate duration overflow', async () => {
   const { context } = loadBackgroundScript();
   let releaseBlocker;

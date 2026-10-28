@@ -112,3 +112,62 @@ test('evaluation telemetry restores and persists metadata events in session stor
   await restored.restore();
   assert.deepEqual(restored.snapshot(), first.snapshot());
 });
+
+test('server inference timing accepts measured zero and strips non-timing response content', () => {
+  const telemetry = loadTelemetry();
+  const operationId = '0123456789abcdef0123456789abcdef';
+  const result = telemetry.normalizeServerInferenceTiming({
+    schema_version: 1,
+    translation: {
+      operation_id: operationId, queue_wait_ms: 0, execution_ms: 41, model_ownership_wait_ms: 7,
+      text: 'private translation', prompt: 'private prompt', token: 'private token',
+      started_at: 'untrusted cross-process timestamp',
+    },
+    source_text: 'private source',
+  }, 'translation');
+  assert.equal(JSON.stringify(result), JSON.stringify({
+    operationId, inferenceStage: 'translation', timingSource: 'server_monotonic',
+    queueName: 'server_inference', queueWaitMs: 0, executionMs: 41, modelOwnershipWaitMs: 7,
+  }));
+
+  const store = telemetry.createEvaluationTelemetry({ now: () => 10, idFactory: () => 'run-server' });
+  store.beginRun({ sessionId: 'session-server' });
+  store.record('server_inference_finished', { ...result, caseId: 'case-server', sourceRevision: 2 });
+  const recorded = store.snapshot().events.at(-1);
+  assert.equal(recorded.type, 'server_inference_finished');
+  assert.equal(recorded.operationId, operationId);
+  assert.equal(recorded.inferenceStage, 'translation');
+  assert.equal(recorded.timingSource, 'server_monotonic');
+  assert.equal(recorded.queueWaitMs, 0);
+  assert.equal(recorded.modelOwnershipWaitMs, 7);
+  assert.equal(recorded.sourceRevision, 2);
+  assert.doesNotMatch(JSON.stringify(recorded), /private|cross-process/);
+});
+
+test('server inference timing rejects missing, malformed, or incompatible measurements without inventing zeros', () => {
+  const telemetry = loadTelemetry();
+  const stage = { operation_id: 'a'.repeat(32), queue_wait_ms: 0, execution_ms: 10 };
+  const valid = { schema_version: 1, asr: stage };
+  const invalid = [
+    null, undefined, [], {}, { ...valid, schema_version: '1' }, { ...valid, schema_version: 2 },
+    { schema_version: 1, asr: null }, { schema_version: 1, asr: [] },
+    ...['', 'private text', 'a'.repeat(31), 'A'.repeat(32), 'a'.repeat(33)].map((operation_id) => ({
+      schema_version: 1, asr: { ...stage, operation_id },
+    })),
+    ...[undefined, null, -1, 0.1, '5', NaN, Infinity, Number.MAX_SAFE_INTEGER + 1].flatMap((value) => [
+      { schema_version: 1, asr: { ...stage, queue_wait_ms: value } },
+      { schema_version: 1, asr: { ...stage, execution_ms: value } },
+    ]),
+  ];
+  for (const value of invalid) assert.equal(telemetry.normalizeServerInferenceTiming(value, 'asr'), null);
+  assert.equal(telemetry.normalizeServerInferenceTiming(valid, 'unknown'), null);
+  assert.equal(telemetry.normalizeServerInferenceTiming({ schema_version: 1, translation: stage }, 'translation'), null);
+  assert.equal(telemetry.normalizeServerInferenceTiming({
+    schema_version: 1, translation: { ...stage, model_ownership_wait_ms: -1 },
+  }, 'translation'), null);
+  const asr = telemetry.normalizeServerInferenceTiming({
+    ...valid, asr: { ...stage, model_ownership_wait_ms: 999 },
+  }, 'asr');
+  assert.equal(asr.executionMs, 10);
+  assert.equal(Object.hasOwn(asr, 'modelOwnershipWaitMs'), false);
+});

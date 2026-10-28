@@ -189,13 +189,15 @@ func TestHandleTranscribeAndTranslate_Success(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("status=%d, want 200; body=%s", w.Code, w.Body)
 	}
-	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["transcription"] != "hello world" {
-		t.Errorf("transcription=%q", resp["transcription"])
+	var resp transcribeAndTranslateResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
 	}
-	if resp["translation"] != "こんにちは世界" {
-		t.Errorf("translation=%q", resp["translation"])
+	if resp.Transcription != "hello world" {
+		t.Errorf("transcription=%q", resp.Transcription)
+	}
+	if resp.Translation != "こんにちは世界" {
+		t.Errorf("translation=%q", resp.Translation)
 	}
 }
 
@@ -221,10 +223,12 @@ func TestHandleTranscribeAndTranslate_EmptyTranscription(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("status=%d, want 200", w.Code)
 	}
-	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["translation"] != "" {
-		t.Errorf("expected empty translation, got %q", resp["translation"])
+	var resp transcribeAndTranslateResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Translation != "" {
+		t.Errorf("expected empty translation, got %q", resp.Translation)
 	}
 }
 
@@ -681,10 +685,12 @@ func TestHandleTranscribe_LongDurationShortAcknowledgementKept(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d", w.Code)
 	}
-	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp["transcription"] != "そうですね" {
-		t.Errorf("short acknowledgement should be kept, got %q", resp["transcription"])
+	var resp asrResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Transcription != "そうですね" {
+		t.Errorf("short acknowledgement should be kept, got %q", resp.Transcription)
 	}
 }
 
@@ -860,14 +866,17 @@ func TestServerEndToEnd(t *testing.T) {
 		t.Fatalf("POST failed: %v %v", err, resp)
 	}
 
-	var result map[string]string
-	json.NewDecoder(resp.Body).Decode(&result)
+	var result transcribeAndTranslateResponse
+	decodeErr := json.NewDecoder(resp.Body).Decode(&result)
 	resp.Body.Close()
-
-	if result["transcription"] != "good morning" {
-		t.Errorf("transcription=%q", result["transcription"])
+	if decodeErr != nil {
+		t.Fatal(decodeErr)
 	}
-	if result["translation"] != "[ja] good morning" {
-		t.Errorf("translation=%q", result["translation"])
+
+	if result.Transcription != "good morning" {
+		t.Errorf("transcription=%q", result.Transcription)
+	}
+	if result.Translation != "[ja] good morning" {
+		t.Errorf("translation=%q", result.Translation)
 	}
 }

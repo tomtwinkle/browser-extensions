@@ -45,6 +45,39 @@ node --test meet-translator/eval/*.test.mjs meet-translator/eval/device/*.test.m
 
 `check-contracts` reports fixture-level schema and hash checks only; product acceptance is recorded separately in `docs/implementation-status.md`. A green fixture check does not imply that the caption UI, local API, publication gate, or model has passed its contract.
 
+## Private inference timing export
+
+The private correction panel's evaluation export includes bounded
+`server_inference_finished` events when the local server supplies valid
+`inference_timing` metadata. Older servers without this optional metadata remain
+compatible. `inferenceStage` distinguishes ASR and translation, while
+`queueName=server_inference` separates the server's permit wait from the
+extension's audio/translation admission queues.
+
+`queueWaitMs` and `executionMs` are integer durations computed inside the server.
+Translation also reports `modelOwnershipWaitMs`, measured before entering the
+inference queue. The existing `asr_finished`/`translation_finished` events measure
+extension-side stage/job elapsed time, including local request/response handling;
+translation also includes awaited result handling such as caption-store updates.
+They do not isolate HTTP/network time. Do not add these overlapping extension
+and server durations together, infer network overhead by subtraction, or subtract
+browser/server timestamps.
+The timing event's `atMs` is browser receipt/record time, not a server completion
+timestamp.
+
+`operationId` identifies one completed backend operation; shared translation
+requests can report that same ID. Deduplicate by operation ID when counting
+executions. `caseId`, session, and translation `sourceRevision` identify the
+associated caption attempt. Missing measurements are absent, not zeros; a
+measured interval shorter than one millisecond can be zero.
+
+Only successful response stages are covered. Failed/canceled requests and
+failed model-identity retries are not included in these intervals. Execution is
+the synchronous gated callback, which may include preparation or model swap;
+it is not isolated GPU time. The private session history and explicit export
+are not durable trusted evidence or M1 qualification. See
+[ADR 0019](../docs/decisions/0019-private-server-inference-timing.md).
+
 ## Physical-device browser integration
 
 On the specified M1 Max, the Edge browser fixture can be run separately:

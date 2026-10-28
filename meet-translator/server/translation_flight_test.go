@@ -153,8 +153,10 @@ func TestHandleTranslateCoalescesTwentyIdenticalRequests(t *testing.T) {
 		if response == nil || response.Code != http.StatusOK {
 			t.Fatalf("request %d response = %#v, want 200", i, response)
 		}
-		var body map[string]string
-		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body["translation"] != "translated once" {
+		var body struct {
+			Translation string `json:"translation"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body.Translation != "translated once" {
 			t.Fatalf("request %d response body = %s, err=%v", i, response.Body, err)
 		}
 	}

@@ -94,9 +94,17 @@ func fingerprintTranslationRequest(identity translationRequestIdentity) string {
 	return hex.EncodeToString(digest[:])
 }
 
+// translationFlightResult keeps one operation's timing with its result. Joined
+// subscribers receive the same immutable value instead of independently timing
+// their waits or assigning multiple IDs to one backend operation.
+type translationFlightResult struct {
+	Translation string
+	Timing      *inferenceOperationTiming
+}
+
 type translationFlight struct {
 	done    chan struct{}
-	result  string
+	result  translationFlightResult
 	err     error
 	waiters int
 	ctx     context.Context
@@ -115,12 +123,20 @@ func newTranslationFlightGroup() *translationFlightGroup {
 }
 
 func (g *translationFlightGroup) do(ctx context.Context, key string, translate func(context.Context) (string, error)) (string, error) {
+	result, err := g.doWithTiming(ctx, key, func(workCtx context.Context) (translationFlightResult, error) {
+		text, err := translate(workCtx)
+		return translationFlightResult{Translation: text}, err
+	})
+	return result.Translation, err
+}
+
+func (g *translationFlightGroup) doWithTiming(ctx context.Context, key string, translate func(context.Context) (translationFlightResult, error)) (translationFlightResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	select {
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return translationFlightResult{}, ctx.Err()
 	default:
 	}
 
@@ -142,7 +158,7 @@ func (g *translationFlightGroup) do(ctx context.Context, key string, translate f
 	return g.wait(ctx, key, active)
 }
 
-func (g *translationFlightGroup) wait(ctx context.Context, key string, active *translationFlight) (string, error) {
+func (g *translationFlightGroup) wait(ctx context.Context, key string, active *translationFlight) (translationFlightResult, error) {
 	select {
 	case <-ctx.Done():
 		// Prefer a completed shared result if completion raced with cancellation.
@@ -152,7 +168,7 @@ func (g *translationFlightGroup) wait(ctx context.Context, key string, active *t
 		default:
 		}
 		g.leave(key, active)
-		return "", ctx.Err()
+		return translationFlightResult{}, ctx.Err()
 	case <-active.done:
 		return active.result, active.err
 	}
@@ -176,13 +192,13 @@ func (g *translationFlightGroup) leave(key string, active *translationFlight) {
 	g.mu.Unlock()
 }
 
-func (g *translationFlightGroup) run(key string, active *translationFlight, translate func(context.Context) (string, error)) {
+func (g *translationFlightGroup) run(key string, active *translationFlight, translate func(context.Context) (translationFlightResult, error)) {
 	completed := false
 	defer func() {
 		if !completed {
 			// Do not propagate backend panic details, which can contain input text.
 			_ = recover()
-			active.result = ""
+			active.result = translationFlightResult{}
 			active.err = errTranslationFlightPanicked
 		}
 		g.mu.Lock()

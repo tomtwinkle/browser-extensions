@@ -1,12 +1,38 @@
 # 実装状況
 
-更新日: 2026-10-16
+更新日: 2026-10-28
 
 対象: `meet-translator/`
 
 作業開始時HEAD: `6ac37a149a0314ba1b989a1c1f66d5dedf35ff47` (`main`)
 
 作業開始時作業ツリー: 既存の未コミット変更があった。内容を維持し、開始時HEADとともに追跡した。
+
+### R30: サーバー推論時間と非公開診断記録の接続 (2026-10-28)
+
+- 今回の再開HEADは`5d851eb05171a8351dcb5eb4c6d7dca499320322`、branchは`feat/meet-translator-local-evaluation`。Linuxの独立checkoutはcleanで開始した。既存PR #74はopen/unmerged、同HEADのCIは14 SUCCESSと明示opt-inモデルmatrix 1 SKIPPED。これは今回の変更前の証拠である。
+- 成功した`/transcribe`、`/translate`、`/transcribe-and-translate`に任意の`inference_timing` v1を追加する。共通laneの待ち時間と同期callbackの実行時間を分け、翻訳にはlane参加前のLLM所有権待ちも記録する。共有翻訳は同じoperation IDと計測値を全生存subscriberへ返す。
+- 拡張はschema・operation ID・非負整数durationを検証し、既存のprivate session telemetryへ`server_inference_finished`を記録する。拡張側のASR/翻訳stage・job経過時間やextension queue waitと合算しない。既存イベントにはlocal request/response処理と翻訳結果の保存待ちも含まれるため、純粋なHTTP時間や差分から得るnetwork時間として扱わない。字幕レコード・公開payloadへ追加せず、原文・訳・prompt・token・未知fieldを保存しない。旧serverの計測値なし応答と、不正な任意metadataを含む正常な字幕応答は従来どおり処理する。
+- case/session/configと翻訳sourceRevisionを対応付け、終了・置換されたrunの後着計測を次runへ混入させない。eventの`atMs`はブラウザ受信・記録時刻であり、サーバー内の完了時刻ではない。同じoperation IDを数える利用者は重複排除する必要があり、今回の変更は総推論回数の集計器を追加していない。
+- 開始前extension 119/119とserver全3 packageはPASS。新規回帰テストは拡張4件、server 5件の計測metadata不足をREDで確認してから実装した。最終結果はextension 125/125、eval/device 21/21、Go全3 packageの通常・race、CPU build、synthetic contracts、offline research integrityがPASS。Node v24の当環境ではdefault isolationの結果がファイル単位のみだったため、`--test-isolation=none`で個々のtest実行を確認した。
+- 独立reviewはproduction codeの指摘0件。テスト内の実行時間に固定30msの上限を課す判定がscheduler/GC遅延で不安定になる1件を修正し、durationの分離・切捨て・実測0は固定入力で検証する。修正後のtiming専用9 testは通常・raceともPASS、再レビュー残件0。文書reviewでは既存拡張イベントをHTTP時間と呼ぶ1件も修正し、local処理を含むstage・job時間と明記した。全3 package通常・raceはこのtest-only修正の前に完了しており、production codeはその後変更していない。
+- 実装判断は[ADR 0019](decisions/0019-private-server-inference-timing.md)。R30ではGo 1.23.0の単調時計と必須4分野の一次資料を再確認し、130 sources / 10 DEFERRED / 3公開数値screen / 0 SELECTEDを維持。資料上のMLX v0.32.4 / MLX-LM v0.32.2を記録したが、model/runtime/template/gateのpinや閾値は変えていない。
+- 計測対象は成功した最終operationだけで、失敗・cancel・model identity retryの全経過やGPU単体時間ではない。load controllerは引き続きextension admission waitを使用する。deadline順dispatch、実process-group memory/pressure、安全なmodel unload、durable/trusted telemetry、M1/Edge/Meetの結合試験は未完。T15はPARTIAL、S1はIN_PROGRESS、`PROFILE_NOT_QUALIFIED`を維持する。
+
+R30の実行環境はLinux x86_64、Go 1.23.12、Node 24.22.1、CMake 3.31.10。既存pinのllama.cpp b8699 (`4eb19514dd2984662f13aacbb052c559c8fde3b1`)とwhisper.cpp v1.8.4 (`9386f239401074690479731c1e41683fbbeac557`)をCPU構成でbuildした。下表のGo命令は`server/`、Node命令はrepository rootから実行した。Go test時の`GOPROXY=off`、model-free fixtureを使用し、モデル重み・評価音声/データは取得・実行していない。
+
+| 検証 | コマンド | 結果と範囲 |
+|---|---|---|
+| Extension | `node --test --test-isolation=none meet-translator/extension/tests/*.test.js` | 125/125 PASS。独立reviewでも再確認 |
+| Eval/device | `node --test --test-isolation=none meet-translator/eval/*.test.mjs meet-translator/eval/device/*.test.mjs` | 21/21 PASS |
+| Go全package | `make test GPU=cpu` / `GOFLAGS=-race make test GPU=cpu` | 両方3 package PASS、race報告なし。test-only review修正前 |
+| Review修正後のtiming | `GOFLAGS='-run=^TestInferenceTiming' make test GPU=cpu` / `GOFLAGS='-race -run=^TestInferenceTiming' make test GPU=cpu` | 通常・raceとも9 top-level test PASS |
+| Native CPU build | `make build GPU=cpu` | PASS。モデルのロード・推論は行わない |
+| Synthetic contracts | `node meet-translator/eval/check-contracts.mjs` | PASS。全fixtureでinference/quality evidence false、not-evaluated |
+| Research integrity | `node meet-translator/eval/check-research.mjs --offline` | PASS。130 sources / 10 DEFERRED / 3 screen / 0 SELECTED |
+| 差分整合 | `git diff --check` | PASS |
+
+これはLinux上の実装・contract検証であり、M1 Metal、実モデル品質・性能、process-group memory、実Edge/Meet、60分統合の証拠ではない。これらは今回NOT RUN、qualificationはBLOCKEDを維持する。
 
 ### PR #74 独立レビュー修正 (2026-10-16)
 
@@ -129,7 +155,7 @@
 
 | 段階 | 状態 | 根拠・残件 |
 | --- | --- | --- |
-| S0 調査・基準確認 | DONE | 指示書、開始時HEAD・既存dirty差分、既存テスト、実推論経路を確認。仕様全文を `docs/implementation-spec.md` に保存し、R0〜R29と原因別追記を記録。 |
+| S0 調査・基準確認 | DONE | 指示書、開始時HEAD・既存dirty差分、既存テスト、実推論経路を確認。仕様全文を `docs/implementation-spec.md` に保存し、R0〜R30と原因別追記を記録。 |
 | S1 API・評価基盤・基準凍結 | IN_PROGRESS | 3評価track、score-only evaluator、detached DSSE/Ed25519 verifier mechanics、model-free resource measurement analyzer、API認証/Origin/Host/body上限、モデル別prompt fixture、圧縮screen、C3 queue controls/telemetryと既存Edge fixtureを実装。production trust keys、独立collector、human-reviewed data、model output adapter、実測report作成器、deadline ordering、実M1/Meet資格は未完。Edge 154 isolated fixtureの歴史的な13/13 PASSは実Meet/実推論の合格ではない。caller-authored reportは`BLOCKED`、違反が観測されたreportは`REJECTED`。 |
 | S2 ASR・VAD・公開判定 | PARTIAL | native WhisperとWhisperXの詳細結果を保持し、Whisper scoreは診断表示だけに使用。mic/tabを別energy-VADで処理。待機/実行/話者batchを4件・10秒以内に数え、5秒超のqueue項目とbatchは推論前に破棄する。話者batch flush待機後にsession/generationを再確認し、停止後のincoming音声再保持を防ぐ。短いidle flushはone-shot timerを使用する。非音声・短発話の実音声評価、校正済みgate、全backendの同等segment metadataは未完。 |
 | S3 字幕共有・訂正UI | PARTIAL | 公開字幕ページと非公開訂正ページ、明示承認、訂正/undo/sourceRevisionを実装。M1 Max上のEdge fixtureはnative side panel、合成tab音声、private review、訂正/undo、明示承認、stop/restartを13/13 PASS。通常Edgeで読み込まれていた拡張は古く、Chat権限が残った版だった。ソースのunpacked extensionを再読込した後は、Meetタブから訂正UIがEdgeのnative side panelに開き、通常タブfallbackは発生しなかった。実Meetにはカメラ/マイクを切って単独参加し、Meet UIの開始/退出まで確認したが、参加者音声・拡張字幕・画面共有の結合は未確認。 |
@@ -155,7 +181,7 @@
 | T12 | PARTIAL | synthetic 341 ms voiced fixtureがdurationだけで捨てられないことを確認。自然な短い否定・数字、無音/雑音誤検出は未評価。 |
 | T13 | PARTIAL | native WhisperとWhisperXは構造化segmentを返し、得られないscoreはnull。SenseVoiceなど他adapterのsegment/timing契約が揃っていない。 |
 | T14 | PARTIAL | stop/restart、stream generation、mic非公開、終了sessionをsynthetic store testで確認。Edge実機fixtureでtabCaptureの開始、停止後のoverlay/session終了、再開、無音時送信なしを確認。通常Edgeの実Meetではカメラ/マイクをオフにした単独参加・退出のみ確認。実マイク入力・参加者音声は未試験。 |
-| T15 | PARTIAL | 音声queue上限4件/累積10秒、5秒超STALEとprivate-only drop statusを実装。`/translate`の同一prompt identity single-flight、20要求→推論/context追加1回、失敗後retry、waiter cancelを検査。extension未開始翻訳は8件上限、sourceRevision置換、厳密な3,000ms/8,000ms stale境界を確認。C2共通inference laneはASR/MT/raw LLMの同時実行を1以下に保ち、20 `/transcribe` + 20 `/translate` の同時handler testを含む。C3ではextension audio-admission queue waitによる適応停止/翻訳pause、private bounded telemetry、原文を保持するpause/resumeをmodel-free testで確認。nominal 1,000msサンプルの900〜1,500ms間隔許容、1,500ms超で連続区間をリセット、pause時の公開「翻訳中」解除もtestする。測定はnative/server inference queue waitではない。deadline順dispatch、実process-group memory/pressure provider、安全なmodel unload、trusted telemetry provenanceは未完。|
+| T15 | PARTIAL | 音声queue上限4件/累積10秒、5秒超STALEとprivate-only drop statusを実装。`/translate`の同一prompt identity single-flight、20要求→推論/context追加1回、失敗後retry、waiter cancelを検査。extension未開始翻訳は8件上限、sourceRevision置換、厳密な3,000ms/8,000ms stale境界を確認。C2共通inference laneはASR/MT/raw LLMの同時実行を1以下に保ち、20 `/transcribe` + 20 `/translate` の同時handler testを含む。C3ではextension audio-admission queue waitによる適応停止/翻訳pause、private bounded telemetry、原文を保持するpause/resumeをmodel-free testで確認。nominal 1,000msサンプルの900〜1,500ms間隔許容、1,500ms超で連続区間をリセット、pause時の公開「翻訳中」解除もtestする。R30では成功応答のserver inference queue/executionとLLM所有権待ちをprivate telemetryへ接続する。load controlの入力は引き続きextension admission waitである。deadline順dispatch、実process-group memory/pressure provider、安全なmodel unload、durable/trusted telemetry provenanceは未完。|
 | T16 | PARTIAL | bearer token、loopback、Origin/Host、preflight、8 MiB拒否をGo testで確認。Edge 154から隔離loopback APIへ認証付きhealth/transcribe/translateが届くことをfixtureで確認。Originなしの拡張要求を実サーバーと同じBearer認証契約で処理。配布IDとGoサーバーbinaryの結合は未確認。 |
 | T17 | PARTIAL | storageをtrusted contextに制限し、旧chat設定と通知の移行を追加。全設定/辞書/明示モデルの保存互換性は未監査。 |
 | T18 | PARTIAL | 字幕/訂正画面はtextContentで描画し、Chat権限なし。Edge実機fixtureで悪意あるHTML風字幕が`#caption-list`内に要素を生成せず文字列表示されることを確認。QR表示・復号は未実装。 |

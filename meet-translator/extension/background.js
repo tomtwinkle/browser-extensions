@@ -139,6 +139,15 @@ function recordEvaluationEvent(type, fields = {}) {
   });
 }
 
+function recordServerInferenceTiming(payload, stage, caseContext, requestRunId) {
+  // A response from a stopped/replaced run must not acquire the next run's ID.
+  if (!caseContext || !requestRunId || requestRunId !== state.evaluationRunId ||
+      caseContext.sessionId !== state.sessionId) return;
+  const timing = globalThis.MeetTranslatorEvaluationTelemetry.normalizeServerInferenceTiming(payload, stage);
+  if (!timing) return;
+  recordEvaluationEvent('server_inference_finished', { ...caseContext, ...timing });
+}
+
 function loadControlStatus() {
   const status = state.loadControlController?.snapshot() || {
     experimentsStopped: false,
@@ -759,6 +768,14 @@ async function handleCaptionClientMessage(port, kind, message) {
               segmentId: result.record.segmentId,
               sourceRevision: result.record.sourceRevision,
               sourceText: result.record.sourceText,
+            },
+            {
+              caseId: result.record.segmentId,
+              sessionId: result.record.sessionId,
+              streamId: result.record.streamId,
+              streamGeneration: result.record.streamGeneration,
+              sourceRevision: result.record.sourceRevision,
+              observedConfigId: evaluationObservedConfigId(cfg),
             }
           ), {
             sessionId: result.record.sessionId,
@@ -1076,7 +1093,8 @@ async function runPeriodicHealthCheck() {
  * @param {object} cfg    - getSettings() の結果
  * @returns {Promise<{transcription: string, rawText: string, detectedLang: string|null, backend: string|null, segments: Array, qualityFlags: string[]}>}
  */
-async function transcribeOnly(wavB64, cfg, speechMs = null, evidence = null) {
+async function transcribeOnly(wavB64, cfg, speechMs = null, evidence = null, caseContext = null) {
+  const requestRunId = state.evaluationRunId;
   // base64 → Uint8Array に変換。文字列は structured-clone で常に正しくコピーされる。
   const audioData = base64ToUint8Array(wavB64);
   const form = new FormData();
@@ -1101,7 +1119,7 @@ async function transcribeOnly(wavB64, cfg, speechMs = null, evidence = null) {
     'source_lang=',
     transcriptionSourceLang || 'auto'
   );
-  const { transcription, raw_text, detected_language, backend, segments, quality_flags } = await fetchWithTimeout(
+  const { transcription, raw_text, detected_language, backend, segments, quality_flags, inference_timing } = await fetchWithTimeout(
     `${cfg.serverUrl}/transcribe`,
     { method: 'POST', headers: apiRequestHeaders(cfg), body: form },
     API_REQUEST_TIMEOUT_MS,
@@ -1113,6 +1131,7 @@ async function transcribeOnly(wavB64, cfg, speechMs = null, evidence = null) {
       return res.json();
     }
   );
+  recordServerInferenceTiming(inference_timing, 'asr', caseContext, requestRunId);
   return {
     transcription: typeof transcription === 'string' ? transcription : '',
     rawText: typeof raw_text === 'string' ? raw_text : (typeof transcription === 'string' ? transcription : ''),
@@ -1131,7 +1150,8 @@ async function transcribeOnly(wavB64, cfg, speechMs = null, evidence = null) {
  * @param {object}  cfg        - getSettings() の結果（serverUrl 取得用）
  * @returns {Promise<string|null>}
  */
-async function translateOnly(text, sourceLang, targetLang, cfg, identity = null) {
+async function translateOnly(text, sourceLang, targetLang, cfg, identity = null, caseContext = null) {
+  const requestRunId = state.evaluationRunId;
   const params = new URLSearchParams({ text, target_lang: targetLang });
   if (sourceLang) params.set('source_lang', sourceLang);
   if (identity && typeof identity === 'object') {
@@ -1149,7 +1169,7 @@ async function translateOnly(text, sourceLang, targetLang, cfg, identity = null)
   }
 
   console.info('[background] translateOnly: POST', `${cfg.serverUrl}/translate`);
-  const { translation } = await fetchWithTimeout(
+  const { translation, inference_timing } = await fetchWithTimeout(
     `${cfg.serverUrl}/translate`,
     {
       method: 'POST',
@@ -1165,6 +1185,7 @@ async function translateOnly(text, sourceLang, targetLang, cfg, identity = null)
       return res.json();
     }
   );
+  recordServerInferenceTiming(inference_timing, 'translation', caseContext, requestRunId);
   return translation || null;
 }
 
@@ -1774,7 +1795,7 @@ async function processAudioChunk(wavB64, speakerName, tabId, speechMs = null, au
   recordEvaluationEvent('asr_started', caseContext);
   let asr;
   try {
-    asr = await transcribeOnly(wavB64, cfg, effectiveSpeechMs, audioMetadata.evidence);
+    asr = await transcribeOnly(wavB64, cfg, effectiveSpeechMs, audioMetadata.evidence, caseContext);
   } catch (error) {
     const durationMs = Math.max(0, Date.now() - asrStartedAtMs);
     recordEvaluationEvent('asr_finished', { ...caseContext, durationMs, outcome: 'failed', errorClass: error?.name || 'Error' });
@@ -1906,7 +1927,7 @@ async function processAudioChunk(wavB64, speakerName, tabId, speechMs = null, au
         segmentId,
         sourceRevision: 1,
         sourceText: transcription,
-      });
+      }, { ...caseContext, sourceRevision: 1 });
     }, {
       sessionId: audioMetadata.sessionId,
       streamId: audioMetadata.streamId,

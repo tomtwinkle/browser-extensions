@@ -12,17 +12,21 @@
     'caption_publication_event', 'caption_retracted', 'correction_saved', 'correction_undone',
     'backend_error', 'retry', 'load_control_transition', 'adaptive_work_stopped',
     'translation_paused', 'translation_resumed', 'inference_rejected', 'memory_recovery_ready',
+    'server_inference_finished',
   ]);
   const STRING_FIELDS = new Set([
     'caseId', 'sessionId', 'observedConfigId', 'configCoverage', 'streamId', 'queueName', 'reason', 'errorClass', 'outcome',
+    'operationId', 'inferenceStage', 'timingSource',
   ]);
   const NUMBER_FIELDS = new Set([
     'streamGeneration', 'audioEndedAtMs', 'audioDurationMs', 'queueLength', 'queueWaitMs', 'executionMs',
     'durationMs', 'attempt', 'droppedCount', 'droppedAudioMs', 'pendingCount', 'activeCount',
+    'sourceRevision', 'modelOwnershipWaitMs',
   ]);
   const ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
   const REASON_PATTERN = /^[A-Z][A-Z0-9_:-]{0,63}$/;
   const ERROR_CLASS_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+  const OPERATION_ID_PATTERN = /^[0-9a-f]{32}$/;
   const CONFIG_KEYS = [
     'asrModel', 'translationModel', 'runtimeRevision', 'quantization', 'templateId',
     'decodeOptions', 'publicationGateId', 'sourceLang', 'targetLang', 'bidirectional', 'asrHintsMode',
@@ -39,6 +43,29 @@
 
   function safeReason(value) {
     return typeof value === 'string' && REASON_PATTERN.test(value) ? value : null;
+  }
+
+  // Durations are computed by one server clock. Response receipt time belongs
+  // to the browser clock and must not be subtracted from server timestamps.
+  function normalizeServerInferenceTiming(payload, stage) {
+    if (!payload || Array.isArray(payload) || payload.schema_version !== 1 ||
+        !['asr', 'translation'].includes(stage)) return null;
+    const value = payload[stage];
+    if (!value || typeof value !== 'object' || Array.isArray(value) ||
+        typeof value.operation_id !== 'string' || !OPERATION_ID_PATTERN.test(value.operation_id)) return null;
+    const isDuration = (duration) => Number.isSafeInteger(duration) && duration >= 0;
+    if (!isDuration(value.queue_wait_ms) || !isDuration(value.execution_ms) ||
+        (stage === 'translation' && !isDuration(value.model_ownership_wait_ms))) return null;
+    const timing = {
+      operationId: value.operation_id,
+      inferenceStage: stage,
+      timingSource: 'server_monotonic',
+      queueName: 'server_inference',
+      queueWaitMs: value.queue_wait_ms,
+      executionMs: value.execution_ms,
+    };
+    if (stage === 'translation') timing.modelOwnershipWaitMs = value.model_ownership_wait_ms;
+    return timing;
   }
 
   function cleanDecodeOptions(value, key = '') {
@@ -97,6 +124,9 @@
       if (value) event[field] = value;
     }
     if (event.streamId && !['mic', 'tab'].includes(event.streamId)) delete event.streamId;
+    if (event.operationId && !OPERATION_ID_PATTERN.test(event.operationId)) delete event.operationId;
+    if (event.inferenceStage && !['asr', 'translation'].includes(event.inferenceStage)) delete event.inferenceStage;
+    if (event.timingSource && event.timingSource !== 'server_monotonic') delete event.timingSource;
     for (const field of NUMBER_FIELDS) {
       const value = input[field];
       if (Number.isSafeInteger(value) && value >= 0) event[field] = value;
@@ -247,5 +277,6 @@
   root.MeetTranslatorEvaluationTelemetry = Object.freeze({
     createEvaluationTelemetry,
     configurationId,
+    normalizeServerInferenceTiming,
   });
 })(globalThis);
