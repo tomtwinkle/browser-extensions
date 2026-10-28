@@ -1,9 +1,50 @@
 package main
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestPromptContractsMatchPinnedFixtures(t *testing.T) {
+	type promptContract struct {
+		SchemaVersion int    `json:"schemaVersion"`
+		TemplateID    string `json:"templateId"`
+		Input         struct {
+			SourceLanguage string `json:"sourceLanguage"`
+			TargetLanguage string `json:"targetLanguage"`
+			SourceText     string `json:"sourceText"`
+		} `json:"input"`
+		ExpectedPrompt string `json:"expectedPrompt"`
+	}
+
+	for _, fixtureName := range []string{"qwen35-0.8b.json", "hy-mt2-1.8b.json"} {
+		t.Run(fixtureName, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("testdata", "templates", fixtureName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fixture promptContract
+			if err := json.Unmarshal(data, &fixture); err != nil {
+				t.Fatal(err)
+			}
+			got := buildTranslationPrompt(
+				fixture.Input.SourceText,
+				fixture.Input.SourceLanguage,
+				fixture.Input.TargetLanguage,
+				fixture.TemplateID,
+				ModelOptions{},
+				nil,
+				"",
+			)
+			if got != fixture.ExpectedPrompt {
+				t.Fatalf("prompt mismatch\n got: %q\nwant: %q", got, fixture.ExpectedPrompt)
+			}
+		})
+	}
+}
 
 // ─── buildTranslationPrompt ──────────────────────────────────────────────────
 
@@ -29,7 +70,8 @@ func TestBuildQwen3Prompt_ThinkingOn(t *testing.T) {
 func TestBuildQwen3Prompt_ThinkingOff(t *testing.T) {
 	opts := ModelOptions{Thinking: false}
 	got := buildTranslationPrompt("Hello", "en", "ja", "qwen3", opts, nil, "")
-	assertContains(t, got, "/no-think")
+	assertContains(t, got, "/no_think")
+	assertNotContains(t, got, "/no-think")
 	assertContains(t, got, "Hello")
 }
 
@@ -48,18 +90,46 @@ func TestBuildHyPrompt(t *testing.T) {
 	assertContains(t, got, "<｜hy_begin▁of▁sentence｜>")
 	assertContains(t, got, "<｜hy_User｜>")
 	assertContains(t, got, "<｜hy_Assistant｜>")
-	assertContains(t, got, "Translate from English to Japanese")
+	assertContains(t, got, "Translate the following text into Japanese.")
+	assertContains(t, got, "only output the translated result without any additional explanation")
 	assertContains(t, got, "Hello")
+	assertNotContains(t, got, "You are a translator")
 	assertNotContains(t, got, "<|im_start|>")
+}
+
+func TestBuildHyPromptUsesOfficialTerminologyAndTargetLanguageInstruction(t *testing.T) {
+	got := buildTranslationPrompt(
+		"Open a pull request",
+		"en",
+		"ja",
+		"hy",
+		ModelOptions{},
+		nil,
+		"pull request -> プルリクエスト",
+	)
+	assertContains(t, got, "Reference the following translations:")
+	assertContains(t, got, "pull request -> プルリクエスト")
+	assertContains(t, got, "Translate the following text into Japanese.")
+	assertNotContains(t, got, "Translate from English to Japanese")
+	assertNotContains(t, got, "<｜hy_place▁holder▁no▁3｜>")
+}
+
+func TestBuildQwen35PromptUsesDefaultNonThinkingMode(t *testing.T) {
+	got := buildTranslationPrompt("Hello", "en", "ja", "qwen35", ModelOptions{}, nil, "")
+	assertContains(t, got, "<|im_start|>user")
+	assertContains(t, got, "Translate the following text from English into Japanese")
+	assertContains(t, got, "Return only the translation, without additional explanation")
+	assertNotContains(t, got, "/no-think")
+	assertNotContains(t, got, "You are a translator")
 }
 
 func TestBuildHy7Prompt(t *testing.T) {
 	got := buildTranslationPrompt("Hello", "en", "ja", "hy7", ModelOptions{}, nil, "")
 	assertContains(t, got, "<|startoftext|>")
-	assertContains(t, got, "<|extra_4|>")
 	assertContains(t, got, "<|extra_0|>")
-	assertContains(t, got, "Translate from English to Japanese")
+	assertContains(t, got, "Translate the following text into Japanese.")
 	assertContains(t, got, "Hello")
+	assertNotContains(t, got, "<|extra_4|>")
 	assertNotContains(t, got, "<|im_start|>")
 }
 
@@ -105,6 +175,12 @@ func TestTemplateFor_HyMT2Aliases(t *testing.T) {
 	}
 	if got := templateFor("Hy-MT2-7BGGUF"); got != "hy7" {
 		t.Errorf("templateFor(7B) = %q, want %q", got, "hy7")
+	}
+}
+
+func TestTemplateForQwen35UsesItsOwnTemplate(t *testing.T) {
+	if got := templateFor("qwen3.5:0.8b-q4_k_m"); got != "qwen35" {
+		t.Errorf("templateFor(Qwen3.5 0.8B) = %q, want %q", got, "qwen35")
 	}
 }
 

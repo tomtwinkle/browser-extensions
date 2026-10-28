@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>字幕共有</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, -apple-system, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #111827; color: #f9fafb; }
+    header { display: flex; justify-content: space-between; align-items: center; padding: 18px 24px; color: #cbd5e1; }
+    h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    #connection { font-size: 13px; color: #a7f3d0; }
+    #connection.disconnected { color: #fca5a5; }
+    main { max-width: 1100px; margin: 0 auto; padding: min(8vh, 72px) 32px 32px; }
+    #share-guidance { text-align: center; color: #cbd5e1; font-size: clamp(16px, 2vw, 24px); margin: 0 auto 32px; }
+    #caption-list { display: grid; gap: 18px; }
+    .caption { padding: 20px 24px; border-radius: 14px; background: #1f2937; box-shadow: 0 12px 32px #0004; overflow-wrap: anywhere; }
+    .caption + .caption { opacity: .76; }
+    .caption-source { font-size: clamp(22px, 3vw, 40px); line-height: 1.35; white-space: pre-wrap; }
+    .caption-translation { margin-top: 10px; color: #bfdbfe; font-size: clamp(20px, 2.5vw, 34px); line-height: 1.4; white-space: pre-wrap; }
+    .caption-state { margin-top: 8px; color: #9ca3af; font-size: 14px; }
+    #empty-state { margin-top: 10vh; text-align: center; color: #9ca3af; font-size: clamp(18px, 2.4vw, 28px); }
+    footer { position: fixed; bottom: 0; left: 0; right: 0; padding: 10px 18px; text-align: center; color: #64748b; font-size: 12px; background: linear-gradient(transparent, #111827 30%); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>字幕共有</h1>
+    <div id="connection" role="status">接続中</div>
+  </header>
+  <main>
+    <p id="share-guidance">共有を始めるには、このタブをMeetの画面共有で選択してください。</p>
+    <section id="caption-list" aria-live="polite"></section>
+    <p id="empty-state">字幕を待っています</p>
+  </main>
+  <footer>このタブを開いただけでは、画面共有は開始されません。</footer>
+  <script src="caption-protocol.js"></script>
+  <script src="caption-presenter.js"></script>
+</body>
+</html>

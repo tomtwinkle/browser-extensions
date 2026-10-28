@@ -13,7 +13,7 @@
 //
 // # フラグ
 //
-//	--server   URL   サーバーアドレス (デフォルト: http://localhost:7070)
+//	--server   URL   サーバーアドレス (デフォルト: http://127.0.0.1:17070)
 //	--runs     N     各テストケースの実行回数 (デフォルト: 3)
 //	--warmup   N     ウォームアップ回数 (デフォルト: 2)
 //	--output   FILE  結果を JSON 保存するファイルパス
@@ -45,7 +45,7 @@ import (
 type CaseResult struct {
 	Case      BenchCase `json:"case"`
 	Output    string    `json:"output"`
-	Quality   float64   `json:"quality"`   // ChrF スコア (0-1)
+	Quality   float64   `json:"quality"`    // ChrF スコア (0-1)
 	LatencyMs float64   `json:"latency_ms"` // 平均レイテンシ (ms)
 	Error     string    `json:"error,omitempty"`
 }
@@ -89,7 +89,12 @@ func translateViaHTTP(serverURL, text, sourceLang, targetLang string) (string, e
 		"source_lang": {sourceLang},
 		"target_lang": {targetLang},
 	}
-	resp, err := http.PostForm(endpoint, form)
+	req, err := newAuthenticatedRequest(http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -113,19 +118,46 @@ func translateViaHTTP(serverURL, text, sourceLang, targetLang string) (string, e
 // getModelName はサーバーの /health から現在のモデル名を取得する。
 func getModelName(serverURL string) (string, error) {
 	endpoint := strings.TrimRight(serverURL, "/") + "/health"
-	resp, err := http.Get(endpoint) //nolint:noctx
+	req, err := newAuthenticatedRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("health returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
 	var result struct {
 		LlamaModel string `json:"llama_model"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "unknown", nil
+		return "", fmt.Errorf("decode health response: %w", err)
 	}
 	return result.LlamaModel, nil
+}
+
+func newAuthenticatedRequest(method, endpoint string, body io.Reader) (*http.Request, error) {
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, fmt.Errorf("benchmark server URL must be a local HTTP origin")
+	}
+	if host := strings.ToLower(parsed.Hostname()); host != "localhost" && host != "127.0.0.1" {
+		return nil, fmt.Errorf("benchmark server URL must use localhost or 127.0.0.1")
+	}
+	token := os.Getenv("MEET_TRANSLATOR_API_TOKEN")
+	if token == "" {
+		return nil, fmt.Errorf("MEET_TRANSLATOR_API_TOKEN is required")
+	}
+	req, err := http.NewRequest(method, endpoint, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	return req, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -384,24 +416,6 @@ func compareResults(dir string) error {
 	fmt.Printf("\nScore = quality×0.6 + speed×0.4  (speed = 1/(1 + latency/300ms))\n")
 
 	// autoconfig 推奨
-	fmt.Printf("\n=== Recommended autoconfig tier assignments ===\n")
-	n := len(results)
-	for i, r := range results {
-		var tier string
-		switch {
-		case i == 0:
-			tier = "top quality  → gpu ≥32GB / cpu ≥16GB"
-		case float64(i) < float64(n)*0.25:
-			tier = "high quality → gpu ≥16GB / cpu ≥8GB"
-		case float64(i) < float64(n)*0.5:
-			tier = "balanced     → gpu ≥4GB  / cpu ≥4GB"
-		case float64(i) < float64(n)*0.75:
-			tier = "speed focus  → gpu <4GB  / cpu ≥2GB"
-		default:
-			tier = "fallback     → cpu <2GB"
-		}
-		fmt.Printf("  %2d. %-28s → %s\n", i+1, r.Model, tier)
-	}
 	return nil
 }
 
@@ -431,7 +445,7 @@ func sortedKeys[V any](m map[string]V) []string {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func main() {
-	serverURL := flag.String("server", "http://localhost:7070", "running server URL")
+	serverURL := flag.String("server", "http://127.0.0.1:17070", "running local server URL")
 	runs := flag.Int("runs", 3, "number of runs per test case")
 	warmup := flag.Int("warmup", 2, "number of warm-up requests before measuring")
 	output := flag.String("output", "", "save results to this JSON file (e.g. results/bonsai-8b.json)")

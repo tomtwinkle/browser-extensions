@@ -1,10 +1,13 @@
-# meet-translator – Google Meet 自動翻訳チャット
+# meet-translator – Google Meet 音声のローカル文字起こし・翻訳
 
-Google Meet の音声をリアルタイムでキャプチャし、文字起こし・翻訳したテキストを
-Meet のチャット欄に自動投稿する Chrome / Edge 拡張機能（Manifest V3）です。
+Google Meet 音声をローカルで文字起こし・翻訳する Chrome / Edge 拡張機能
+(Manifest V3) とローカルサーバーです。拡張機能には、ホスト専用の訂正画面と、
+ホストがMeetの画面共有で選ぶ字幕ページがあります。
 
-**外部サービスへの依存はゼロ。** whisper.cpp と llama.cpp をローカルサーバーに組み込み、
-すべての推論がマシン上で完結します。
+ASR・翻訳はローカルサーバーで実行します。字幕ページを開いただけでは共有は始まらず、
+Meetの通常の画面共有画面からホストがそのタブを選ぶ必要があります。訂正画面は共有しないでください。
+Google Chatの権限と投稿経路は削除しました。実Meet統合とM1モデル評価は未完了です。
+[`docs/implementation-status.md`](docs/implementation-status.md) に確認済み範囲と残件を記録しています。
 
 [English README](README.md)
 
@@ -27,7 +30,9 @@ Meet のチャット欄に自動投稿する Chrome / Edge 拡張機能（Manife
   └─ llama.cpp   (組み込み) ── LLM 翻訳
        │
        ▼
-[ content.js ]  ── Meet チャット DOM に翻訳テキストを投稿
+[ caption-presenter.html ] ── 承認済み字幕だけを表示
+[ sidepanel.html ]          ── ホスト専用の候補確認・訂正・承認
+[ content.js ]              ── Meet内オーバーレイと辞書フィードバックUI
 ```
 
 ---
@@ -41,7 +46,11 @@ meet-translator/
 │   ├── shared.js             本体とテストで共有する純粋関数
 │   ├── background.js         Service Worker: 音声キャプチャ・翻訳制御
 │   ├── offscreen.html/js     Offscreen Document: Web Audio API + WAV エンコーダー
-│   ├── content.js            Content Script: Meet チャット DOM 操作
+│   ├── content.js            Content Script: 現行のMeet内表示と辞書UI
+│   ├── caption-presenter.html/js  共有対象に選ぶ公開字幕ページ
+│   ├── sidepanel.html/js          ホスト専用の履歴・訂正画面
+│   ├── caption-store.js           session/revision付き字幕状態
+│   ├── caption-protocol.js        非公開情報を除いた公開投影
 │   ├── popup.html/js         ポップアップ UI (開始/停止 + 設定リンク)
 │   ├── options.html/js       設定ページ (サーバー URL・言語)
 │   ├── tests/                Node ベースの extension 単体テスト
@@ -114,7 +123,7 @@ make prism GPU=cpu    # PrismML バイナリのみ（bonsai-8b / server-prism �
 |---|---|
 | `make build` | 標準バイナリ (`server`) のみ再ビルド |
 | `make prism` | `bonsai-8b` 用の PrismML バイナリ (`server-prism`) のみ再ビルド |
-| `make` / `make all` | 両方のバイナリを再ビルド。autoconfig やリリース同等の導線で `bonsai-8b` まで自動遷移したい場合はこちら |
+| `make` / `make all` | 標準・PrismML両方のバイナリを再ビルド |
 | `make rebuild` | ブリッジ C++ ファイル（`whisper_bridge.cpp` 等）を変更した後。cmake を再実行してから `go build`。必要なら pin 済み vendor バージョンも自動更新 |
 | `make distclean && make` | vendor を含めて全部取り直したいときの完全再構築 |
 
@@ -144,35 +153,17 @@ cd meet-translator/server && make test
 
 ## サーバーの起動
 
-### 初回起動（モデル自動選択）
+### 初回起動
 
-モデル未指定で起動すると、まず保守的な floor
-`large-v3-turbo` + `qwen3.5:0.8b-q4_k_m` から始め、
-**RAM/GPU に余裕があれば `bonsai-8b`、さらに大きいモデルへ段階的に引き上げて**設定ファイルに保存します。
+`large-v3-turbo` + `qwen3.5:0.8b-q4_k_m` は再現用の比較基準IDです。
+RAM/GPU容量だけで別モデルへ昇格しません。この基準は品質・メモリ・遅延・M1統合の合格を意味しません。
 
 ```bash
 ./meet-translator-server
 ```
 
-リリースアーカイブと `make` は標準バイナリに加えて PrismML 用の companion binary も同梱するため、
-`bonsai-8b` が選ばれた場合も自動で切り替えられます。
-
-自動選択されるモデル（GPU あり）:
-
-| RAM | whisper | llama |
-|---|---|---|
-| ≥ 64 GB | `large-v3` | `calm3:22b-q4_k_m` |
-| ≥ 32 GB | `large-v3-turbo` | `calm3:22b-q4_k_m` |
-| ≥ 16 GB | `large-v3-turbo` | `qwen3:8b-q4_k_m` |
-| ≥  8 GB | `large-v3-turbo` | `bonsai-8b` |
-| < 8 GB  | `large-v3-turbo` | `qwen3.5:0.8b-q4_k_m` |
-
-CPU のみの場合:
-
-| RAM | whisper | llama |
-|---|---|---|
-| ≥ 8 GB | `large-v3-turbo` | `bonsai-8b` |
-| < 8 GB | `large-v3-turbo` | `qwen3.5:0.8b-q4_k_m` |
+サーバーの起動には32バイト以上のAPI tokenと、拡張設定ページに表示される完全一致Originが必要です。
+設定方法は[ローカルAPI設定](server/README.md#ローカルapiの設定)を参照してください。
 
 ### モデルを手動指定する場合
 
@@ -198,9 +189,9 @@ Ollama で取得済みの GGUF モデルがある場合は自動的に検索し�
 
 | フラグ | 環境変数 | デフォルト | 説明 |
 |---|---|---|---|
-| `--port` | `PORT` | `7070` | リッスンポート |
-| `--whisper-model` | `WHISPER_MODEL` | `auto`（floor: `large-v3-turbo`） | Whisper モデル名またはファイルパス |
-| `--llama-model` | `LLAMA_MODEL` | `auto`（floor: `qwen3.5:0.8b-q4_k_m`） | LLM モデル名またはファイルパス |
+| `--port` | `PORT` | `17070` | loopbackリッスンポート |
+| `--whisper-model` | `WHISPER_MODEL` | `auto`（baseline: `large-v3-turbo`） | Whisper モデル名またはファイルパス |
+| `--llama-model` | `LLAMA_MODEL` | `auto`（reproduction baseline: `qwen3.5:0.8b-q4_k_m`） | LLM モデル名またはファイルパス |
 | `--llama-gpu-layers` | `LLAMA_GPU_LAYERS` | `-1` | GPU オフロード層数 (`0`=CPU, `-1`=全層) |
 | `--whisper-gpu-layers` | `WHISPER_GPU_LAYERS` | `-1` | 同上 (Whisper 用) |
 | `--model-cache-dir` | `MODEL_CACHE_DIR` | OS 標準 | モデルキャッシュディレクトリ |
@@ -216,109 +207,71 @@ Ollama で取得済みの GGUF モデルがある場合は自動的に検索し�
 | macOS | `~/Library/Application Support/meet-translator/config.json` |
 | Windows | `%APPDATA%\meet-translator\config.json` |
 
-### ヘルスチェック
+### ローカルAPIの設定とヘルスチェック
+
+設定手順は[サーバーREADME](server/README.md#ローカルapiの設定)を参照してください。
+すべてのAPIにBearer tokenが必要です。設定ページに表示された拡張Originだけを許可し、
+サーバーは `127.0.0.1` にbindします。新規設定の既定ポートは17070です。
 
 ```bash
-curl http://localhost:7070/health
+curl http://127.0.0.1:17070/health \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN"
 ```
 
 ---
 
 ## 対応モデル
 
-### Whisper モデル（音声認識）
+モデル一覧への掲載、ローカル起動、公開ベンチマーク通過は、M1 Maxでの品質・性能合格を意味しません。最終条件は字幕共有・訂正UIを含む同時利用試験です。
 
-モデル名を `--whisper-model` に指定すると自動ダウンロードします。
+### Whisper・ASR
 
-| モデル名 | サイズ | 精度 |
-|---|---|---|
-| `tiny` | 75 MB | △ |
-| `base` | 142 MB | ○ |
-| `small` | 466 MB | ○ |
-| `medium` | 1.5 GB | ◎ |
-| `large-v3` | 3.1 GB | ◎◎ |
-| `large-v3-turbo` | 809 MB | ◎ **default floor** (高速) |
-| `kotoba-whisper` | 3.1 GB | ◎◎ 日本語特化の Kotoba-Whisper v2.0 |
-| `kotoba-whisper-q5_0` | ≈ 1.0 GB | ◎ 量子化版 Kotoba-Whisper v2.0 |
-| `kotoba-whisper-v2.2` / `kotoba-tech/kotoba-whisper-v2.2` | モデル側で管理 | ◎◎ ローカル Python Transformers worker 経由の Kotoba-Whisper v2.2 |
-| `kotoba-whisper-v2.2-faster` / `RoachLin/kotoba-whisper-v2.2-faster` | モデル側で管理 | ◎◎ WhisperX / faster-whisper 経由の Kotoba-Whisper v2.2 |
-| `sensevoice` | モデル側で管理 | ◎ ローカル Python worker 経由の高速多言語 ASR |
-| `whisperx` / `whisperX` / `whisperx-turbo` | モデル側で管理 | ◎ ローカル Python worker 経由の WhisperX `turbo`（最新の公式 Whisper モデル） |
-| `whisperx-large-v3` | モデル側で管理 | ◎◎ ローカル Python worker 経由の WhisperX `large-v3` |
+| 現行比較名 | 用途・状態 |
+|---|---|
+| `large-v3-turbo` | 再現用ASR基準。未選定・未資格 |
+| `large-v3` | Whisper比較用。未選定・未資格 |
+| `kotoba-whisper-v2.2` / `kotoba-tech/kotoba-whisper-v2.2` | 作者配布の日本語ASR比較候補。未資格 |
+| `sensevoice`、`whisperx`、`whisperx-large-v3` | 任意のローカルPython ASR比較経路。各モデル別に要検証 |
 
-`sensevoice:<model-ref>` と `whisperx:<model-name>`（`whisperX:<model-name>` も可）の高度な指定にも対応します。例: `whisperx:turbo`, `whisperx:distil-large-v3`。また、server 側の互換 alias として `whisperx:large-v3-turbo` も受け付け、WhisperX / faster-whisper の `turbo` に正規化します。
+小型の `tiny` / `base` / `small` / `medium`、Whisper `large-v1` / `large-v2`、Kotoba-Whisper v2.0、第三者変換版は現在のモデル一覧から除外しました。保存済みの明示設定は互換警告付きで解決します。`sensevoice:<model-ref>` と `whisperx:<model-name>` は上級者向けの明示指定です。
 
-SenseVoice / WhisperX はローカル Python worker を使います。`uv` が入っていれば、選んだ backend に必要な依存だけ isolated 環境へ自動で入ります。手動で入れる場合は、先に対応する Python 依存を入れてください。
+SenseVoice / WhisperX / Kotoba Transformers backend はローカルPython workerを使います。`uv` がない場合の手動依存は以下を参照してください。
 
 ```bash
 cd server
 python3.11 -m pip install -r ./python/requirements-asr-whisperx.txt
 ```
 
-SenseVoice なら `./python/requirements-asr-sensevoice.txt`、`kotoba-whisper-v2.2` なら `./python/requirements-asr-transformers.txt`、まとめて全部入れるなら `./python/requirements-asr.txt` を使えます。WhisperX 系を手動で入れる場合は Python 3.11 を使ってください。SenseVoice / WhisperX 系では `ffmpeg` も `PATH` から参照できるようにしてください。
+SenseVoiceは `requirements-asr-sensevoice.txt`、Kotoba v2.2は `requirements-asr-transformers.txt` を使います。`ffmpeg` が必要なbackendではPATHを設定してください。
 
-### LLM モデル（翻訳）
+### 翻訳モデル
 
-モデル名を `--llama-model` に指定すると自動ダウンロードします。
+| 現行比較名 | 用途・状態 |
+|---|---|
+| `tencent/Hy-MT2-1.8B` | Q4_K_M量子化候補。公開ベンチマークの事前screen通過。M1未資格 |
+| `CyberAgent/CAT-Translate-0.8b` | 0.8Bの日英小型研究候補。同じcardのTranslateGemma 4Bより両方向BLEUが高い。runtime一覧には未登録 |
+| `qwen3.5:0.8b-q4_k_m` | 既存設定と比較再現用baselineだけに保持。現在の選択一覧から非表示。選定・品質合格ではない |
 
-| モデル名 | サイズ | ライセンス | 備考 |
-|---|---|---|---|
-| `qwen3.5:0.8b-q4_k_m` | ≈ 0.6 GB | Apache 2.0 | **default floor**、Thinking 対応 |
-| `tencent/Hy-MT2-1.8B` / `Hy-MT2-1.8B-GGUF` | ≈ 1.1 GB | Tencent HY Community License Agreement | Tencent Hy 公式 1.8B alias。`Q4_K_M` GGUF をダウンロード |
-| `bonsai-8b` | ≈ 1.15 GB / MLX repo | Apache 2.0 | **最初の step-up**、Thinking 対応、Apple Silicon は MLX、その他は PrismML |
-| `bonsai-4b` | MLX repo | Apache 2.0 | Apple Silicon 専用の MLX Bonsai、Thinking 対応 |
-| `bonsai-1.7b` | MLX repo | Apache 2.0 | Apple Silicon 専用の MLX Bonsai、Thinking 対応 |
-| `tencent/Hy-MT2-7B` / `Hy-MT2-7B` / `Hy-MT2-7B-GGUF` | ≈ 4.6 GB | Tencent HY Community License Agreement | Tencent Hy 公式 7B alias。`Q4_K_M` GGUF をダウンロード（`Hy-MT2-7BGGUF` も可） |
-| `qwen3:8b-q4_k_m` | ≈ 5.2 GB | Apache 2.0 | 上位 tier、Thinking 対応 |
-| `calm3:22b-q4_k_m` | ≈ 13 GB | Apache 2.0 | 最上位 tier、日英特化、要 16 GB VRAM |
-| `gemma4:e4b-q4_k_m` | ≈ 2.6 GB | Apache 2.0 | 高速・軽量 (Google Gemma 4) |
-| `gemma4:e2b-q4_k_m` | ≈ 1.3 GB | Apache 2.0 | 最軽量 (Google Gemma 4) |
-| `gemma4:26b-q4_k_m` | ≈ 16 GB | Apache 2.0 | 高精度 (Google Gemma 4) |
-| `qwen3.5:2b-q4_k_m` | ≈ 1.4 GB | Apache 2.0 | Thinking 対応 |
-| `qwen3.5:4b-q4_k_m` | ≈ 3.2 GB | Apache 2.0 | Thinking 対応 |
-| `qwen3.5:9b-q4_k_m` | ≈ 5.3 GB | Apache 2.0 | 高精度、Thinking 対応 |
-| `qwen3:0.6b-q4_k_m` | ≈ 0.4 GB | Apache 2.0 | Thinking 対応 |
-| `qwen3:1.7b-q4_k_m` | ≈ 1.1 GB | Apache 2.0 | Thinking 対応 |
-| `qwen3:4b-q4_k_m` | ≈ 2.6 GB | Apache 2.0 | Thinking 対応 |
-| `qwen2.5:7b-instruct-q4_k_m` | ≈ 4.7 GB | Apache 2.0 | 安定版 |
-| `qwen2.5:14b-instruct-q4_k_m` | ≈ 8.7 GB | Apache 2.0 | 高精度版 |
+公開値でscreenを通過した候補はHy-MT2 Q4_K_MとCAT-Translate 0.8B/1.4Bの3構成です。CAT-Translateは圧縮方式ではなく、小型の日英翻訳比較候補です。Hy-MT2は実験用runtime候補として登録済みですが、CAT-Translateは研究記録のみです。どれもこのアプリでの実モデル評価・M1資格は未実施です。研究記録は [`docs/research/compression-screen.md`](docs/research/compression-screen.md) を参照してください。
 
-> **Note**: Apple Silicon (`darwin/arm64`) では MLX 対応版が分かっているモデル
-> (`bonsai-*`, `qwen2.5:*`, `qwen3:*`, `qwen3.5:*`, `calm3:*`, `gemma4:*`)
-> がローカル MLX backend に自動切替されます。`uv` が入っていれば MLX 依存も
-> 自動で用意できます。そうでない場合は、先に
-> `python3 -m pip install -r ./python/requirements-llm.txt`
-> を実行してください。
-> それ以外の環境では `bonsai-8b` は [PrismML fork の llama.cpp](https://github.com/PrismML-Eng/llama.cpp)
-> を使い、`bonsai-4b` / `bonsai-1.7b` は利用できません。
-> リリースアーカイブと `make` では必要な companion binary が自動で同梱されます。
-> 標準バイナリだけをビルドした場合は、`bonsai-8b` を使う前に `make prism` を実行してください。
-> 登録済みの MLX repo ID を直接指定することもでき、たとえば
-> `prism-ml/Ternary-Bonsai-8B-mlx-2bit` や `mlx-community/Qwen3-0.6B-4bit`
-> を受け付けます。
-> `tencent/Hy-MT2-1.8B`、`Hy-MT2-1.8B-GGUF`、`Hy-MT2-7B`、`Hy-MT2-7BGGUF`
-> は Tencent 公式の `Q4_K_M` GGUF に解決され、同梱の `llama.cpp`
-> backend でそのまま実行できます。
+| 圧縮方式・候補 | 公開値による判定 |
+|---|---|
+| Hy-MT2 1.8B Q4_K_M | FLORES-200 98.48%、IFMTBench 91.51%をBF16比で維持し、公開screen通過 |
+| CAT-Translate 0.8B | BLEUは日→英29.71、英→日30.68。同じcardのTranslateGemma 4B値29.41 / 26.76を両方向で上回る |
+| Hy-MT2 1.8B 2-bit | IFMTBench維持率85.05%のため対象外 |
+| Hy-MT2 AngelSlim 1.25-bit | 正確な量子化版の翻訳品質値がなく保留 |
+| Hy-MT2-30B-A3B MoE | 30B全体の重みを保持するため、active 3BでもM1の10GiB推論予算外 |
+| MoE | Hy-MT2-30B-A3Bは全30Bの重みがあり、10GiBの推論予算外 |
+| Knowledge distillation | 蒸留Kotoba ASRの日本語CERは比較元より悪く、合格する日英翻訳版も未確認 |
+| Pruning | 確認したCULL-MTの評価方向に日英なし |
+| Low-rank factorization | CAT-Translateは学習にLoRAを使うが、配布推論artifactは低rank化されていない |
+| Weight sharing | 適切な日英比較値のある正確なartifactを未確認 |
 
-ファイルパスを直接指定することも可能です:
+TranslateGemma 4Bは英→日の公開値のみで、日→英の4B数値が確認できず実験shortlist外です。Shisa V2.1 1.2Bは評価方向が明示された両方向の数値を確認できず保留です。蒸留Kotoba ASRの日本語ReazonSpeech CERは16.8で、比較元のWhisper large-v3の14.9を下回るためASR候補から除外しています。
 
-```bash
-./meet-translator-server --llama-model /path/to/model.gguf
-```
+公式Qwen3.8 FP8版も27Bで、日本語翻訳の数値はなく、FP8の生重みだけでも10GiB推論予算を超えます。旧Qwen、Hy-MT2 7B、CALM3 22B、Bonsai、Gemma 4などは現行一覧から外しました。保存済みの明示モデル名は互換警告付きで解決し、既存設定は自動で置換しません。
 
-### Thinking モード（Qwen3 / Qwen3.5）
-
-Qwen3 系および Qwen3.5 系モデルは **Thinking モード** に対応しています。
-`<think>...</think>` で推論を展開してから翻訳するため精度が向上しますが、レイテンシが増加します。
-
-リクエスト時に `llama_options` フィールドで制御できます:
-
-```json
-{"thinking": true}   // Thinking 有効 (Qwen3/Qwen3.5 のデフォルト)
-{"thinking": false}  // Thinking 無効 (高速)
-```
-
----
+公開ベンチマークscreenは実品質評価ではありません。重み、利用条件、tokenizer / template / EOS、nativeまたはMLX実行、実メモリ、Metal利用、会議字幕の確定遅延、Meet統合が未確認の候補は `DEFERRED` のままです。会議中の追加ASRやモデル検索・更新は行いません。
 
 ## 辞書（Glossary）による精度向上
 
@@ -343,28 +296,33 @@ Windows:     %APPDATA%\meet-translator\glossary.json
 
 ```bash
 # 全エントリ確認
-curl http://localhost:7070/glossary
+curl http://127.0.0.1:17070/glossary \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN"
 
 # ASR 修正を追加
-curl -X POST http://localhost:7070/glossary/corrections \
+curl -X POST http://127.0.0.1:17070/glossary/corrections \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"source":"a pie","target":"API","description":"Common Whisper misrecognition"}'
 
 # 専門用語を追加
-curl -X POST http://localhost:7070/glossary/terms \
+curl -X POST http://127.0.0.1:17070/glossary/terms \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"source":"pull request","target":"プルリクエスト"}'
 
 # エントリ削除
-curl -X DELETE http://localhost:7070/glossary/corrections/a%20pie
+curl -X DELETE http://127.0.0.1:17070/glossary/corrections/a%20pie \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN"
 
 # 外部から学習結果を送信 (kind = "correction" | "term")
-curl -X POST http://localhost:7070/glossary/learn \
+curl -X POST http://127.0.0.1:17070/glossary/learn \
+  -H "Authorization: Bearer $MEET_TRANSLATOR_API_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"kind":"correction","source":"get hub","target":"GitHub"}'
 ```
 
-Meet 画面の UI にも同じ glossary API を使う **辞書修正** ウィジェットがあり、通話中にそのまま誤認識や誤訳を登録できます。
+現行Meet内UIには同じglossary APIを使う辞書フィードバックwidgetがあります。
 
 ### ホットリロード
 
@@ -388,7 +346,7 @@ Meet 画面の UI にも同じ glossary API を使う **辞書修正** ウィジ
 
 ## LLM 翻訳ベンチマーク
 
-`cmd/benchmark` はモデルの翻訳品質と速度を計測し、autoconfig の ladder を見直すための参考データを出すツールです。
+`cmd/benchmark` は従来のMT-only比較用ツールで、モデルを選択する機能はありません。
 
 ### テストケース
 
@@ -430,39 +388,26 @@ make bench OUTPUT=results/qwen3-4b.json
 go run ./cmd/benchmark/ --compare results/
 ```
 
+実行時はサーバーと同じ `MEET_TRANSLATOR_API_TOKEN` を環境変数へ設定してください。
+benchmark CLIはこのtokenをBearer headerで送信します。
+
 その他のフラグ:
 
 ```
---server  URL   サーバーアドレス (デフォルト: http://localhost:7070)
+--server  URL   サーバーアドレス (デフォルト: http://127.0.0.1:17070)
 --runs    N     各テストケースの実行回数 (デフォルト: 3)
 --warmup  N     ウォームアップ回数 (デフォルト: 2)
 --dir     STR   方向フィルタ: "en-ja" | "ja-en" | "both" (デフォルト: both)
 --verbose       各テストケースの入出力を詳細表示
 ```
 
-### 比較出力例（macOS Apple M1 Max, GPU Metal, 2026-04）
+### ベンチマークの状態
 
-```
-=== Benchmark Comparison (5 models) ===
-
-Rank Model                          Quality   Latency     Score
-────────────────────────────────────────────────────────────────────
-   1 qwen3.5:0.8b-q4_k_m              0.636     230ms     0.608
-   2 qwen3:4b-q4_k_m                  0.814     730ms     0.605
-   3 qwen3:8b-q4_k_m                  0.833    1360ms     0.572
-   4 bonsai-8b                        0.454    7168ms     0.288
-   5 gemma4:e4b-q4_k_m                0.256   11707ms     0.163
-
-Score = quality×0.6 + speed×0.4  (speed = 1/(1 + latency/300ms))
-```
-
-> **Note:**
-> - `qwen3.5:0.8b-q4_k_m` は速度重み付きベンチマークでは最上位ですが、autoconfig は生の順位ではなく
->   floor → `bonsai-8b` → より大きいモデル、という段階的な ladder を使います。
-> - `bonsai-8b` は GPU ベンチマークで Thinking モードのタイムアウトが多発しスコアが低め。
->   それでも巨大モデルへ飛ぶ前の小さな step-up として維持しています。
-> - `gemma4:e4b` は EN↔JA 翻訳タスクに不適（quality 0.256）。autoconfig 対象外。
-> - 実際の数値は実行環境・GPU の有無によって異なります。
+従来のベンチマークはMT-onlyで、内部実装のChrF類似スコアを使います。
+SacreBLEU chrF2、ASR-only、音声から公開字幕までの証拠ではありません。
+実際のモデルartifactと実行条件が十分pinされていない過去の例示スコアは削除しました。
+benchmark CLIは `MEET_TRANSLATOR_API_TOKEN` を読み、Bearer headerで送信します。
+`eval/` の三track manifestは現在synthetic fixtureのみで、モデル品質を計測していません。
 
 ---
 
@@ -487,24 +432,18 @@ Score = quality×0.6 + speed×0.4  (speed = 1/(1 + latency/300ms))
 
 | 設定項目 | 説明 |
 |---|---|
-| サーバー URL | `http://localhost:7070`（デフォルト） |
+| サーバー URL | `http://127.0.0.1:17070`（新規設定のデフォルト） |
+| ローカルAPI token | サーバー起動環境の `MEET_TRANSLATOR_API_TOKEN` と同じ値 |
+| 許可する拡張Origin | 表示値を `MEET_TRANSLATOR_EXTENSION_ORIGIN` へ設定 |
 | 翻訳元言語 | 自動検出 または 言語を指定 |
 | 翻訳先言語 | 翻訳後の言語（デフォルト: 日本語） |
 | **「サーバー疎通確認」** ボタン | サーバーに接続できるか確認 |
 
 ---
 
-## 使い方
+## 現在の利用範囲
 
-1. `https://meet.google.com/` でミーティングに参加します
-2. 拡張機能アイコンをクリックし **「自動翻訳チャット開始」** を押します
-3. 音声キャプチャが開始され、約 5 秒ごとに翻訳テキストがチャットへ投稿されます
-   - 無音区間は VAD でスキップされ、セッション中のノイズフロアにも追従して低 SNR / 非音声チャンクを抑えます
-   - Meet が現在の発話者をハイライトしている場合、その表示名をチャットとオーバーレイに付けて区別します
-   - Meet 画面上の **辞書修正** ボタンから、誤った聞き取り語句や翻訳語句をその場で glossary に反映できます
-   - 同じ話者の短い連続発話は少しだけまとめてから送るため、細切れの投稿を減らせます
-   - チャットパネルが閉じている場合は自動的に開きます
-4. **「自動翻訳チャット停止」** で停止します
+ポップアップから字幕ページと訂正ページを開けます。字幕を共有するときは、Meetの画面共有から字幕ページをホストが明示的に選びます。訂正ページは共有しないでください。Meetの実会議での共有・訂正・stop/restart結合試験とM1 Maxのモデル性能評価は未完了です。要件ごとの状態は [implementation status](docs/implementation-status.md) を参照してください。
 
 ---
 
@@ -549,7 +488,7 @@ Score = quality×0.6 + speed×0.4  (speed = 1/(1 + latency/300ms))
 | `storage` | 設定の永続化 |
 | `offscreen` | MV3 Service Worker では使用できない AudioContext を Offscreen Document で実行するため |
 | `tabs` | 設定ページを開くため |
-| `http://localhost:7070/*` | ローカルサーバーへのリクエストを許可するため |
+| `http://localhost/*`, `http://127.0.0.1/*` | ローカルサーバーへのリクエストを許可するため |
 
 ---
 
@@ -558,8 +497,8 @@ Score = quality×0.6 + speed×0.4  (speed = 1/(1 + latency/300ms))
 本ソフトウェアは [whisper.cpp](https://github.com/ggerganov/whisper.cpp) **v1.8.4** および
 [llama.cpp](https://github.com/ggerganov/llama.cpp) **b8699** を組み込んでいます。いずれも MIT ライセンスで公開されています。
 
-実行時にダウンロードされるモデル（Whisper、Qwen3.5、Qwen3、Qwen2.5-7B/14B、Gemma4、Hy-MT2）は
-MIT / Apache 2.0 / Tencent HY Community License Agreement のいずれかで公開されています。
-Qwen2.5-3B は非商用限定ライセンスのためレジストリ対象外です。
+モデル実行エンジンのライセンスは、ダウンロードする重みの条件とは別です。
+利用・再配布の前に正確なモデルと変換済みartifactの条件を確認してください。
+現在のQwen再現baselineは公式カード上Apache 2.0です。Tencent公式GGUFページはApache 2.0を表示しますが、変換artifactの条件は未確認です。研究だけで扱うモデルはruntime registryに含めていません。
 
 完全な著作権表示およびモデルのライセンス詳細は [THIRDPARTY.md](../THIRDPARTY.md) を参照してください。

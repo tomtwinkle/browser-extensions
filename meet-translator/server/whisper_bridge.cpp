@@ -4,8 +4,10 @@
 #include "whisper.h"
 
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -14,8 +16,6 @@ namespace {
 constexpr int kWhisperThreads = 4;
 constexpr float kWhisperLogprobThreshold = -0.8f;
 constexpr float kWhisperNoSpeechThreshold = 0.6f;
-constexpr float kSegmentLogprobDropThreshold = -0.8f;
-constexpr float kSegmentNoSpeechDropThreshold = 0.75f;
 
 std::string trim_ascii_whitespace(const char* text) {
     if (!text) {
@@ -73,7 +73,43 @@ float whisper_bridge_segment_avg_logprob(whisper_context* ctx, int segment_index
         ++counted;
     }
 
-    return counted > 0 ? sum / counted : 0.0f;
+    return counted > 0 ? sum / counted : std::numeric_limits<float>::quiet_NaN();
+}
+
+std::string json_escape(const char* text) {
+    std::string escaped;
+    if (!text) {
+        return escaped;
+    }
+    for (const unsigned char c : std::string(text)) {
+        switch (c) {
+            case '"': escaped += "\\\""; break;
+            case '\\': escaped += "\\\\"; break;
+            case '\b': escaped += "\\b"; break;
+            case '\f': escaped += "\\f"; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    char escaped_control[7];
+                    std::snprintf(escaped_control, sizeof(escaped_control), "\\u%04x", c);
+                    escaped += escaped_control;
+                } else {
+                    escaped.push_back(static_cast<char>(c));
+                }
+        }
+    }
+    return escaped;
+}
+
+std::string json_number(double value) {
+    if (!std::isfinite(value)) {
+        return "null";
+    }
+    char number[64];
+    std::snprintf(number, sizeof(number), "%.9g", value);
+    return number;
 }
 
 } // namespace
@@ -88,23 +124,9 @@ void whisper_bridge_free(whisper_context* ctx) {
     if (ctx) whisper_free(ctx);
 }
 
-int whisper_bridge_should_keep_segment(
-    const char* text,
-    int         token_count,
-    float       avg_logprob,
-    float       no_speech_prob
-) {
+int whisper_bridge_has_candidate_text(const char* text, int token_count) {
     const std::string trimmed = trim_ascii_whitespace(text);
-    if (trimmed.empty() || token_count <= 0) {
-        return 0;
-    }
-
-    if (no_speech_prob >= kSegmentNoSpeechDropThreshold &&
-        avg_logprob <= kSegmentLogprobDropThreshold) {
-        return 0;
-    }
-
-    return 1;
+    return !trimmed.empty() && token_count > 0 ? 1 : 0;
 }
 
 int whisper_bridge_transcribe(
@@ -117,6 +139,8 @@ int whisper_bridge_transcribe(
     int              output_buf_size,
     char*            lang_out_buf,
     int              lang_out_size,
+    char*            segments_buf,
+    int              segments_size,
     char*            error_buf,
     int              error_buf_size
 ) {
@@ -156,6 +180,8 @@ int whisper_bridge_transcribe(
     }
 
     std::string result;
+    std::string segments_json = "[";
+    bool first_segment = true;
     int n = whisper_full_n_segments(ctx);
     for (int i = 0; i < n; i++) {
         const char* seg = whisper_full_get_segment_text(ctx, i);
@@ -167,14 +193,37 @@ int whisper_bridge_transcribe(
         const float avg_logprob = whisper_bridge_segment_avg_logprob(ctx, i);
         const float no_speech_prob = whisper_full_get_segment_no_speech_prob(ctx, i);
 
-        if (!whisper_bridge_should_keep_segment(seg, n_tokens, avg_logprob, no_speech_prob)) {
+        if (!whisper_bridge_has_candidate_text(seg, n_tokens)) {
             continue;
         }
 
         result += seg;
+        if (!first_segment) {
+            segments_json += ",";
+        }
+        first_segment = false;
+        const double start_ms = static_cast<double>(whisper_full_get_segment_t0(ctx, i)) * 10.0;
+        const double end_ms = static_cast<double>(whisper_full_get_segment_t1(ctx, i)) * 10.0;
+        segments_json += "{\"start_ms\":" + json_number(start_ms);
+        segments_json += ",\"end_ms\":" + json_number(end_ms);
+        segments_json += ",\"text\":\"" + json_escape(seg) + "\"";
+        segments_json += ",\"avg_logprob\":" + json_number(avg_logprob);
+        segments_json += ",\"no_speech_probability\":" + json_number(no_speech_prob) + "}";
+    }
+    segments_json += "]";
+
+    if (!output_buf || output_buf_size <= 0 || result.size() >= static_cast<size_t>(output_buf_size)) {
+        snprintf(error_buf, error_buf_size, "Whisper transcript exceeds output buffer");
+        return -3;
+    }
+    if (!segments_buf || segments_size <= 0 || segments_json.size() >= static_cast<size_t>(segments_size)) {
+        snprintf(error_buf, error_buf_size, "Whisper segment metadata exceeds output buffer");
+        return -2;
     }
 
     strncpy(output_buf, result.c_str(), output_buf_size - 1);
     output_buf[output_buf_size - 1] = '\0';
+    strncpy(segments_buf, segments_json.c_str(), segments_size - 1);
+    segments_buf[segments_size - 1] = '\0';
     return 0;
 }

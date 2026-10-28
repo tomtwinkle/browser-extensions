@@ -8,17 +8,16 @@ const {
   buildGlossaryFeedbackDescription,
   cloneFeedbackContext,
   detectTextLang,
-  formatChatMessage,
   getWavDurationMs,
   hasFeedbackContext,
   isFillerOnly,
   mergeFeedbackContext,
   mergeWavBase64Chunks,
+  migrateLegacyChatSetting,
+  normalizeLocalServerURL,
   normalizeSpeakerName,
   parseSpeakerNameFromAriaLabel,
   readWavMetadata,
-  resolveChatPostHandlingMode,
-  resolveContentScriptFrame,
   stripFillers,
 } = require('../shared.js');
 
@@ -89,47 +88,36 @@ test('speaker helpers normalize whitespace and parse aria labels', () => {
   assert.equal(parseSpeakerNameFromAriaLabel('Not a speaker label'), null);
 });
 
-test('formatChatMessage includes speaker and language label when available', () => {
-  assert.equal(
-    formatChatMessage('ja', '翻訳結果です', 'Test'),
-    '[Test · 日本語]\n翻訳結果です'
-  );
-  assert.equal(
-    formatChatMessage('', 'Original text', null),
-    '[原文]\nOriginal text'
-  );
+test('local server URLs cannot redirect the bearer token to another origin', () => {
+  assert.equal(normalizeLocalServerURL('http://localhost:17070/'), 'http://localhost:17070');
+  assert.equal(normalizeLocalServerURL('http://127.0.0.1:17070'), 'http://127.0.0.1:17070');
+  for (const value of [
+    'https://localhost:17070',
+    'http://localhost.evil.example:17070',
+    'http://example.com:17070',
+    'http://user@localhost:17070',
+    'http://localhost:17070/api',
+    'http://localhost:0',
+  ]) {
+    assert.equal(normalizeLocalServerURL(value), null, value);
+  }
 });
 
-test('resolveChatPostHandlingMode routes original and embedded-chat relay messages', () => {
-  assert.equal(resolveChatPostHandlingMode('meet.google.com', true, undefined), 'meet-top');
-  assert.equal(
-    resolveChatPostHandlingMode('chat.google.com', false, 'embedded-chat'),
-    'embedded-chat'
-  );
-  assert.equal(resolveChatPostHandlingMode('meet.google.com', true, 'embedded-chat'), 'ignore');
-  assert.equal(resolveChatPostHandlingMode('meet.google.com', false, undefined), 'ignore');
-});
-
-test('resolveContentScriptFrame targets top frame and embedded chat frame correctly', () => {
-  assert.equal(resolveContentScriptFrame('POST_TRANSLATION', undefined, 23), 0);
-  assert.equal(resolveContentScriptFrame('POST_TRANSLATION', 'embedded-chat', 23), 23);
-  assert.equal(resolveContentScriptFrame('POST_TRANSLATION', 'embedded-chat', null), null);
-  assert.equal(resolveContentScriptFrame('SHOW_OVERLAY', undefined, 23), 0);
-  assert.equal(resolveContentScriptFrame('GET_ACTIVE_SPEAKER', undefined, 23), 0);
-  assert.equal(resolveContentScriptFrame('UNKNOWN_MESSAGE', undefined, 23), null);
-});
-
-test('buildGlossaryFeedbackDescription keeps useful context and truncates long fields', () => {
-  const longOriginal = 'a'.repeat(90);
+test('buildGlossaryFeedbackDescription excludes meeting text and participant data', () => {
+  const original = 'private meeting transcript';
+  const translation = 'private translated transcript';
+  const speakerName = 'Private Participant';
   const description = buildGlossaryFeedbackDescription({
-    speakerName: ' Test  Speaker ',
-    original: longOriginal,
-    translation: 'Translated text',
+    kind: 'correction',
+    speakerName,
+    original,
+    translation,
   });
 
-  assert.match(description, /^user-feedback \| speaker=Test Speaker \| original=/);
-  assert.match(description, /translation=Translated text$/);
-  assert.ok(description.includes(`${'a'.repeat(77)}...`));
+  assert.equal(description, 'user-feedback | kind=correction');
+  assert.equal(description.includes(original), false);
+  assert.equal(description.includes(translation), false);
+  assert.equal(description.includes(speakerName), false);
 });
 
 test('feedback context helpers preserve a stable editable snapshot', () => {
@@ -171,6 +159,29 @@ test('feedback context helpers preserve a stable editable snapshot', () => {
     original: 'Next original text',
     translation: null,
   });
+});
+
+test('legacy chat setting is disabled and its migration notice is shown once', async () => {
+  const values = { chatEnabled: true };
+  const storage = {
+    get(keys, callback) {
+      callback(Object.fromEntries(keys
+        .filter((key) => Object.prototype.hasOwnProperty.call(values, key))
+        .map((key) => [key, values[key]])));
+    },
+    set(update, callback) {
+      Object.assign(values, update);
+      callback?.();
+    },
+  };
+
+  const firstNotice = await migrateLegacyChatSetting(storage);
+  const secondNotice = await migrateLegacyChatSetting(storage);
+
+  assert.equal(firstNotice, true);
+  assert.equal(secondNotice, false);
+  assert.equal(values.chatEnabled, false);
+  assert.equal(values.chatPostingMigrationNoticeShown, true);
 });
 
 test('readWavMetadata and getWavDurationMs inspect standard PCM WAV payloads', () => {

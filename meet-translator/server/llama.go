@@ -14,6 +14,7 @@ package main
 import "C"
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"unsafe"
@@ -89,16 +90,19 @@ func (b *llamaCPPBackend) Close() error {
 // opts にモデル固有のオプション (thinking 等) を指定する。
 // history に直前の発話ペアを渡すと few-shot context として翻訳精度が向上する。
 func (s *server) translateInternal(text, sourceLang, targetLang string, opts ModelOptions, history []contextEntry) (string, error) {
+	return s.translateInternalWithGlossary(text, sourceLang, targetLang, opts, history, s.glossary.TermsForPrompt())
+}
+
+func (s *server) translateInternalWithGlossary(text, sourceLang, targetLang string, opts ModelOptions, history []contextEntry, termsHint string) (string, error) {
 	if s.llmBackend == nil {
 		return "", fmt.Errorf("llama model not initialized")
 	}
 
-	template := templateFor(s.loadedModelSpec)
-	// 用語マッピングをプロンプトに注入する
-	termsHint := s.glossary.TermsForPrompt()
+	modelSpec, _ := s.loadedLlamaIdentity()
+	template := templateFor(modelSpec)
 	prompt := buildTranslationPrompt(text, sourceLang, targetLang, template, opts, history, termsHint)
 	s.logVerbose("translate input: %q (model=%s, template=%s, thinking=%v, history=%d, terms=%q)",
-		text, s.loadedModelSpec, template, opts.Thinking, len(history), termsHint)
+		text, modelSpec, template, opts.Thinking, len(history), termsHint)
 
 	result, err := s.llmBackend.Generate(prompt, 512, 0.1)
 	if err != nil {
@@ -106,7 +110,7 @@ func (s *server) translateInternal(text, sourceLang, targetLang string, opts Mod
 	}
 	s.logVerbose("llama raw output: %q", result)
 	// <think>...</think> ブロックは opts.Thinking に関わらず常に除去する。
-	// /no-think を指定しても一部モデルが thinking を出力する場合があるため。
+	// /no_think を指定しても一部モデルが thinking を出力する場合があるため。
 	result = stripThinkingTokens(result)
 	result = stripLLMArtifacts(result)
 	s.logVerbose("translate output: %q", result)
@@ -117,14 +121,20 @@ func (s *server) translateInternal(text, sourceLang, targetLang string, opts Mod
 // バックグラウンドの GlossaryImprover が解析プロンプトを送るために使用する。
 // startLlamaOp/endLlamaOp により通常の翻訳と直列化され、シャットダウン中は拒否される。
 func (s *server) generateRaw(prompt string) (string, error) {
-	if err := s.startLlamaOp(); err != nil {
+	if err := s.startLlamaOp(context.Background()); err != nil {
 		return "", err
 	}
 	defer s.endLlamaOp()
 
-	if s.llmBackend == nil {
-		return "", fmt.Errorf("llama model not initialized")
-	}
-	s.logVerbose("generateRaw: prompt len=%d", len(prompt))
-	return s.llmBackend.Generate(prompt, 1024, 0.1)
+	var result string
+	err := s.runInference(context.Background(), "llm-raw", func() error {
+		if s.llmBackend == nil {
+			return fmt.Errorf("llama model not initialized")
+		}
+		s.logVerbose("generateRaw: prompt len=%d", len(prompt))
+		var err error
+		result, err = s.llmBackend.Generate(prompt, 1024, 0.1)
+		return err
+	})
+	return result, err
 }

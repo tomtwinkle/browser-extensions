@@ -1,30 +1,9 @@
 /**
- * content.js  –  Content Script (injected into https://meet.google.com/*)
+ * content.js – In-Meet overlay and feedback UI.
  *
  * Responsibilities:
- *  1. Listen for POST_TRANSLATION messages from the background worker.
- *  2. Locate the Google Meet chat textarea and send button in the DOM.
- *  3. Detect the currently highlighted speaker in the Meet DOM.
- *  4. Programmatically fill the input and submit the message.
- *  5. Show an in-call feedback widget so users can upsert glossary entries.
- *
- * DOM selector notes
- * ------------------
- * Google Meet has two chat UI modes:
- *
- * Mode A – Classic Meet chat (older UI)
- *   • Message input: div[jsname="r4nke"] or div[contenteditable="true"]
- *   • Send button:   button[jsname="c6xSqd"]
- *
- * Mode B – Embedded Google Chat ("履歴がオンになっています" / "History is on")
- *   • Meet embeds the full Google Chat web component (c-wiz / d-view).
- *   • The message input is a div[contenteditable] (value may be "" not "true")
- *     with an aria-label like "メッセージを送信…" / "Send a message…".
- *   • A SEARCH input (aria-label="Chat を検索…" / "Search Chat") is also
- *     present and must NOT be confused with the message input.
- *
- * If Meet changes its DOM again, open DevTools → find the message input →
- * update SEL.messageInput or the fallback search in findMessageInput().
+ * Detect the active speaker, display the current legacy in-Meet overlay,
+ * and provide a glossary feedback widget. This script does not operate chat.
  */
 
 'use strict';
@@ -35,76 +14,11 @@ const {
   mergeFeedbackContext,
   normalizeSpeakerName,
   parseSpeakerNameFromAriaLabel,
-  resolveChatPostHandlingMode,
 } = globalThis.MeetTranslatorShared;
 
 // ---------------------------------------------------------------------------
 // DOM selectors  (update these if Meet changes its markup)
 // ---------------------------------------------------------------------------
-const SEL = {
-  // Toolbar button that opens the in-call chat panel.
-  chatPanelButton: [
-    'button[aria-label*="Chat with everyone"]',  // en
-    'button[aria-label*="チャット"]',             // ja
-    '[data-panel-id="2"]',
-  ].join(', '),
-
-  // Message composition input – two patterns observed in 2025:
-  //
-  // Pattern 1 – History OFF (textarea):
-  //   <textarea jsname="YPqjbf" aria-label="メッセージを送信" placeholder="メッセージを送信">
-  //
-  // Pattern 2 – History ON (contenteditable div):
-  //   <div jsname="yrriRe" g_editable="true" contenteditable="true"
-  //        aria-label="履歴がオンになっています" role="textbox">
-  //
-  // Note: in Pattern 2, aria-label reflects the history SETTING, not the
-  //       action ("send message"), so selectors like aria-label*="メッセージを送信"
-  //       do NOT match it.  jsname and g_editable are the reliable identifiers.
-  messageInput: [
-    // Classic Meet (old UI, stable internal attribute)
-    '[jsname="r4nke"]',
-    // Pattern 1 – Google Chat history OFF / textarea (stable internal attribute)
-    '[jsname="YPqjbf"]',
-    // Pattern 2 – Google Chat history ON / contenteditable div (stable internal attribute)
-    '[jsname="yrriRe"]',
-    // Pattern 2 – Google Chat editable marker (g_editable on all GChat message inputs)
-    'div[g_editable="true"][contenteditable="true"]',
-    // Pattern 2 – aria-label reflects history state (ja)
-    'div[contenteditable="true"][aria-label*="履歴がオンになっています"]',
-    'div[contenteditable="true"][aria-label*="履歴がオフになっています"]',
-    // Pattern 2 – aria-label reflects history state (en)
-    'div[contenteditable="true"][aria-label*="History is on"]',
-    'div[contenteditable="true"][aria-label*="History is off"]',
-    // Classic Meet / generic contenteditable with message aria-label (en / ja)
-    'div[contenteditable="true"][aria-label*="message"]',
-    'div[contenteditable="true"][aria-label*="メッセージ"]',
-    // Embedded Google Chat – send-message aria-label variants (ja / en)
-    'div[contenteditable][aria-label*="メッセージを送信"]',
-    'div[contenteditable][aria-label*="全員にメッセージ"]',
-    'div[contenteditable][aria-label*="Send a message"]',
-    'div[contenteditable][aria-label*="Message everyone"]',
-    // Pattern 1 – textarea with send-message aria-label (ja / en)
-    'textarea[aria-label*="メッセージを送信"]',
-    'textarea[aria-label*="Send a message"]',
-    'textarea[aria-label*="message"]',
-    'textarea[aria-label*="メッセージ"]',
-  ].join(', '),
-
-  // Send button adjacent to the message input.
-  sendButton: [
-    'button[jsname="c6xSqd"]',          // Mode A (internal attr)
-    'button[aria-label="Send message"]', // en exact
-    'button[aria-label="メッセージを送信"]', // ja exact
-    'button[aria-label*="Send"]',        // en partial fallback
-    'button[aria-label*="送信"]',        // ja partial fallback
-    '[role="button"][aria-label="Send message"]',
-    '[role="button"][aria-label="メッセージを送信"]',
-    '[role="button"][aria-label*="Send"]',
-    '[role="button"][aria-label*="送信"]',
-  ].join(', '),
-};
-
 const SPEAKER_TILE_SEL = 'div[jscontroller="gu0YGc"]';
 const ACTIVE_SPEAKER_BORDER_SEL = '.tC2Wod.fdKMD';
 const ACTIVE_SPEAKER_GLOW_SEL = `${ACTIVE_SPEAKER_BORDER_SEL}.v5h6Xc`;
@@ -119,6 +33,37 @@ const feedbackState = {
   lockedContext: cloneFeedbackContext(null),
   hasPendingUpdate: false,
 };
+const activeAudioSession = {
+  sessionId: null,
+  streamGenerations: { mic: null, tab: null },
+};
+
+function beginAudioSession(sessionId, streamGenerations) {
+  if (typeof sessionId !== 'string' || !sessionId) return false;
+  const generations = { mic: null, tab: null };
+  for (const streamId of ['mic', 'tab']) {
+    const value = streamGenerations?.[streamId];
+    if (Number.isSafeInteger(value) && value >= 0) generations[streamId] = value;
+  }
+  if (generations.mic === null && generations.tab === null) return false;
+  activeAudioSession.sessionId = sessionId;
+  activeAudioSession.streamGenerations = generations;
+  return true;
+}
+
+function isCurrentAudioMessage(message) {
+  return message?.sessionId === activeAudioSession.sessionId &&
+    (message?.streamId === 'mic' || message?.streamId === 'tab') &&
+    Number.isSafeInteger(message?.streamGeneration) &&
+    message.streamGeneration === activeAudioSession.streamGenerations[message.streamId];
+}
+
+function endAudioSession(sessionId) {
+  if (!sessionId || sessionId !== activeAudioSession.sessionId) return false;
+  activeAudioSession.sessionId = null;
+  activeAudioSession.streamGenerations = { mic: null, tab: null };
+  return true;
+}
 
 // ---------------------------------------------------------------------------
 // Helper: check element visibility (not hidden, not zero-size)
@@ -132,13 +77,6 @@ function isElementVisible(el) {
   return rect.width > 0 || rect.height > 0;
 }
 
-function findVisibleEmbeddedChatFrame() {
-  for (const iframe of document.querySelectorAll('iframe[src*="chat.google.com"]')) {
-    if (isElementVisible(iframe)) return iframe;
-  }
-  return null;
-}
-
 function sendRuntimeMessage(message) {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(message, (response) => {
@@ -149,16 +87,6 @@ function sendRuntimeMessage(message) {
       resolve(response);
     });
   });
-}
-
-let embeddedChatFrameRegistered = false;
-
-async function registerEmbeddedChatFrame() {
-  if (location.hostname !== 'chat.google.com' || embeddedChatFrameRegistered) return;
-  try {
-    const response = await sendRuntimeMessage({ type: 'REGISTER_EMBEDDED_CHAT_FRAME' });
-    embeddedChatFrameRegistered = response?.registered === true;
-  } catch (_) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -206,221 +134,14 @@ function getActiveSpeakerName() {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: find the message input in the CURRENT document
-// ---------------------------------------------------------------------------
-function findMessageInput() {
-  // Fast path: CSS selectors
-  for (const el of document.querySelectorAll(SEL.messageInput)) {
-    if (isElementVisible(el)) return el;
-  }
-
-  // Fallback: search inside Google Chat's d-view panel component
-  for (const dview of document.querySelectorAll('d-view')) {
-    for (const el of dview.querySelectorAll('div[contenteditable]:not([contenteditable="false"])')) {
-      if (!isElementVisible(el)) continue;
-      const label = (el.getAttribute('aria-label') || '').toLowerCase();
-      // Skip search box ("Chat を検索…" / "Search Chat")
-      if (label.includes('検索') || label.includes('search')) continue;
-      return el;
-    }
-  }
-
-  // Last resort: any visible Google Chat editable div
-  for (const el of document.querySelectorAll('div[g_editable="true"][contenteditable]')) {
-    if (isElementVisible(el)) return el;
-  }
-
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Helper: wait for findMessageInput() to return a non-null element
-// ---------------------------------------------------------------------------
-function waitForDomMatch(findFn, timeoutMs = 3000) {
-  return new Promise((resolve) => {
-    const existing = findFn();
-    if (existing) { resolve(existing); return; }
-
-    const observer = new MutationObserver(() => {
-      const match = findFn();
-      if (match) {
-        observer.disconnect();
-        resolve(match);
-      }
-    });
-    const root = document.body || document.documentElement;
-    if (!root) {
-      resolve(null);
-      return;
-    }
-    observer.observe(root, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
-    });
-
-    setTimeout(() => {
-      observer.disconnect();
-      resolve(null);
-    }, timeoutMs);
-  });
-}
-
-function waitForMessageInput(timeoutMs = 3000) {
-  return waitForDomMatch(findMessageInput, timeoutMs);
-}
-
-function getChatPostDestination() {
-  const input = findMessageInput();
-  if (input) return { kind: 'local-input', input };
-
-  if (location.hostname === 'meet.google.com' && window === window.top) {
-    const iframe = findVisibleEmbeddedChatFrame();
-    if (iframe) return { kind: 'embedded-chat', iframe };
-  }
-  return null;
-}
-
-function waitForChatPostDestination(timeoutMs = 3000) {
-  return waitForDomMatch(getChatPostDestination, timeoutMs);
-}
-
-// ---------------------------------------------------------------------------
-// Helper: ensure the chat panel is visible
-// ---------------------------------------------------------------------------
-async function ensureChatPanelOpen() {
-  const existing = findMessageInput();
-  if (existing) return existing;
-
-  const chatBtn = document.querySelector(SEL.chatPanelButton);
-  if (chatBtn && isElementVisible(chatBtn)) {
-    chatBtn.click();
-  }
-  return waitForMessageInput(3000);
-}
-
-async function ensureChatDestinationReady() {
-  const existing = getChatPostDestination();
-  if (existing) return existing;
-
-  const chatBtn = document.querySelector(SEL.chatPanelButton);
-  if (chatBtn && isElementVisible(chatBtn)) {
-    chatBtn.click();
-  }
-  return waitForChatPostDestination(3000);
-}
-
-function getInputSearchRoots(input, maxDepth = 6) {
-  const roots = [];
-  let node = input;
-  while (node && roots.length < maxDepth) {
-    roots.push(node);
-    node = node.parentElement;
-  }
-  roots.push(document);
-  return roots;
-}
-
-function findSendButton(input) {
-  const seen = new Set();
-  for (const root of getInputSearchRoots(input)) {
-    if (!root?.querySelectorAll) continue;
-    for (const btn of root.querySelectorAll(SEL.sendButton)) {
-      if (seen.has(btn) || !isElementVisible(btn)) continue;
-      seen.add(btn);
-      if (btn.getAttribute('aria-disabled') === 'true') continue;
-      if ('disabled' in btn && btn.disabled) continue;
-      return btn;
-    }
-  }
-  return null;
-}
-
-function fillMessageInput(input, text) {
-  input.focus();
-
-  if (input.isContentEditable) {
-    document.execCommand('selectAll', false, null);
-    const inserted = document.execCommand('insertText', false, text);
-    if (!inserted) {
-      input.textContent = text;
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-    return;
-  }
-
-  const nativeSetter = Object.getOwnPropertyDescriptor(
-    HTMLTextAreaElement.prototype,
-    'value'
-  ).set;
-  nativeSetter.call(input, text);
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-}
-
-function submitMessageInput(input) {
-  const sendBtn = findSendButton(input);
-  if (sendBtn) {
-    sendBtn.click();
-    return;
-  }
-
-  const form = input.form || input.closest('form');
-  if (form?.requestSubmit) {
-    form.requestSubmit();
-    return;
-  }
-
-  const opts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true };
-  input.dispatchEvent(new KeyboardEvent('keydown', opts));
-  input.dispatchEvent(new KeyboardEvent('keypress', opts));
-  input.dispatchEvent(new KeyboardEvent('keyup', opts));
-}
-
-async function postTextIntoInput(input, text) {
-  fillMessageInput(input, text);
-  await new Promise((r) => setTimeout(r, 150));
-  submitMessageInput(input);
-}
-
-async function relayPostToEmbeddedChat(text) {
-  const response = await sendRuntimeMessage({
-    type: 'RELAY_POST_TRANSLATION',
-    text,
-  });
-  if (!response?.success) {
-    throw new Error(response?.error || 'embedded Google Chat iframe is not ready');
-  }
-}
-
-async function postTranslationFromMeetFrame(text) {
-  const destination = await ensureChatDestinationReady();
-  if (!destination) {
-    throw new Error('チャット入力欄が見つかりませんでした。チャットパネルを開いてください。');
-  }
-  if (destination.kind === 'embedded-chat') {
-    await relayPostToEmbeddedChat(text);
-    return;
-  }
-  await postTextIntoInput(destination.input, text);
-}
-
-// ---------------------------------------------------------------------------
-// Core: post translated text to the Meet chat
-// ---------------------------------------------------------------------------
-async function postToChat(text) {
-  const input = await ensureChatPanelOpen();
-  if (!input) {
-    throw new Error('チャット入力欄が見つかりませんでした。チャットパネルを開いてください。');
-  }
-  await postTextIntoInput(input, text);
-}
-
-// ---------------------------------------------------------------------------
 // Message listener
 // ---------------------------------------------------------------------------
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   switch (message.type) {
+    case 'TRANSLATION_STARTED':
+      sendResponse({ success: beginAudioSession(message.sessionId, message.streamGenerations) });
+      return false;
+
     case 'GET_ACTIVE_SPEAKER':
       if (location.hostname === 'meet.google.com' && window === window.top) {
         sendResponse({ speakerName: getActiveSpeakerName() });
@@ -429,45 +150,41 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     case 'UPDATE_FEEDBACK_CONTEXT':
       if (location.hostname === 'meet.google.com' && window === window.top) {
+        if (!isCurrentAudioMessage(message)) {
+          sendResponse({ success: false, stale: true });
+          return false;
+        }
         updateFeedbackContext(message);
       }
       sendResponse({ success: true });
       return false;
 
-    case 'POST_TRANSLATION': {
-      const mode = resolveChatPostHandlingMode(
-        location.hostname,
-        window === window.top,
-        message.target
-      );
-      if (mode === 'ignore') {
+    case 'TRANSLATION_STOPPED':
+      if (!endAudioSession(message.sessionId)) {
+        sendResponse({ success: false, stale: true });
         return false;
       }
-
-      if (mode === 'embedded-chat') {
-        registerEmbeddedChatFrame();
-      }
-
-      const post = mode === 'meet-top' ? postTranslationFromMeetFrame : postToChat;
-      post(message.text)
-        .then(() => sendResponse({ success: true }))
-        .catch((err) => {
-          console.error('[Meet Translator] チャット投稿エラー:', err);
-          sendResponse({ success: false, error: err.message });
-        });
-      return true; // keep channel open for async response
-    }
-
-    case 'TRANSLATION_STOPPED':
-      console.log('[Meet Translator] 自動翻訳チャットを停止しました。');
+      console.log('[Meet Translator] capture stopped.');
       destroyOverlay();
       destroyFeedbackUi();
+      sendResponse({ success: true });
+      return false;
+
+    case 'CLEAR_OVERLAY':
+      if (location.hostname === 'meet.google.com' && window === window.top &&
+          message.sessionId === activeAudioSession.sessionId) {
+        destroyOverlay();
+      }
       sendResponse({ success: true });
       return false;
 
     case 'SHOW_OVERLAY':
       // Only the meet.google.com top frame renders the overlay.
       if (location.hostname === 'meet.google.com' && window === window.top) {
+        if (!isCurrentAudioMessage(message)) {
+          sendResponse({ success: false, stale: true });
+          return false;
+        }
         showOverlay(message.original, message.translation, message.scroll, message.speakerName || null);
       }
       sendResponse({ success: true });
@@ -478,8 +195,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-console.log('[Meet Translator] content script loaded on', location.href);
-registerEmbeddedChatFrame();
+console.log('[Meet Translator] content script loaded.');
 
 // ---------------------------------------------------------------------------
 // Overlay display (subtitle mode / scroll mode)

@@ -1,28 +1,28 @@
 {
   "manifest_version": 3,
-  "name": "Google Meet 自動翻訳チャット",
+  "name": "Meet Translator",
   "version": "1.0.0",
-  "description": "Google Meetの音声をリアルタイムで文字起こし・翻訳してチャットに自動投稿します",
+  "description": "Google Meetの音声をローカルで文字起こし・翻訳します",
   "permissions": [
     "tabCapture",
     "activeTab",
     "scripting",
     "storage",
-    "alarms",
     "offscreen",
-    "tabs"
+    "tabs",
+    "sidePanel"
   ],
   "host_permissions": [
     "https://meet.google.com/*",
-    "https://chat.google.com/*",
-    "http://localhost:17070/*"
+    "http://localhost/*",
+    "http://127.0.0.1/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Meet 自動翻訳チャット",
+    "default_title": "Meet Translator",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
@@ -31,11 +31,13 @@
     }
   },
   "options_page": "options.html",
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
   "content_scripts": [
     {
       "matches": [
-        "https://meet.google.com/*",
-        "https://chat.google.com/*"
+        "https://meet.google.com/*"
       ],
       "js": ["shared.js", "content.js"],
       "run_at": "document_idle",

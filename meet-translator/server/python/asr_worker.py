@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
 import argparse
+import base64
 import inspect
+import io
 import json
 import os
 import re
@@ -69,8 +71,8 @@ def detect_sensevoice_language(raw_text, fallback):
     return "" if fallback == "auto" else fallback
 
 
-def load_wav_float32(audio_path):
-    with wave.open(audio_path, "rb") as wav_file:
+def load_wav_float32(audio_bytes):
+    with wave.open(io.BytesIO(audio_bytes), "rb") as wav_file:
         channels = wav_file.getnchannels()
         sample_width = wav_file.getsampwidth()
         sample_rate = wav_file.getframerate()
@@ -116,11 +118,13 @@ class SenseVoiceBackend:
             device=device,
         )
 
-    def transcribe(self, audio_path, language, prompt):
+    def transcribe(self, audio_bytes, language, prompt):
         del prompt
         sensevoice_lang = normalize_sensevoice_language(language)
+        audio = load_wav_float32(audio_bytes)
         result = self._model.generate(
-            input=audio_path,
+            input=audio,
+            fs=16000,
             cache={},
             language=sensevoice_lang,
             use_itn=True,
@@ -155,16 +159,33 @@ class WhisperXBackend:
         self._sample_rate = SAMPLE_RATE
         self._torch = torch
 
-    def transcribe(self, audio_path, language, prompt):
+    def transcribe(self, audio_bytes, language, prompt):
+        text, detected, _segments = self.transcribe_detailed(audio_bytes, language, prompt)
+        return text, detected
+
+    def transcribe_detailed(self, audio_bytes, language, prompt):
         whisperx_lang = normalize_whisperx_language(language)
-        audio = load_wav_float32(audio_path)
+        audio = load_wav_float32(audio_bytes)
         if not self._speech_segments(audio):
-            return "", whisperx_lang or ""
+            return "", whisperx_lang or "", []
         self._model.options = replace(self._model.options, initial_prompt=(prompt or None))
         result = self._model.transcribe(audio, batch_size=8, language=whisperx_lang)
-        text = "".join(segment.get("text", "") for segment in result.get("segments", [])).strip()
+        source_segments = result.get("segments", [])
+        text = "".join(segment.get("text", "") for segment in source_segments).strip()
         detected = result.get("language") or (whisperx_lang or "")
-        return text, detected
+        segments = []
+        for segment in source_segments:
+            start = segment.get("start")
+            end = segment.get("end")
+            item = {
+                "start_ms": round(float(start) * 1000) if start is not None else None,
+                "end_ms": round(float(end) * 1000) if end is not None else None,
+                "text": segment.get("text", ""),
+                "avg_logprob": None,
+                "no_speech_probability": None,
+            }
+            segments.append(item)
+        return text, detected, segments
 
     def _speech_segments(self, audio):
         if len(audio) == 0:
@@ -198,7 +219,7 @@ class TransformersWhisperBackend:
         self._model.to(self._device)
         self._model.eval()
 
-    def transcribe(self, audio_path, language, prompt):
+    def transcribe(self, audio_bytes, language, prompt):
         whisper_lang = normalize_transformers_whisper_language(language)
         generate_kwargs = {}
         if whisper_lang:
@@ -206,7 +227,7 @@ class TransformersWhisperBackend:
         prompt_ids = self._prompt_ids(prompt)
         if prompt_ids is not None:
             generate_kwargs["prompt_ids"] = prompt_ids
-        audio = load_wav_float32(audio_path)
+        audio = load_wav_float32(audio_bytes)
         inputs = self._processor(audio, sampling_rate=16000, return_tensors="pt")
         input_features = inputs["input_features"].to(self._device, dtype=self._torch_dtype)
         attention_mask = inputs.get("attention_mask")
@@ -284,16 +305,27 @@ def main():
             return 0
 
         try:
+            audio_bytes = base64.b64decode(request.get("audio_base64", ""), validate=True)
             with redirect_stdout(sys.stderr):
-                text, detected_language = backend.transcribe(
-                    request["audio_path"],
-                    request.get("language", ""),
-                    request.get("prompt", ""),
-                )
+                transcribe_detailed = getattr(backend, "transcribe_detailed", None)
+                if callable(transcribe_detailed):
+                    text, detected_language, segments = transcribe_detailed(
+                        audio_bytes,
+                        request.get("language", ""),
+                        request.get("prompt", ""),
+                    )
+                else:
+                    text, detected_language = backend.transcribe(
+                        audio_bytes,
+                        request.get("language", ""),
+                        request.get("prompt", ""),
+                    )
+                    segments = []
             emit({
                 "status": "ok",
                 "text": text,
                 "detected_language": detected_language,
+                "segments": segments,
             })
         except Exception as exc:
             emit(install_error(exc, args.requirements_path))

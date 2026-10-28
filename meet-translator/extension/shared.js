@@ -9,26 +9,35 @@
   function () {
   'use strict';
 
-  const LANG_LABELS = {
-    en: 'English',
-    ja: '日本語',
-    zh: '中文',
-    ko: '한국어',
-    fr: 'Français',
-    de: 'Deutsch',
-    es: 'Español',
-    pt: 'Português',
-    vi: 'Tiếng Việt',
-  };
-
-  function langLabel(code) {
-    return LANG_LABELS[code] || code || '原文';
-  }
-
   function normalizeSpeakerName(name) {
     const normalized =
       typeof name === 'string' ? name.replace(/\s+/g, ' ').trim() : '';
     return normalized || null;
+  }
+
+  function normalizeLocalServerURL(value) {
+    if (typeof value !== 'string') return null;
+    try {
+      const parsed = new URL(value);
+      const hostname = parsed.hostname.toLowerCase();
+      if (
+        parsed.protocol !== 'http:' ||
+        !['localhost', '127.0.0.1'].includes(hostname) ||
+        parsed.username ||
+        parsed.password ||
+        parsed.search ||
+        parsed.hash ||
+        (parsed.pathname !== '' && parsed.pathname !== '/')
+      ) {
+        return null;
+      }
+      if (parsed.port && (!Number.isInteger(Number(parsed.port)) || Number(parsed.port) < 1 || Number(parsed.port) > 65535)) {
+        return null;
+      }
+      return parsed.origin;
+    } catch (_) {
+      return null;
+    }
   }
 
   function parseSpeakerNameFromAriaLabel(label) {
@@ -101,33 +110,16 @@
     return text.replace(fillerRe, ' ').replace(/\s+/g, ' ').trim();
   }
 
-  function formatChatMessage(langCode, text, speakerName) {
-    const headerParts = [];
-    const normalizedSpeaker = normalizeSpeakerName(speakerName);
-    if (normalizedSpeaker) headerParts.push(normalizedSpeaker);
-    headerParts.push(langLabel(langCode));
-    return `[${headerParts.join(' · ')}]\n${text}`;
-  }
-
   function normalizeFeedbackText(text) {
     const normalized = typeof text === 'string' ? text.trim() : '';
     return normalized || null;
   }
 
-  function truncateForDescription(text, maxLen = 80) {
-    if (!text) return null;
-    return text.length > maxLen ? `${text.slice(0, maxLen - 3)}...` : text;
-  }
-
   function buildGlossaryFeedbackDescription(feedback) {
-    const parts = ['user-feedback'];
-    const speakerName = normalizeSpeakerName(feedback?.speakerName);
-    const original = truncateForDescription(normalizeFeedbackText(feedback?.original));
-    const translation = truncateForDescription(normalizeFeedbackText(feedback?.translation));
-    if (speakerName) parts.push(`speaker=${speakerName}`);
-    if (original) parts.push(`original=${original}`);
-    if (translation) parts.push(`translation=${translation}`);
-    return parts.join(' | ');
+    const kind = feedback?.kind === 'correction' || feedback?.kind === 'term'
+      ? feedback.kind
+      : 'unknown';
+    return `user-feedback | kind=${kind}`;
   }
 
   function cloneFeedbackContext(context) {
@@ -156,34 +148,20 @@
     };
   }
 
-  function resolveChatPostHandlingMode(hostname, isTopFrame, target) {
-    if (hostname === 'meet.google.com' && isTopFrame && target !== 'embedded-chat') {
-      return 'meet-top';
-    }
-    if (hostname === 'chat.google.com' && target === 'embedded-chat') {
-      return 'embedded-chat';
-    }
-    return 'ignore';
-  }
-
-  function resolveContentScriptFrame(messageType, target, embeddedChatFrameId) {
-    if (messageType === 'POST_TRANSLATION') {
-      if (target === 'embedded-chat') {
-        return Number.isInteger(embeddedChatFrameId) ? embeddedChatFrameId : null;
-      }
-      return 0;
-    }
-
-    if (
-      messageType === 'GET_ACTIVE_SPEAKER' ||
-      messageType === 'UPDATE_FEEDBACK_CONTEXT' ||
-      messageType === 'SHOW_OVERLAY' ||
-      messageType === 'TRANSLATION_STOPPED'
-    ) {
-      return 0;
-    }
-
-    return null;
+  function migrateLegacyChatSetting(storage) {
+    return new Promise((resolve) => {
+      storage.get(['chatEnabled', 'chatPostingMigrationNoticeShown'], (stored = {}) => {
+        if (stored.chatEnabled !== true) {
+          resolve(false);
+          return;
+        }
+        const showNotice = stored.chatPostingMigrationNoticeShown !== true;
+        storage.set({
+          chatEnabled: false,
+          chatPostingMigrationNoticeShown: true,
+        }, () => resolve(showNotice));
+      });
+    });
   }
 
   function decodeBase64(base64) {
@@ -301,21 +279,18 @@
     buildGlossaryFeedbackDescription,
     cloneFeedbackContext,
     detectTextLang,
-    formatChatMessage,
     getWavDurationMs,
     hasFeedbackContext,
     isFillerOnly,
-    langLabel,
     mergeFeedbackContext,
     mergeWavBase64Chunks,
+    migrateLegacyChatSetting,
+    normalizeLocalServerURL,
     normalizeFeedbackText,
     normalizeSpeakerName,
     parseSpeakerNameFromAriaLabel,
     readWavMetadata,
-    resolveChatPostHandlingMode,
-    resolveContentScriptFrame,
     stripFillers,
-    truncateForDescription,
     uint8ArrayToBase64,
   };
   }
